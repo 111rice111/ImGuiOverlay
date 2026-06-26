@@ -100,6 +100,7 @@ static std::unordered_map<std::string, int> bound_seat_by_class;
 static bool g_new_map_detected = false;
 static std::chrono::steady_clock::time_point g_new_map_detect_time;
 static Vector3A g_detected_musicbox_pos;
+static Vector3A g_detected_piano_pos;
 
 // === 音乐盒拾取/放置容错 ===
 static int g_last_valid_map_index = -1;        // 最后已知的有效地图索引
@@ -339,6 +340,7 @@ void ResetMapState() {
     g_new_map_prompted = false;
     g_new_map_frame_counter = 0;
     g_detected_musicbox_pos = Vector3A{};
+    g_detected_piano_pos = Vector3A{};
     g_frames_since_musicbox_lost = 0;
     g_last_rendered_map_index = -1;
     g_last_rendered_floor_index = -1;
@@ -1666,6 +1668,7 @@ void TryAutoDetectMap(const std::vector<DataStruct>& data) {
                 if (isValidCoordinate(piano_pos) &&
                     (fabsf(piano_pos.X) > 1.0f || fabsf(piano_pos.Y) > 1.0f)) {
                     piano_found = true;
+                    g_detected_piano_pos = piano_pos;
                 }
             }
         }
@@ -4456,6 +4459,7 @@ void read_thread(long int 状态数值, long int PD2, long int PD3) {
                 g_new_map_prompted = false;
                 g_new_map_frame_counter = 0;
                 g_detected_musicbox_pos = Vector3A{};
+                g_detected_piano_pos = Vector3A{};
                 g_frames_since_musicbox_lost = 0;
 
                 break;
@@ -5391,6 +5395,7 @@ void Layout_tick_UI(bool *main_thread_flag) {
 
     static char new_name[64] = "";
     static float new_music_x = 0.0f, new_music_y = 0.0f, new_music_z = 0.0f;
+    static float new_piano_x = 0.0f, new_piano_y = 0.0f, new_piano_z = 0.0f;
     static char new_texture[128] = "/sdcard/maps/";
 
     static float ui_anim_scale = 0.0f;
@@ -5785,6 +5790,14 @@ void Layout_tick_UI(bool *main_thread_flag) {
                         new_music_y = Z.Y;
                         new_music_z = Z.Z;
                     }
+                    // 同步检测钢琴位置（第二信号源）
+                    if (g_detected_piano_pos.X != 0.0f || g_detected_piano_pos.Y != 0.0f) {
+                        new_piano_x = g_detected_piano_pos.X;
+                        new_piano_y = g_detected_piano_pos.Y;
+                        new_piano_z = g_detected_piano_pos.Z;
+                    } else {
+                        new_piano_x = new_piano_y = new_piano_z = 0.0f;
+                    }
                     int next_id = (int)g_all_maps.size() + 1;
                     snprintf(new_name, sizeof(new_name), "地图%d 一楼", next_id);
                     snprintf(new_texture, sizeof(new_texture), "/sdcard/maps/map%d_floor1.png", next_id);
@@ -5851,6 +5864,9 @@ void Layout_tick_UI(bool *main_thread_flag) {
                                 new_music_x = g_detected_musicbox_pos.X;
                                 new_music_y = g_detected_musicbox_pos.Y;
                                 new_music_z = g_detected_musicbox_pos.Z;
+                                new_piano_x = g_detected_piano_pos.X;
+                                new_piano_y = g_detected_piano_pos.Y;
+                                new_piano_z = g_detected_piano_pos.Z;
                                 int next_id = (int)g_all_maps.size() + 1;
                                 snprintf(new_name, sizeof(new_name), "地图%d 一楼", next_id);
                                 snprintf(new_texture, sizeof(new_texture), "/sdcard/maps/map%d_floor1.png", next_id);
@@ -5871,6 +5887,9 @@ void Layout_tick_UI(bool *main_thread_flag) {
                                     new_music_x = g_detected_musicbox_pos.X;
                                     new_music_y = g_detected_musicbox_pos.Y;
                                     new_music_z = g_detected_musicbox_pos.Z;
+                                    new_piano_x = g_detected_piano_pos.X;
+                                    new_piano_y = g_detected_piano_pos.Y;
+                                    new_piano_z = g_detected_piano_pos.Z;
                                     // 使用当前地图名称
                                     snprintf(new_name, sizeof(new_name), "%s",
                                         g_all_maps[g_current_map_index][g_current_floor_index].name);
@@ -6402,9 +6421,17 @@ void Layout_tick_UI(bool *main_thread_flag) {
     // ========== 添加新地图弹窗 ==========
     if (ImGui::BeginPopupModal("添加新地图##detected", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
         ImGui::InputText("名称", new_name, 64);
+        ImGui::Separator();
+        ImGui::TextColored(g_theme.text_muted, "音乐盒坐标（主信号源）");
         ImGui::InputFloat("音乐盒 X", &new_music_x);
         ImGui::InputFloat("音乐盒 Y", &new_music_y);
         ImGui::InputFloat("音乐盒 Z", &new_music_z);
+        ImGui::Separator();
+        ImGui::TextColored(g_theme.text_muted, "钢琴坐标（辅助信号源，自动检测）");
+        ImGui::InputFloat("钢琴 X", &new_piano_x);
+        ImGui::InputFloat("钢琴 Y", &new_piano_y);
+        ImGui::InputFloat("钢琴 Z", &new_piano_z);
+        ImGui::Separator();
         ImGui::InputText("纹理路径", new_texture, 128);
         if (StyledButton("确定", ButtonVariant::Success, ImVec2(0,0), g_density)) {
             json j;
@@ -6417,10 +6444,13 @@ void Layout_tick_UI(bool *main_thread_flag) {
                 for (auto& existing : j["maps"]) {
                     if (existing.value("name", "") == std::string(new_name) &&
                         existing.value("floor", -1) == 0) {
-                        // 更新已有地图的音乐盒坐标
+                        // 更新已有地图的音乐盒 + 钢琴坐标
                         existing["music_x"] = new_music_x;
                         existing["music_y"] = new_music_y;
                         existing["music_z"] = new_music_z;
+                        existing["piano_x"] = new_piano_x;
+                        existing["piano_y"] = new_piano_y;
+                        existing["piano_z"] = new_piano_z;
                         if (strlen(new_texture) > 0) existing["texture"] = new_texture;
                         updated = true;
                         break;
@@ -6433,6 +6463,7 @@ void Layout_tick_UI(bool *main_thread_flag) {
                 m["name"] = new_name; m["floor"] = 0; m["texture"] = new_texture;
                 m["minX"] = -500.0f; m["maxX"] = 5000.0f; m["minY"] = -3000.0f; m["maxY"] = 1500.0f;
                 m["music_x"] = new_music_x; m["music_y"] = new_music_y; m["music_z"] = new_music_z;
+                m["piano_x"] = new_piano_x; m["piano_y"] = new_piano_y; m["piano_z"] = new_piano_z;
                 m["music_texU"] = 0.5; m["music_texV"] = 0.5;
                 j["maps"].push_back(m);
             }
@@ -6441,7 +6472,7 @@ void Layout_tick_UI(bool *main_thread_flag) {
             LoadMapConfigFromJSON();
             SaveConfig();
             AddNotification(updated
-                ? "已更新地图音乐盒坐标: " + std::string(new_name)
+                ? "已更新地图: " + std::string(new_name) + " (音乐盒+钢琴)"
                 : "已添加新地图: " + std::string(new_name),
                 3.0f, ImVec4(0.3f, 1.0f, 0.3f, 1.0f));
             ImGui::CloseCurrentPopup();
