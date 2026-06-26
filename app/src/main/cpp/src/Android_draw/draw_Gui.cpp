@@ -1952,6 +1952,12 @@ void TryAutoDetectMap(const std::vector<DataStruct>& data) {
         }
         if (show == 0) {
             pos += snprintf(buf + pos, sizeof(buf) - pos, "\n 无匹配 (均<65)");
+        } else {
+            // 显示阈值的参考提示
+            int topIdx = sorted_idx[0];
+            if (topIdx < (int)scores.size() && scores[topIdx].totalScore < 65.0f && scores[topIdx].totalScore >= 40.0f) {
+                pos += snprintf(buf + pos, sizeof(buf) - pos, " (差距兜底)");
+            }
         }
         snprintf(g_map_scores_buf, sizeof(g_map_scores_buf), "%s", buf);
     }
@@ -1974,6 +1980,22 @@ void TryAutoDetectMap(const std::vector<DataStruct>& data) {
             tiedMaps.push_back(idx);
         } else if (fabsf(total - bestTotalScore) < 0.001f) {
             tiedMaps.push_back(idx); // 并列
+        }
+    }
+
+    // ---- 阈值不足时的相对差距兜底 ----
+    // 如果没地图达到 65，但 #1 分数 ≥ 40 且与 #2 差距 ≥ 20 → 视为可信识别
+    if (bestMapIndex < 0 && scores.size() >= 2) {
+        std::sort(scores.begin(), scores.end(), [](const Map120Score& a, const Map120Score& b) {
+            return a.totalScore > b.totalScore;
+        });
+        float top1 = scores[0].totalScore;
+        float top2 = scores[1].totalScore;
+        if (top1 >= 40.0f && (top1 - top2) >= 20.0f) {
+            bestMapIndex = scores[0].mapIndex;
+            bestTotalScore = top1;
+            tiedMaps.clear();
+            tiedMaps.push_back(scores[0].mapIndex);
         }
     }
 
