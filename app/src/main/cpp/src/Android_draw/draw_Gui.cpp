@@ -1414,40 +1414,6 @@ void InvalidateMapTextures() {
     g_last_rendered_floor_index = -1;
 }
 
-// ========== GL 上下文丢失检测 ==========
-// Android 切后台→前台时 EGL 上下文可能被回收，所有 GL 纹理 ID 失效
-// 每帧检测：尝试用 glIsTexture 验证当前地图纹理是否仍然有效
-static bool g_gl_context_lost = false;
-static int  g_gl_check_counter = 0;
-
-static void CheckGLContextLoss() {
-    // 每 60 帧（~1秒）检测一次，避免性能开销
-    if (++g_gl_check_counter < 60) return;
-    g_gl_check_counter = 0;
-
-    if (g_current_map_index < 0 || g_current_map_index >= MAX_MAP_COUNT) return;
-    if (g_current_floor_index < 0 || g_current_floor_index >= MAX_FLOOR_COUNT) return;
-
-    GLuint tex = g_map_textures[g_current_map_index][g_current_floor_index];
-    if (tex != 0) {
-        // 验证纹理 ID 是否仍然有效
-        if (!glIsTexture(tex)) {
-            // 纹理 ID 失效 → GL 上下文已丢失
-            printf("\033[31m[GL] 上下文丢失检测：纹理 %u 失效，清空缓存\033[0m\n", tex);
-            InvalidateMapTextures();
-            g_gl_context_lost = true;
-        }
-    }
-}
-
-// 从 GL 上下文丢失中恢复（在主渲染线程调用）
-static void RecoverFromGLContextLoss() {
-    if (!g_gl_context_lost) return;
-    g_gl_context_lost = false;
-    printf("\033[32m[GL] 上下文恢复：重新加载地图纹理\033[0m\n");
-    // 纹理缓存已清空，下一帧 Draw_MapOverlay 会自动重新加载
-}
-
 void drawBegin() {
     if (orientation != displayInfo.orientation) {
         orientation = displayInfo.orientation;
@@ -5485,10 +5451,6 @@ void Layout_tick_UI(bool *main_thread_flag) {
     py = static_cast<float>(displayInfo.height) * 0.5f;
     screen_config();
     drawBegin();
-
-    // GL 上下文丢失检测与恢复
-    CheckGLContextLoss();
-    RecoverFromGLContextLoss();
 
     Draw_Main_Optimized(ImGui::GetForegroundDrawList());
     AutoWoodCheck();
