@@ -1759,7 +1759,7 @@ void TryAutoDetectMap(const std::vector<DataStruct>& data) {
     }
 
     // === 第二步：所有信号源都没找到——玩家坐标兜底 + 宽限期 ===
-    if (!musicbox_found && !piano_found) {
+    if (!musicbox_found && !piano_found && g_detected_chairs.empty()) {
         g_frames_since_musicbox_lost++;
         g_switch_candidate_index = -1;
         g_switch_confirm_frames = 0;
