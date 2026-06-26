@@ -1594,21 +1594,72 @@ void TryAutoDetectMap(const std::vector<DataStruct>& data) {
         return;
     }
 
-    // === 第三步：音乐盒找到了——匹配数据库 ===
+    // === 第三步：音乐盒找到了——匹配数据库（评分制 + 坐标交叉验证）===
     g_frames_since_musicbox_lost = 0;
 
-    int matched_db_entry = -1;
+    // ---- 改进的匹配算法 ----
+    // 1) 找出所有在容差范围内的 DB 条目，不再"先到先得"
+    // 2) 按距离 + 坐标验证综合评分，选出最佳匹配
+    // 3) 防止因容差重叠导致的"地图1→地图2"误匹配
+    // ---- 改进的匹配算法 ----
+
+    struct MatchScore {
+        int dbIndex = -1;
+        float distance = 1e10f;
+        bool playerInBounds = false;
+        bool isCurrentMap = false;
+    };
+
+    std::vector<MatchScore> all_matches;
     for (int i = 0; i < (int)g_musicbox_db.size(); i++) {
         auto& entry = g_musicbox_db[i];
         float dx = musicbox_pos.X - entry.x;
         float dy = musicbox_pos.Y - entry.y;
-        if (fabsf(dx) < entry.tolerance && fabsf(dy) < entry.tolerance) {
-            matched_db_entry = i;
-            break;
+        float dist = sqrtf(dx * dx + dy * dy);
+        if (dist <= entry.tolerance) {
+            MatchScore ms;
+            ms.dbIndex = i;
+            ms.distance = dist;
+            ms.playerInBounds = IsPlayerInMapBounds(entry.mapIndex, Z);
+            ms.isCurrentMap = (entry.mapIndex == g_current_map_index);
+            all_matches.push_back(ms);
         }
     }
 
-        if (matched_db_entry >= 0) {
+    // ---- 根据综合评分选择最佳匹配 ----
+    // 优先级（从高到低）：
+    //   A. 玩家在坐标范围内 + 是当前地图 → 最高优先级（明确是当前地图）
+    //   B. 玩家在坐标范围内 → 坐标验证通过，优先于纯音乐盒匹配
+    //   C. 是当前地图但不满足坐标范围 → 次选（可能有范围校准误差）
+    //   D. 纯距离最近 → 兜底
+    int matched_db_entry = -1;
+    {
+        MatchScore best;
+        for (auto& ms : all_matches) {
+            bool better = false;
+            if (best.dbIndex < 0) {
+                better = true;
+            } else {
+                auto prior_a = best.playerInBounds && best.isCurrentMap;
+                auto prior_b = ms.playerInBounds && ms.isCurrentMap;
+                if (prior_b && !prior_a) {
+                    better = true;  // A：玩家在范围内且是当前地图 → 最高优先
+                } else if (ms.playerInBounds && !best.playerInBounds) {
+                    better = true;  // B：坐标验证优先
+                } else if (!ms.playerInBounds && best.playerInBounds) {
+                    better = false;  // 不满足坐标验证的不如满足的
+                } else if (ms.isCurrentMap && !best.isCurrentMap) {
+                    better = true;  // C：同是当前地图的优先
+                } else if (ms.distance < best.distance) {
+                    better = true;  // D：同等条件下选距离更近的
+                }
+            }
+            if (better) best = ms;
+        }
+        if (best.dbIndex >= 0) matched_db_entry = best.dbIndex;
+    }
+
+    if (matched_db_entry >= 0) {
         auto& entry = g_musicbox_db[matched_db_entry];
 
         if (entry.mapIndex == g_current_map_index) {
@@ -1622,26 +1673,35 @@ void TryAutoDetectMap(const std::vector<DataStruct>& data) {
             g_switch_candidate_index = -1;
             g_switch_confirm_frames = 0;
         } else {
-            // === 匹配到不同地图 → 加强对当前地图的保护 ===
+            // === 匹配到不同地图 → 加强保护 + 二次确认 ===
+            // 此时 g_musicbox_db 中第一条"不匹配"的条目可能并非真实目标，
+            // 所以需要配合坐标范围做二次验证
 
-            // 1) 优先检查玩家是否在当前地图中（最严格：两个索引都试）
-            bool playerInCurrentOrLast = false;
-            if (g_current_map_index >= 0 && IsPlayerInMapBounds(g_current_map_index, Z))
-                playerInCurrentOrLast = true;
-            if (!playerInCurrentOrLast && g_last_valid_map_index >= 0 && g_last_valid_map_index != g_current_map_index)
-                playerInCurrentOrLast = IsPlayerInMapBounds(g_last_valid_map_index, Z);
+            // 1) 检查玩家是否实际在候选地图的坐标范围内
+            //    → 如果不在，说明音乐盒位置重叠导致了误匹配，拒绝切换
+            bool playerInCandidateMap = IsPlayerInMapBounds(entry.mapIndex, Z);
 
-            // 2) 检查当前地图是否属于"稳定锁定"状态——由用户手动设置或已连续确认超过30帧
-            static int g_map_stable_frames = 0;
-            if (g_current_map_index >= 0 && g_last_valid_map_index >= 0) {
-                g_map_stable_frames++;
-            } else {
-                g_map_stable_frames = 0;
+            // 2) 检查是否有其他候选匹配的地图（score相近的），如果有且坐标范围匹配，
+            //    说明存在歧义 → 偏向前者（停留原地）
+            bool ambiguous = false;
+            if (!playerInCandidateMap) {
+                // 候选地图的坐标范围不匹配玩家位置 → 检查是否有其他地图同时匹配且坐标正确
+                for (auto& ms : all_matches) {
+                    if (ms.dbIndex != matched_db_entry &&
+                        ms.playerInBounds &&
+                        g_musicbox_db[ms.dbIndex].mapIndex != entry.mapIndex) {
+                        ambiguous = true;
+                        break;
+                    }
+                }
             }
-            bool mapIsStable = (g_map_stable_frames > 30); // 稳定0.5秒以上视为锁定
 
-            // 3) 双重防护：玩家在地图内 OR 地图已稳定 → 拒绝切换
-            if (playerInCurrentOrLast || mapIsStable) {
+            // 3) 双重防护：玩家在候选地图范围内 → 才接受切换
+            //    + 如果存在歧义（其他地图也匹配且坐标验证通过）→ 拒切，保护当前地图
+            bool canSwitch = playerInCandidateMap && !ambiguous;
+
+            if (ambiguous) {
+                // 歧义保护：有多个地图的音乐盒位置重叠 → 不切换，保持当前地图
                 g_switch_candidate_index = -1;
                 g_switch_confirm_frames = 0;
                 g_musicbox_moved_on_same_map = true;
@@ -1651,28 +1711,70 @@ void TryAutoDetectMap(const std::vector<DataStruct>& data) {
                     g_current_floor_index = g_last_valid_floor_index;
                     LoadMapTexture(g_current_map_index, g_current_floor_index);
                 }
-            } else {
-                // 玩家不在当前地图且地图未锁定 → 启动连续帧确认
-                if (g_switch_candidate_index == entry.mapIndex) {
-                    g_switch_confirm_frames++;
-                    if (g_switch_confirm_frames >= SWITCH_CONFIRM_REQUIRED) {
-                        g_current_map_index = entry.mapIndex;
-                        g_current_floor_index = entry.floorIndex;
-                        g_last_valid_map_index = entry.mapIndex;
-                        g_last_valid_floor_index = entry.floorIndex;
-                        g_new_map_detected = false;
-                        g_new_map_frame_counter = 0;
-                        g_new_map_prompted = false;
-                        g_musicbox_moved_on_same_map = false;
-                        g_switch_candidate_index = -1;
-                        g_switch_confirm_frames = 0;
-                        g_map_stable_frames = 0;
+            } else if (!canSwitch) {
+                // 无法通过坐标验证 → fallback 到原保护逻辑（玩家位置+稳定性）
+                bool playerInCurrentOrLast = false;
+                if (g_current_map_index >= 0 && IsPlayerInMapBounds(g_current_map_index, Z))
+                    playerInCurrentOrLast = true;
+                if (!playerInCurrentOrLast && g_last_valid_map_index >= 0 &&
+                    g_last_valid_map_index != g_current_map_index)
+                    playerInCurrentOrLast = IsPlayerInMapBounds(g_last_valid_map_index, Z);
+
+                static int g_map_stable_frames = 0;
+                if (g_current_map_index >= 0 && g_last_valid_map_index >= 0) {
+                    g_map_stable_frames++;
+                } else {
+                    g_map_stable_frames = 0;
+                }
+                bool mapIsStable = (g_map_stable_frames > 30);
+
+                if (playerInCurrentOrLast || mapIsStable) {
+                    g_switch_candidate_index = -1;
+                    g_switch_confirm_frames = 0;
+                    g_musicbox_moved_on_same_map = true;
+                    g_detected_musicbox_pos = musicbox_pos;
+                    if (g_current_map_index != g_last_valid_map_index) {
+                        g_current_map_index = g_last_valid_map_index;
+                        g_current_floor_index = g_last_valid_floor_index;
                         LoadMapTexture(g_current_map_index, g_current_floor_index);
                     }
                 } else {
-                    g_switch_candidate_index = entry.mapIndex;
-                    g_switch_confirm_frames = 1;
+                    // 启动连续帧确认（原逻辑）
+                    if (g_switch_candidate_index == entry.mapIndex) {
+                        g_switch_confirm_frames++;
+                        if (g_switch_confirm_frames >= SWITCH_CONFIRM_REQUIRED) {
+                            g_current_map_index = entry.mapIndex;
+                            g_current_floor_index = entry.floorIndex;
+                            g_last_valid_map_index = entry.mapIndex;
+                            g_last_valid_floor_index = entry.floorIndex;
+                            g_new_map_detected = false;
+                            g_new_map_frame_counter = 0;
+                            g_new_map_prompted = false;
+                            g_musicbox_moved_on_same_map = false;
+                            g_switch_candidate_index = -1;
+                            g_switch_confirm_frames = 0;
+                            g_map_stable_frames = 0;
+                            LoadMapTexture(g_current_map_index, g_current_floor_index);
+                        }
+                    } else {
+                        g_switch_candidate_index = entry.mapIndex;
+                        g_switch_confirm_frames = 1;
+                    }
                 }
+            } else {
+                // 坐标验证通过且无歧义 → 直接切换（玩家明确在候选地图内）
+                g_switch_candidate_index = -1;
+                g_switch_confirm_frames = 0;
+                g_current_map_index = entry.mapIndex;
+                g_current_floor_index = entry.floorIndex;
+                g_last_valid_map_index = entry.mapIndex;
+                g_last_valid_floor_index = entry.floorIndex;
+                g_new_map_detected = false;
+                g_new_map_frame_counter = 0;
+                g_new_map_prompted = false;
+                g_musicbox_moved_on_same_map = false;
+                g_map_stable_frames = 0;
+                LoadMapTexture(g_current_map_index, g_current_floor_index);
             }
         }
         return;
