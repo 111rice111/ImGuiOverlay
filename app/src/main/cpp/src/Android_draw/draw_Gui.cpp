@@ -106,6 +106,8 @@ static int g_last_valid_floor_index = 0;       // 最后已知的有效楼层
 static int g_frames_since_musicbox_lost = 0;   // 音乐盒消失以来的帧数
 static const int MUSICBOX_LOST_GRACE_FRAMES = 600; // 音乐盒消失后保留地图的帧数(10秒@60fps)
 static bool g_musicbox_moved_on_same_map = false;  // 同一张图上音乐盒被移动了
+static int g_last_rendered_map_index = -1;         // 最后一次渲染的地图索引（用于检测地图切换）
+static int g_last_rendered_floor_index = -1;       // 最后一次渲染的楼层索引
 
 // === 地图切换冷却：防止音乐盒残留数据导致误切换 ===
 static int g_switch_candidate_index = -1;      // 候选切换目标地图
@@ -319,6 +321,33 @@ namespace MjSubsystem {
 
     bool ShouldBypassFilter() { return draw_props; }
     bool ShouldShowGhost() { return draw_props; }
+}
+
+// ========== 地图状态管理 ==========
+void ResetMapState() {
+    memset(g_map_textures, 0, sizeof(g_map_textures));
+    g_current_map_index = -1;
+    g_current_floor_index = 0;
+    g_last_valid_map_index = -1;
+    g_last_valid_floor_index = 0;
+    g_switch_candidate_index = -1;
+    g_switch_confirm_frames = 0;
+    g_musicbox_moved_on_same_map = false;
+    g_new_map_detected = false;
+    g_new_map_prompted = false;
+    g_new_map_frame_counter = 0;
+    g_detected_musicbox_pos = Vector3A{};
+    g_frames_since_musicbox_lost = 0;
+    g_last_rendered_map_index = -1;
+    g_last_rendered_floor_index = -1;
+}
+
+// ========== 地图纹理缓存管理 ==========
+// 在 UI 线程检测到 GL 上下文重建或地图变化时调用，使纹理缓存失效
+void InvalidateMapTextures() {
+    memset(g_map_textures, 0, sizeof(g_map_textures));
+    g_last_rendered_map_index = -1;
+    g_last_rendered_floor_index = -1;
 }
 
 struct MapConfig {
@@ -2205,12 +2234,15 @@ std::vector<int> PathGraph::dijkstra(int startNode) const {
 
 void Draw_MapOverlay(ImDrawList* Draw, const std::vector<DataStruct>& data) {
     if (!g_map_enabled) return;
-    if (g_current_map_index >= g_all_maps.size()) return;
+    if (g_current_map_index < 0 || g_current_map_index >= (int)g_all_maps.size()) return;
     if (g_all_maps[g_current_map_index].empty()) return;
 
-    static int last_floor_index = -1;
-    if (last_floor_index != g_current_floor_index) {
-        last_floor_index = g_current_floor_index;
+    // 检测地图或楼层变化 → 需要重新加载纹理
+    // 修复：原代码只跟踪 last_floor_index，地图切换（同楼层）时纹理不会重新加载
+    if (g_last_rendered_map_index != g_current_map_index ||
+        g_last_rendered_floor_index != g_current_floor_index) {
+        g_last_rendered_map_index = g_current_map_index;
+        g_last_rendered_floor_index = g_current_floor_index;
         if (g_map_textures[g_current_map_index][g_current_floor_index] == 0) {
             LoadMapTexture(g_current_map_index, g_current_floor_index);
         }
@@ -4229,6 +4261,22 @@ void read_thread(long int 状态数值, long int PD2, long int PD3) {
                 监管者预知[0] = '\0';
                 GlobalMemory::数量 = 0;
                 GlobalMemory::状态 = 0;
+
+                // 重置地图状态：清除过期纹理缓存和地图索引
+                // 防止重连/切场景后残留旧地图数据（地图索引错误、纹理ID过期）
+                InvalidateMapTextures();
+                g_current_map_index = -1;
+                g_current_floor_index = 0;
+                g_last_valid_map_index = -1;
+                g_last_valid_floor_index = 0;
+                g_switch_candidate_index = -1;
+                g_switch_confirm_frames = 0;
+                g_musicbox_moved_on_same_map = false;
+                g_new_map_detected = false;
+                g_new_map_prompted = false;
+                g_new_map_frame_counter = 0;
+                g_detected_musicbox_pos = Vector3A{};
+                g_frames_since_musicbox_lost = 0;
 
                 break;
             }
