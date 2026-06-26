@@ -1618,6 +1618,11 @@ int ExtractPrice(const char* prop_name) {
 
 // ========== 导航系统功能函数 ==========
 
+// 楼层判断：Z > 190 为二楼
+static inline int GetFloorFromPlayerZ(const Vector3A& pos) {
+    return (pos.Z > 190.0f) ? 1 : 0;
+}
+
 void LoadMapTexture(int mapIdx, int floorIdx);
 
 void UpdateCurrentFloor() {
@@ -1625,13 +1630,7 @@ void UpdateCurrentFloor() {
     auto& floors = g_all_maps[g_current_map_index];
     if (floors.empty()) return;
 
-    int targetFloor = g_current_floor_index;
-
-    if (Z.Z > 190.0f) {
-        targetFloor = 1;
-    } else {
-        targetFloor = 0;
-    }
+    int targetFloor = GetFloorFromPlayerZ(Z);
 
     if (targetFloor >= (int)floors.size()) return;
 
@@ -1781,9 +1780,9 @@ void TryAutoDetectMap(const std::vector<DataStruct>& data) {
             int playerMap = FindMapByPlayerPos(Z);
             if (playerMap >= 0) {
                 g_current_map_index = playerMap;
-                g_current_floor_index = 0;
+                g_current_floor_index = GetFloorFromPlayerZ(Z);
                 g_last_valid_map_index = playerMap;
-                g_last_valid_floor_index = 0;
+                g_last_valid_floor_index = g_current_floor_index;
                 g_frames_since_musicbox_lost = 0;
                 LoadMapTexture(g_current_map_index, g_current_floor_index);
                 return;
@@ -1998,9 +1997,9 @@ void TryAutoDetectMap(const std::vector<DataStruct>& data) {
             g_switch_candidate_index = -1;
             g_switch_confirm_frames = 0;
             g_current_map_index = bestMapIndex;
-            g_current_floor_index = 0;
+            g_current_floor_index = GetFloorFromPlayerZ(Z);
             g_last_valid_map_index = bestMapIndex;
-            g_last_valid_floor_index = 0;
+            g_last_valid_floor_index = g_current_floor_index;
             g_new_map_detected = false;
             g_new_map_frame_counter = 0;
             g_new_map_prompted = false;
@@ -2031,9 +2030,9 @@ void TryAutoDetectMap(const std::vector<DataStruct>& data) {
     int playerMap = FindMapByPlayerPos(Z);
     if (playerMap >= 0) {
         g_current_map_index = playerMap;
-        g_current_floor_index = 0;
+        g_current_floor_index = GetFloorFromPlayerZ(Z);
         g_last_valid_map_index = playerMap;
-        g_last_valid_floor_index = 0;
+        g_last_valid_floor_index = g_current_floor_index;
         g_detected_musicbox_pos = musicbox_pos;
         return;
     }
