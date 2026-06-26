@@ -1,0 +1,38 @@
+# Build outputs
+app/build/
+app/.cxx/
+*.apk
+*.aab
+*.dex
+*.so
+
+# IDE files
+.idea/
+*.iml
+.gradle/
+local.properties
+*.user
+*.suo
+.vs/
+*.vcxproj.user
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+
+# Compiled binaries
+*.o
+*.obj
+*.exe
+*.dll
+*.dylib
+
+# Config files (runtime generated)
+/data/local/tmp/
+overlay_config.txt
+
+# OS files
+.DS_Store
+Thumbs.db
