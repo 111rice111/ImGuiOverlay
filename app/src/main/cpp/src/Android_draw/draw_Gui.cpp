@@ -817,6 +817,16 @@ static void LoadConfig() {
 
 
 static void SaveConfig() {
+    // 保护：如果 g_all_maps 为空且配置文件已存在，跳过保存
+    // 防止启动初期未加载地图数据时，std::ofstream 截断文件导致校准数据丢失
+    if (g_all_maps.empty()) {
+        std::ifstream check(g_ConfigPath);
+        if (check) {
+            check.close();
+            return; // 已有配置文件但地图数据为空 → 不覆盖，保护校准数据
+        }
+    }
+
     std::ofstream file(g_ConfigPath);
     if (!file) return;
 
