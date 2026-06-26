@@ -127,6 +127,7 @@ static float g_saved_path_opacity = 0.6f;
 
 static bool g_draw_path_mode = false;
 static std::vector<Vector3A> g_current_drawing_path;
+static int  g_selected_path_index = -1;          // 当前选中的路径索引 (-1=未选中)
 static std::vector<std::vector<Vector3A>> g_saved_paths;
 static int g_path_edit_mode = 0;
 
@@ -174,7 +175,7 @@ static ImVec2 g_path_start_pos;
 
 // ========== 新增全局变量：路径平滑与吸附参数 ==========
 static float g_smooth_strength = 4.0f;
-static bool  g_enable_snap = true;
+static bool  g_enable_snap = false;              // 网格吸附已废弃，默认关闭
 static float g_grid_spacing = 100.0f;
 static float g_snap_distance = 30.0f;
 static bool  g_show_grid = false;
@@ -324,34 +325,6 @@ namespace MjSubsystem {
 
     bool ShouldBypassFilter() { return draw_props; }
     bool ShouldShowGhost() { return draw_props; }
-}
-
-// ========== 地图状态管理 ==========
-void ResetMapState() {
-    memset(g_map_textures, 0, sizeof(g_map_textures));
-    g_current_map_index = -1;
-    g_current_floor_index = 0;
-    g_last_valid_map_index = -1;
-    g_last_valid_floor_index = 0;
-    g_switch_candidate_index = -1;
-    g_switch_confirm_frames = 0;
-    g_musicbox_moved_on_same_map = false;
-    g_new_map_detected = false;
-    g_new_map_prompted = false;
-    g_new_map_frame_counter = 0;
-    g_detected_musicbox_pos = Vector3A{};
-    g_detected_piano_pos = Vector3A{};
-    g_frames_since_musicbox_lost = 0;
-    g_last_rendered_map_index = -1;
-    g_last_rendered_floor_index = -1;
-}
-
-// ========== 地图纹理缓存管理 ==========
-// 在 UI 线程检测到 GL 上下文重建或地图变化时调用，使纹理缓存失效
-void InvalidateMapTextures() {
-    memset(g_map_textures, 0, sizeof(g_map_textures));
-    g_last_rendered_map_index = -1;
-    g_last_rendered_floor_index = -1;
 }
 
 struct MapConfig {
@@ -1334,6 +1307,35 @@ void screen_config() {
         lastDisplayInfo = displayInfo;
         fonts_initialized = false;
     }
+}
+
+// ========== 地图状态管理 ==========
+// ResetMapState: 重置全部地图状态变量，在游戏重连/切场景时调用
+// InvalidateMapTextures: 使所有纹理缓存失效，在 EGL 上下文丢失时调用
+void ResetMapState() {
+    memset(g_map_textures, 0, sizeof(g_map_textures));
+    g_current_map_index = -1;
+    g_current_floor_index = 0;
+    g_last_valid_map_index = -1;
+    g_last_valid_floor_index = 0;
+    g_switch_candidate_index = -1;
+    g_switch_confirm_frames = 0;
+    g_musicbox_moved_on_same_map = false;
+    g_new_map_detected = false;
+    g_new_map_prompted = false;
+    g_new_map_frame_counter = 0;
+    g_detected_musicbox_pos = Vector3A{};
+    g_detected_piano_pos = Vector3A{};
+    g_frames_since_musicbox_lost = 0;
+    g_last_rendered_map_index = -1;
+    g_last_rendered_floor_index = -1;
+    g_selected_path_index = -1;
+}
+
+void InvalidateMapTextures() {
+    memset(g_map_textures, 0, sizeof(g_map_textures));
+    g_last_rendered_map_index = -1;
+    g_last_rendered_floor_index = -1;
 }
 
 // ========== GL 上下文丢失检测 ==========
@@ -3000,20 +3002,36 @@ void Draw_MapOverlay(ImDrawList* Draw, const std::vector<DataStruct>& data) {
                       IM_COL32(50, 255, 50, 240), distInfo);
     }
 
-    // ========== 已保存路径绘制（带开关控制） ==========
+    // ========== 已保存路径绘制（带开关控制 + 选中高亮） ==========
     if (g_show_saved_paths) {
-        for (auto& path : g_saved_paths) {
+        for (size_t pi = 0; pi < g_saved_paths.size(); pi++) {
+            auto& path = g_saved_paths[pi];
             if (path.size() < 2) continue;
+
+            bool isSelected = (pi == g_selected_path_index);
+
+            // 选中路径使用亮黄色 + 加粗，未选中使用标准蓝色
+            ImU32 color_outer = isSelected
+                ? IM_COL32(255, 255, 0, (int)(120 * g_saved_path_opacity))
+                : IM_COL32(0, 180, 255, (int)(60 * g_saved_path_opacity));
+            ImU32 color_inner = isSelected
+                ? IM_COL32(255, 255, 100, (int)(255 * g_saved_path_opacity))
+                : IM_COL32(0, 220, 255, (int)(200 * g_saved_path_opacity));
+            float outer_width = isSelected ? 18.0f : 12.0f;
+            float inner_width = isSelected ? 5.0f : 3.0f;
+
             for (size_t i = 1; i < path.size(); i++) {
                 ImVec2 p1 = ToMap(path[i-1]);
                 ImVec2 p2 = ToMap(path[i]);
-                Draw->AddLine(p1, p2, IM_COL32(0, 180, 255, (int)(60 * g_saved_path_opacity)), 12.0f);
-                Draw->AddLine(p1, p2, IM_COL32(0, 220, 255, (int)(200 * g_saved_path_opacity)), 3.0f);
+                Draw->AddLine(p1, p2, color_outer, outer_width);
+                Draw->AddLine(p1, p2, color_inner, inner_width);
             }
             ImVec2 start = ToMap(path.front());
             ImVec2 end = ToMap(path.back());
-            Draw->AddCircleFilled(start, 5.0f, IM_COL32(0, 255, 0, 200));
-            Draw->AddCircleFilled(end, 5.0f, IM_COL32(255, 0, 0, 200));
+            Draw->AddCircleFilled(start, isSelected ? 7.0f : 5.0f,
+                isSelected ? IM_COL32(255, 255, 0, 255) : IM_COL32(0, 255, 0, 200));
+            Draw->AddCircleFilled(end, isSelected ? 7.0f : 5.0f,
+                isSelected ? IM_COL32(255, 200, 0, 255) : IM_COL32(255, 0, 0, 200));
         }
     }
 
@@ -3228,9 +3246,16 @@ void Draw_MapOverlay(ImDrawList* Draw, const std::vector<DataStruct>& data) {
             if (nearby_path >= 0) break;
         }
         if (nearby_path >= 0) {
+            if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                // 左键点击路径 → 选中该路径（高亮）
+                g_selected_path_index = nearby_path;
+            }
             ImGui::Separator();
-            if (ImGui::Button("删除此路径")) {
+            ImGui::TextColored(ImVec4(0.6f, 0.6f, 0.6f, 1.0f), "选中: 路径 #%d", nearby_path);
+            if (ImGui::Button("删除此路径") || ImGui::IsKeyPressed(ImGuiKey_Delete)) {
                 g_saved_paths.erase(g_saved_paths.begin() + nearby_path);
+                if (g_selected_path_index == nearby_path) g_selected_path_index = -1;
+                else if (g_selected_path_index > nearby_path) g_selected_path_index--;
                 SavePlayerPathsToJSON(g_current_map_index, g_current_floor_index);
                 g_pathGraph.dirty = true;
                 AddNotification("路径已删除", 2.0f, ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
@@ -3241,25 +3266,40 @@ void Draw_MapOverlay(ImDrawList* Draw, const std::vector<DataStruct>& data) {
         ImGui::EndPopup();
     }
 
+    // ========== 全局路径操作：Delete键删除 + 点击空白取消选中 ==========
+    if (g_selected_path_index >= 0 && g_selected_path_index < (int)g_saved_paths.size()) {
+        if (ImGui::IsKeyPressed(ImGuiKey_Delete)) {
+            g_saved_paths.erase(g_saved_paths.begin() + g_selected_path_index);
+            g_selected_path_index = -1;
+            SavePlayerPathsToJSON(g_current_map_index, g_current_floor_index);
+            g_pathGraph.dirty = true;
+            AddNotification("路径已删除", 2.0f, ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
+        }
+        // 点击地图空白区域取消选中
+        if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && hover_map) {
+            // 检查是否点击在路径上
+            bool clicked_on_path = false;
+            for (size_t i = 0; i < g_saved_paths.size() && !clicked_on_path; i++) {
+                for (size_t j = 0; j < g_saved_paths[i].size() && !clicked_on_path; j++) {
+                    ImVec2 pp = ToMap(g_saved_paths[i][j]);
+                    float dist = sqrtf((mouse.x - pp.x)*(mouse.x - pp.x) + (mouse.y - pp.y)*(mouse.y - pp.y));
+                    if (dist < 10.0f) clicked_on_path = true;
+                }
+            }
+            if (!clicked_on_path) g_selected_path_index = -1;
+        }
+    }
+
     // ========== 触摸拖动绘制路径（正交模式：水平/垂直 + 直角转角） ==========
     if (g_path_edit_mode == 1) {
-        // 辅助：获取鼠标对应的世界坐标（带吸附）
+        // 辅助：获取鼠标对应的世界坐标（不吸附——移除网格吸附功能）
+        // 用户点击的精确位置即是路径点，不再自动吸附到网格交叉点
         auto GetMouseWorldWithSnap = [&](const ImVec2& mpos) -> Vector3A {
             float u = (mpos.x - map_pos.x) / map_w;
             float v = (mpos.y - map_pos.y) / map_h;
             float worldX = (u - cfg.offsetU) / cfg.scaleX;
             float worldY = (v - cfg.offsetV) / cfg.scaleY;
-            Vector3A result(worldX, worldY, Z.Z);
-            if (g_enable_snap && cfg.calibrated) {
-                float snapX = roundf(worldX / g_grid_spacing) * g_grid_spacing;
-                float snapY = roundf(worldY / g_grid_spacing) * g_grid_spacing;
-                float dx = worldX - snapX, dy = worldY - snapY;
-                if (sqrtf(dx*dx + dy*dy) <= g_snap_distance) {
-                    result.X = snapX;
-                    result.Y = snapY;
-                }
-            }
-            return result;
+            return Vector3A(worldX, worldY, Z.Z);
         };
 
         // 辅助：将正交约束应用到目标点（相对于参考点强制水平/垂直）
@@ -5990,11 +6030,7 @@ void Layout_tick_UI(bool *main_thread_flag) {
                     if (cfg_path.calibrated) {
                         ImGui::Checkbox("显示已绘制路径", &g_show_saved_paths);
                         ImGui::SliderFloat("平滑强度", &g_smooth_strength, 0.0f, 20.0f, "%.0f px");
-                        ImGui::Checkbox("网格吸附", &g_enable_snap);
-                        if (g_enable_snap) {
-                            ImGui::SliderFloat("网格间距", &g_grid_spacing, 50.0f, 500.0f, "%.0f");
-                            ImGui::SliderFloat("吸附距离", &g_snap_distance, 0.0f, 100.0f, "%.0f");
-                        }
+                        // 网格吸附功能已移除，路径点定位在用户实际点击的精确位置
                         ImGui::Checkbox("显示网格参考线", &g_show_grid);
                         if (g_show_grid) {
                             ImGui::SliderFloat("网格透明度", &g_grid_alpha, 0.1f, 1.0f);
@@ -6039,6 +6075,18 @@ void Layout_tick_UI(bool *main_thread_flag) {
                             }
                         }
                     }
+                    // 选中路径操作
+                    if (g_selected_path_index >= 0 && g_selected_path_index < (int)g_saved_paths.size()) {
+                        if (StyledButton("删除选中路径", ButtonVariant::Danger, ImVec2(0,0), g_density)) {
+                            g_saved_paths.erase(g_saved_paths.begin() + g_selected_path_index);
+                            g_selected_path_index = -1;
+                            SavePlayerPathsToJSON(g_current_map_index, g_current_floor_index);
+                            g_pathGraph.dirty = true;
+                            AddNotification("选中路径已删除", 2.0f, ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
+                        }
+                        ImGui::SameLine();
+                        ImGui::TextColored(g_theme.warning, "路径 #%d 已选中 (Delete键删除)", g_selected_path_index);
+                    }
                     ImGui::TextColored(g_theme.text_muted, "长按地图拖动绘制路径，松开保存（自由模式：任意方向平滑弯曲）");
                     if (g_path_edit_mode == 1) {
                         ImGui::TextColored(g_theme.info,
@@ -6048,8 +6096,6 @@ void Layout_tick_UI(bool *main_thread_flag) {
                     ImGui::Separator();
                     StyledSectionHeader("路径绘制选项", g_theme.text_title, g_density);
                     ImGui::Checkbox("正交绘制 (水平/垂直)", &g_ortho_draw);
-                    ImGui::SameLine();
-                    ImGui::Checkbox("吸附网格", &g_enable_snap);
                     ImGui::SliderFloat("平滑度", &g_smooth_strength, 1.0f, 30.0f, "%.1f");
 
                     ImGui::Separator();
