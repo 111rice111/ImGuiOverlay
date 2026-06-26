@@ -363,6 +363,15 @@ struct PianoKey {
 };
 std::vector<PianoKey> g_piano_db;
 
+// === 凳子位置数据库（第三信号源，最可靠）===
+struct ChairKey {
+    float x, y, z;
+    int mapIndex;
+    float tolerance = 4.0f;
+};
+std::vector<ChairKey> g_chair_db;
+std::vector<Vector3A> g_detected_chairs;  // 当前帧检测到的凳子位置
+
 #define MAX_MAP_COUNT 20
 #define MAX_FLOOR_COUNT 3
 GLuint g_map_textures[MAX_MAP_COUNT][MAX_FLOOR_COUNT] = {{0}};
@@ -1072,6 +1081,70 @@ void SavePlayerPathsToJSON(int mapIdx, int floorIdx) {
     ofs << j.dump(4);
 }
 
+
+// ========== 保存场景物体（钢琴+凳子）到 JSON ==========
+void SaveSceneObjectsToJSON(int mapIdx, int floorIdx) {
+    std::string json_path = "/sdcard/maps/map_config.json";
+    std::ifstream ifs(json_path);
+    json j;
+    if (ifs) ifs >> j; else return;
+
+    if (!j.contains("maps")) return;
+
+    for (auto& m : j["maps"]) {
+        int mf = m.value("floor", 0);
+        int mi = -1;
+        for (int i = 0; i < (int)g_all_maps.size(); i++) {
+            if (!g_all_maps[i].empty() && g_all_maps[i][0].name == m.value("name", "")) {
+                mi = i; break;
+            }
+        }
+        if (mi == mapIdx && mf == floorIdx) {
+            if (g_detected_piano_pos.X != 0.0f || g_detected_piano_pos.Y != 0.0f) {
+                m["piano_x"] = g_detected_piano_pos.X;
+                m["piano_y"] = g_detected_piano_pos.Y;
+                m["piano_z"] = g_detected_piano_pos.Z;
+            }
+            m["chairs"] = json::array();
+            for (auto& chair : g_detected_chairs) {
+                json c;
+                c["x"] = chair.X; c["y"] = chair.Y; c["z"] = chair.Z;
+                m["chairs"].push_back(c);
+            }
+            break;
+        }
+    }
+    std::ofstream ofs(json_path);
+    ofs << j.dump(4);
+
+    // 重新加载数据库
+    g_piano_db.clear();
+    g_chair_db.clear();
+    for (auto& m : j["maps"]) {
+        int mi = -1;
+        for (int i = 0; i < (int)g_all_maps.size(); i++) {
+            if (!g_all_maps[i].empty() && g_all_maps[i][0].name == m.value("name", "")) {
+                mi = i; break;
+            }
+        }
+        if (mi < 0) continue;
+        if (m.contains("piano_x") && m.contains("piano_y")) {
+            PianoKey pk;
+            pk.x = m["piano_x"]; pk.y = m["piano_y"];
+            pk.z = m.value("piano_z", 0.0f); pk.mapIndex = mi;
+            g_piano_db.push_back(pk);
+        }
+        if (m.contains("chairs")) {
+            for (auto& c : m["chairs"]) {
+                ChairKey ck;
+                ck.x = c["x"]; ck.y = c["y"];
+                ck.z = c.value("z", 0.0f); ck.mapIndex = mi;
+                g_chair_db.push_back(ck);
+            }
+        }
+    }
+}
+
 static std::unordered_map<std::string, bool> skipClassCache;
 
 inline bool should_filter_cached(std::string_view cn) noexcept {
@@ -1651,11 +1724,12 @@ void TryAutoDetectMap(const std::vector<DataStruct>& data) {
         return;
     }
 
-    // === 第一步：扫描场景中的信号源（音乐盒 + 钢琴） ===
+    // === 第一步：扫描场景中的信号源（音乐盒 + 钢琴 + 凳子）===
     Vector3A musicbox_pos{};
     Vector3A piano_pos{};
     bool musicbox_found = false;
     bool piano_found = false;
+    g_detected_chairs.clear();
     for (const auto& item : data) {
         if (item.阵营 == 6 || item.阵营 == 4) {
             if (strstr(item.类名, "prop_musicbox")) {
@@ -1671,6 +1745,14 @@ void TryAutoDetectMap(const std::vector<DataStruct>& data) {
                     (fabsf(piano_pos.X) > 1.0f || fabsf(piano_pos.Y) > 1.0f)) {
                     piano_found = true;
                     g_detected_piano_pos = piano_pos;
+                }
+            }
+            // 扫描凳子（固定物体，最可靠的信号源）
+            if (strstr(item.类名, "rd01_in_pianochair01.gim")) {
+                Vector3A chair_pos = getObjectCoordinates(item.objcoor, false);
+                if (isValidCoordinate(chair_pos) &&
+                    (fabsf(chair_pos.X) > 1.0f || fabsf(chair_pos.Y) > 1.0f)) {
+                    g_detected_chairs.push_back(chair_pos);
                 }
             }
         }
@@ -1724,6 +1806,8 @@ void TryAutoDetectMap(const std::vector<DataStruct>& data) {
     struct MultiSignalScore {
         float musicBoxScore = 0.0f;   // 音乐盒匹配度 (0~1)
         float pianoScore = 0.0f;      // 钢琴匹配度 (0~1)
+        float chairScore = 0.0f;      // 凳子匹配度 (累加)
+        int   chairCount = 0;         // 匹配的凳子数量
         float musicBoxDist = 1e10f;   // 音乐盒匹配距离
         float pianoDist = 1e10f;      // 钢琴匹配距离
         bool playerInBounds = false;  // 玩家坐标验证
@@ -1776,6 +1860,26 @@ void TryAutoDetectMap(const std::vector<DataStruct>& data) {
         }
     }
 
+    // B2) 凳子匹配：每个凳子独立评分 + 累加（最可靠的信号，权重最高）
+    if (!g_detected_chairs.empty()) {
+        for (auto& chair_pos : g_detected_chairs) {
+            for (int i = 0; i < (int)g_chair_db.size(); i++) {
+                auto& entry = g_chair_db[i];
+                if (entry.mapIndex < 0 || entry.mapIndex >= (int)map_scores.size()) continue;
+                float dx = chair_pos.X - entry.x;
+                float dy = chair_pos.Y - entry.y;
+                float dist = sqrtf(dx * dx + dy * dy);
+                if (dist <= entry.tolerance) {
+                    auto& score = map_scores[entry.mapIndex];
+                    // 每个匹配的凳子 +0.6，距离越近分越高
+                    float chair_contrib = (1.0f - (dist / entry.tolerance) * 0.5f) * 0.6f;
+                    score.chairScore += chair_contrib;
+                    score.chairCount++;
+                }
+            }
+        }
+    }
+
     // C) 坐标验证奖励：玩家在范围内 +2.0
     for (int i = 0; i < (int)map_scores.size(); i++) {
         if (IsPlayerInMapBounds(i, Z)) {
@@ -1788,17 +1892,19 @@ void TryAutoDetectMap(const std::vector<DataStruct>& data) {
     float bestTotalScore = -1.0f;
     bool bestHasMusicBox = false;
     bool bestHasPiano = false;
+    int  bestHasChairs = 0;            // 最佳地图的凳子匹配数
     float bestMusicBoxDist = 1e10f;
     float bestPianoDist = 1e10f;
 
     for (int i = 0; i < (int)map_scores.size(); i++) {
         auto& s = map_scores[i];
-        if (!s.musicBoxMatched && !s.pianoMatched) continue; // 无任何信号匹配
+        if (!s.musicBoxMatched && !s.pianoMatched && s.chairCount == 0) continue; // 无任何信号匹配
 
         // 总分计算
         float totalScore = 0.0f;
         totalScore += s.musicBoxScore;                    // 音乐盒匹配度
         totalScore += s.pianoScore;                       // 钢琴匹配度
+        totalScore += s.chairScore;                       // 凳子匹配度（累加）
         if (s.playerInBounds) totalScore += 2.0f;         // 坐标验证 +2
         if (i == g_current_map_index) totalScore += 1.0f; // 当前地图连续性 +1
 
@@ -1810,8 +1916,8 @@ void TryAutoDetectMap(const std::vector<DataStruct>& data) {
             isBetter = true;  // 总分更高
         } else if (fabsf(totalScore - bestTotalScore) < 0.01f) {
             // 总分非常接近 → 比较信号源数量和距离
-            int sig_best = (bestHasMusicBox ? 1 : 0) + (bestHasPiano ? 1 : 0);
-            int sig_curr = (s.musicBoxMatched ? 1 : 0) + (s.pianoMatched ? 1 : 0);
+            int sig_best = (bestHasMusicBox ? 1 : 0) + (bestHasPiano ? 1 : 0) + bestHasChairs;
+            int sig_curr = (s.musicBoxMatched ? 1 : 0) + (s.pianoMatched ? 1 : 0) + (s.chairCount > 0 ? 1 : 0);
             if (sig_curr > sig_best) {
                 isBetter = true;  // 信号源更多
             } else if (sig_curr == sig_best && s.musicBoxMatched &&
@@ -1825,6 +1931,7 @@ void TryAutoDetectMap(const std::vector<DataStruct>& data) {
             bestTotalScore = totalScore;
             bestHasMusicBox = s.musicBoxMatched;
             bestHasPiano = s.pianoMatched;
+            bestHasChairs = s.chairCount;
             bestMusicBoxDist = s.musicBoxDist;
             bestPianoDist = s.pianoDist;
         }
@@ -1870,7 +1977,7 @@ void TryAutoDetectMap(const std::vector<DataStruct>& data) {
                     if (i == bestMapIndex) continue;
                     auto& other = map_scores[i];
                     if (!other.musicBoxMatched && !other.pianoMatched) continue;
-                    float otherTotal = other.musicBoxScore + other.pianoScore;
+                    float otherTotal = other.musicBoxScore + other.pianoScore + other.chairScore;
                     if (other.playerInBounds) otherTotal += 2.0f;
                     float scoreDiff = fabsf(bestTotalScore - otherTotal);
                     // 总分差 < 1.0 视为歧义
@@ -2096,6 +2203,7 @@ static void LoadMapConfigFromJSON() {
     g_all_maps.clear();
     g_musicbox_db.clear();
     g_piano_db.clear();
+    g_chair_db.clear();
     g_exits.clear();
 
     static std::list<std::string> dynamic_names;
@@ -2146,6 +2254,20 @@ static void LoadMapConfigFromJSON() {
             pk.mapIndex = idx;
             pk.tolerance = m.value("piano_tolerance", 5.0f);
             g_piano_db.push_back(pk);
+        }
+
+        // 凳子位置（第三信号源，最可靠）
+        if (m.contains("chairs") && m["chairs"].is_array()) {
+            for (auto& c : m["chairs"]) {
+                if (c.contains("x") && c.contains("y")) {
+                    ChairKey ck;
+                    ck.x = c["x"]; ck.y = c["y"];
+                    ck.z = c.value("z", 0.0f);
+                    ck.mapIndex = idx;
+                    ck.tolerance = c.value("tolerance", 4.0f);
+                    g_chair_db.push_back(ck);
+                }
+            }
         }
 
         while (g_exits.size() <= idx) g_exits.push_back({});
@@ -5939,6 +6061,17 @@ void Layout_tick_UI(bool *main_thread_flag) {
                                 }
                             }
                             ImGui::Separator();
+                        }
+
+                        // === 同步场景物体到当前地图（钢琴+凳子）===
+                        ImGui::TextColored(g_theme.text_muted, "[P][C] 钢琴:%s | 凳子:%zu",
+                            (g_detected_piano_pos.X != 0.0f ? "OK" : "--"),
+                            g_detected_chairs.size());
+                        ImGui::SameLine();
+                        if (StyledButton("[同步] 物体到当前地图", ButtonVariant::Primary, ImVec2(0,0), g_density)) {
+                            SaveSceneObjectsToJSON(g_current_map_index, g_current_floor_index);
+                            AddNotification("已同步: 钢琴 + " + std::to_string(g_detected_chairs.size()) + "个凳子",
+                                3.0f, ImVec4(0.3f, 1.0f, 0.3f, 1.0f));
                         }
                     } else {
                         ImGui::TextColored(g_theme.danger, "地图索引无效");
