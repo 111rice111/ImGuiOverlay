@@ -1739,35 +1739,29 @@ void TryAutoDetectMap(const std::vector<DataStruct>& data) {
         }
     }
 
-    // === 第二步：所有信号源都没找到——玩家坐标兜底 + 宽限期 ===
+    // === 第二步：所有信号源都没找到——保持当前地图，等信号恢复 ===
     if (!musicbox_found && !piano_found && g_detected_chairs.empty()) {
         g_frames_since_musicbox_lost++;
         g_switch_candidate_index = -1;
         g_switch_confirm_frames = 0;
 
         if (g_last_valid_map_index >= 0) {
+            // 还在上次识别的范围内 → 保持，重置计数器
             if (IsPlayerInMapBounds(g_last_valid_map_index, Z)) {
                 if (g_current_map_index != g_last_valid_map_index) {
                     g_current_map_index = g_last_valid_map_index;
                     g_current_floor_index = g_last_valid_floor_index;
                     LoadMapTexture(g_current_map_index, g_current_floor_index);
                 }
-                // 在宽限期内重置帧计数器，避免"累积→超时"误判
                 g_frames_since_musicbox_lost = 0;
                 return;
             }
-            int playerMap = FindMapByPlayerPos(Z);
-            if (playerMap >= 0) {
-                g_current_map_index = playerMap;
-                g_current_floor_index = SafeClampFloorIdx(g_current_map_index, GetFloorFromPlayerZ(Z));
-                g_last_valid_map_index = playerMap;
-                g_last_valid_floor_index = g_current_floor_index;
-                g_frames_since_musicbox_lost = 0;
-                LoadMapTexture(g_current_map_index, g_current_floor_index);
-                return;
-            }
+            // 不在范围内 → 也不找 FindMapByPlayerPos（容易跳到错误的大范围地图）
+            // 保持当前 g_current_map_index 不变，等信号恢复评分自然切换
+            return;
         }
 
+        // 从未识别过地图 → 宽限期过后重置
         if (g_frames_since_musicbox_lost > MUSICBOX_LOST_GRACE_FRAMES) {
             g_current_map_index = -1;
             g_last_valid_map_index = -1;
@@ -2027,8 +2021,12 @@ void TryAutoDetectMap(const std::vector<DataStruct>& data) {
         return;
     }
 
-    // 情况B：玩家在某个已知地图中
-    int playerMap = FindMapByPlayerPos(Z);
+    // 情况B：玩家在某个已知地图中（只有从未识别过地图时才用 FindMapByPlayerPos）
+    // 已识别过地图但不在范围内 → 不覆盖，等信号恢复评分自动切换
+    int playerMap = -1;
+    if (g_last_valid_map_index < 0) {
+        playerMap = FindMapByPlayerPos(Z);
+    }
     if (playerMap >= 0) {
         g_current_map_index = playerMap;
         g_current_floor_index = SafeClampFloorIdx(g_current_map_index, GetFloorFromPlayerZ(Z));
@@ -2038,15 +2036,18 @@ void TryAutoDetectMap(const std::vector<DataStruct>& data) {
         return;
     }
 
-    // 情况C：真正的新地图
-    g_current_map_index = -1;
-    g_last_valid_map_index = -1;
-    if (!g_new_map_detected && !g_new_map_prompted) {
-        g_new_map_detected = true;
-        g_new_map_prompted = true;
-        g_new_map_frame_counter = 150;
-        g_detected_musicbox_pos = musicbox_pos;
+    // 情况C：真正的新地图（只有从未识别过时才重置）
+    if (g_last_valid_map_index < 0) {
+        g_current_map_index = -1;
+        g_last_valid_map_index = -1;
+        if (!g_new_map_detected && !g_new_map_prompted) {
+            g_new_map_detected = true;
+            g_new_map_prompted = true;
+            g_new_map_frame_counter = 150;
+            g_detected_musicbox_pos = musicbox_pos;
+        }
     }
+    // 有已识别地图但不在范围内 → 保持当前状态等信号恢复
 }
 
 static void LoadMapConfigFromJSON() {
