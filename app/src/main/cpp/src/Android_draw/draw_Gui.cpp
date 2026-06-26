@@ -375,7 +375,7 @@ struct ChairKey {
 std::vector<ChairKey> g_chair_db;
 std::vector<Vector3A> g_detected_chairs;  // 当前帧检测到的凳子位置
 
-#define MAX_MAP_COUNT 20
+#define MAX_MAP_COUNT 50
 #define MAX_FLOOR_COUNT 3
 GLuint g_map_textures[MAX_MAP_COUNT][MAX_FLOOR_COUNT] = {{0}};
 
@@ -1623,6 +1623,16 @@ static inline int GetFloorFromPlayerZ(const Vector3A& pos) {
     return (pos.Z > 190.0f) ? 1 : 0;
 }
 
+// 安全钳制楼层索引到当前地图的有效范围内（防止越界导致显示错误地图）
+static inline int SafeClampFloorIdx(int mapIdx, int floorIdx) {
+    if (mapIdx < 0 || mapIdx >= (int)g_all_maps.size()) return 0;
+    if (g_all_maps[mapIdx].empty()) return 0;
+    int maxFloor = (int)g_all_maps[mapIdx].size() - 1;
+    if (floorIdx > maxFloor) return maxFloor;
+    if (floorIdx < 0) return 0;
+    return floorIdx;
+}
+
 void LoadMapTexture(int mapIdx, int floorIdx);
 
 void UpdateCurrentFloor() {
@@ -1652,14 +1662,17 @@ void LoadMapTexture(int mapIdx, int floorIdx) {
         snprintf(g_texture_status, sizeof(g_texture_status), "参数错误 (map=%d, floor=%d)", mapIdx, floorIdx);
         return;
     }
-    if (g_map_textures[mapIdx][floorIdx] != 0) {
-        snprintf(g_texture_status, sizeof(g_texture_status), "纹理已加载 (ID=%u)", g_map_textures[mapIdx][floorIdx]);
-        return;
-    }
 
     while (glGetError() != GL_NO_ERROR) {}
 
-    const char* path = g_all_maps[mapIdx][floorIdx].texturePath;
+    // 删除旧纹理（如果已经有）
+    if (g_map_textures[mapIdx][floorIdx] != 0) {
+        glDeleteTextures(1, &g_map_textures[mapIdx][floorIdx]);
+        g_map_textures[mapIdx][floorIdx] = 0;
+    }
+
+    int safeFloor = SafeClampFloorIdx(mapIdx, floorIdx);
+    const char* path = g_all_maps[mapIdx][safeFloor].texturePath;
     int w, h, n;
     unsigned char* data = stbi_load(path, &w, &h, &n, 4);
     if (!data) {
@@ -1780,7 +1793,7 @@ void TryAutoDetectMap(const std::vector<DataStruct>& data) {
             int playerMap = FindMapByPlayerPos(Z);
             if (playerMap >= 0) {
                 g_current_map_index = playerMap;
-                g_current_floor_index = GetFloorFromPlayerZ(Z);
+                g_current_floor_index = SafeClampFloorIdx(g_current_map_index, GetFloorFromPlayerZ(Z));
                 g_last_valid_map_index = playerMap;
                 g_last_valid_floor_index = g_current_floor_index;
                 g_frames_since_musicbox_lost = 0;
@@ -1930,8 +1943,8 @@ void TryAutoDetectMap(const std::vector<DataStruct>& data) {
             if (s.mapIndex >= 0 && s.mapIndex < (int)g_all_maps.size() && !g_all_maps[s.mapIndex].empty())
                 name = g_all_maps[s.mapIndex][0].name;
             int chars = snprintf(buf + pos, sizeof(buf) - pos,
-                "\n #%d %s: %.0f/120 [M%.0f+C%d+P%.0f+S%.0f]",
-                si + 1, name, s.totalScore,
+                "\n #%d [%d]%s: %.0f/120 [M%.0f+C%d+P%.0f+S%.0f]",
+                si + 1, s.mapIndex, name, s.totalScore,
                 s.musicBoxScore, (int)s.stoolCountScore,
                 s.stoolPosScore, s.pianoScore);
             if (chars > 0) pos += chars;
@@ -1997,7 +2010,7 @@ void TryAutoDetectMap(const std::vector<DataStruct>& data) {
             g_switch_candidate_index = -1;
             g_switch_confirm_frames = 0;
             g_current_map_index = bestMapIndex;
-            g_current_floor_index = GetFloorFromPlayerZ(Z);
+            g_current_floor_index = SafeClampFloorIdx(g_current_map_index, GetFloorFromPlayerZ(Z));
             g_last_valid_map_index = bestMapIndex;
             g_last_valid_floor_index = g_current_floor_index;
             g_new_map_detected = false;
@@ -2030,7 +2043,7 @@ void TryAutoDetectMap(const std::vector<DataStruct>& data) {
     int playerMap = FindMapByPlayerPos(Z);
     if (playerMap >= 0) {
         g_current_map_index = playerMap;
-        g_current_floor_index = GetFloorFromPlayerZ(Z);
+        g_current_floor_index = SafeClampFloorIdx(g_current_map_index, GetFloorFromPlayerZ(Z));
         g_last_valid_map_index = playerMap;
         g_last_valid_floor_index = g_current_floor_index;
         g_detected_musicbox_pos = musicbox_pos;
@@ -2465,15 +2478,16 @@ void Draw_MapOverlay(ImDrawList* Draw, const std::vector<DataStruct>& data) {
     if (g_current_map_index < 0 || g_current_map_index >= (int)g_all_maps.size()) return;
     if (g_all_maps[g_current_map_index].empty()) return;
 
+    // 安全钳制层数索引，防止越界读取导致显示错误地图
+    g_current_floor_index = SafeClampFloorIdx(g_current_map_index, g_current_floor_index);
+
     // 检测地图或楼层变化 → 需要重新加载纹理
-    // 修复：原代码只跟踪 last_floor_index，地图切换（同楼层）时纹理不会重新加载
     if (g_last_rendered_map_index != g_current_map_index ||
         g_last_rendered_floor_index != g_current_floor_index) {
         g_last_rendered_map_index = g_current_map_index;
         g_last_rendered_floor_index = g_current_floor_index;
-        if (g_map_textures[g_current_map_index][g_current_floor_index] == 0) {
-            LoadMapTexture(g_current_map_index, g_current_floor_index);
-        }
+        // 强制重新加载纹理（不管之前是否有缓存）
+        LoadMapTexture(g_current_map_index, g_current_floor_index);
     }
 
     UpdateCurrentFloor();
@@ -5958,7 +5972,12 @@ void Layout_tick_UI(bool *main_thread_flag) {
                             }
                         }
                     } else if (g_current_map_index >= 0 && g_current_map_index < (int)g_all_maps.size() && !g_all_maps[g_current_map_index].empty()) {
-                        ImGui::TextColored(g_theme.success, "当前: %s", g_all_maps[g_current_map_index][g_current_floor_index].name);
+                        int dispFloor = SafeClampFloorIdx(g_current_map_index, g_current_floor_index);
+                        ImGui::TextColored(g_theme.success, "当前: %s", g_all_maps[g_current_map_index][dispFloor].name);
+                        ImGui::SameLine();
+                        ImGui::TextColored(g_theme.text_muted, " [idx=%d tex=%s]",
+                            g_current_map_index,
+                            g_all_maps[g_current_map_index][dispFloor].texturePath);
                         ImGui::TextColored(g_theme.text_muted, "%s", g_map_scores_buf);
 
                         // === 音乐盒被移动到了同地图其他位置 ===
