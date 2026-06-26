@@ -117,6 +117,9 @@ static int g_switch_candidate_index = -1;      // 候选切换目标地图
 static int g_switch_confirm_frames = 0;        // 候选已连续匹配的帧数
 static const int SWITCH_CONFIRM_REQUIRED = 30;  // 需要连续30帧(~0.5秒)才确认切换
 
+// 评分显示缓存（用于界面调试）
+static char g_map_scores_buf[2048] = "";          // 最近评分信息的字符串缓存
+
 static std::vector<std::vector<std::vector<Vector3A>>> g_exits;
 
 static float g_map_opacity = 1.0f;
@@ -1906,6 +1909,39 @@ void TryAutoDetectMap(const std::vector<DataStruct>& data) {
         // ---- 总分 (0~120) ----
         s.totalScore = s.musicBoxScore + s.stoolCountScore + s.stoolPosScore + s.pianoScore;
         scores.push_back(s);
+    }
+
+    // ---- 生成评分显示文本（取前三名，用于调试）----
+    {
+        // 按总分排序（降序）
+        std::vector<int> sorted_idx(scores.size());
+        for (int i = 0; i < (int)scores.size(); i++) sorted_idx[i] = i;
+        std::sort(sorted_idx.begin(), sorted_idx.end(), [&](int a, int b) {
+            return scores[a].totalScore > scores[b].totalScore;
+        });
+
+        char buf[2048];
+        int pos = 0;
+        pos += snprintf(buf + pos, sizeof(buf) - pos, "识别评分:");
+        int show = std::min(3, (int)sorted_idx.size());
+        for (int si = 0; si < show; si++) {
+            auto& s = scores[sorted_idx[si]];
+            if (s.totalScore < 0.01f) continue;
+            const char* name = "?";
+            if (s.mapIndex >= 0 && s.mapIndex < (int)g_all_maps.size() && !g_all_maps[s.mapIndex].empty())
+                name = g_all_maps[s.mapIndex][0].name;
+            int chars = snprintf(buf + pos, sizeof(buf) - pos,
+                "\n #%d %s: %.0f/120 [M%.0f+C%d+P%.0f+S%.0f]",
+                si + 1, name, s.totalScore,
+                s.musicBoxScore, (int)s.stoolCountScore,
+                s.stoolPosScore, s.pianoScore);
+            if (chars > 0) pos += chars;
+            if (pos >= (int)sizeof(buf) - 10) break;
+        }
+        if (show == 0) {
+            pos += snprintf(buf + pos, sizeof(buf) - pos, "\n 无匹配 (均<65)");
+        }
+        snprintf(g_map_scores_buf, sizeof(g_map_scores_buf), "%s", buf);
     }
 
     // ---- 选出最佳地图（阈值65，并列处理）----
@@ -5859,6 +5895,7 @@ void Layout_tick_UI(bool *main_thread_flag) {
 
                 if (map_invalid) {
                     ImGui::TextColored(g_theme.warning, "尚未识别地图，部分功能不可用");
+                    ImGui::TextColored(g_theme.text_muted, "%s", g_map_scores_buf);
                 }
 
                 ImGui::Checkbox("启用导航地图", &g_map_enabled);
@@ -5923,6 +5960,7 @@ void Layout_tick_UI(bool *main_thread_flag) {
                         }
                     } else if (g_current_map_index >= 0 && g_current_map_index < (int)g_all_maps.size() && !g_all_maps[g_current_map_index].empty()) {
                         ImGui::TextColored(g_theme.success, "当前: %s", g_all_maps[g_current_map_index][g_current_floor_index].name);
+                        ImGui::TextColored(g_theme.text_muted, "%s", g_map_scores_buf);
 
                         // === 音乐盒被移动到了同地图其他位置 ===
                         if (g_musicbox_moved_on_same_map && g_map_auto_detect) {
