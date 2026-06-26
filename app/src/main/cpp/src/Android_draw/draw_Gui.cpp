@@ -1795,168 +1795,162 @@ void TryAutoDetectMap(const std::vector<DataStruct>& data) {
         return;
     }
 
-    // === 第三步：信号源匹配数据库（多信号加权评分） ===
+    // === 第三步：120分制多信号评分 ===
     g_frames_since_musicbox_lost = 0;
 
-    // ---- 多信号融合匹配算法 ----
-    // 收集所有信号源（音乐盒 + 钢琴）的匹配结果，按地图汇总加权评分
-    // 每张地图的总分 = 音乐盒分数 + 钢琴分数 + 坐标验证奖励 + 当前地图奖励
-    // ---- 多信号融合匹配算法 ----
-
-    struct MultiSignalScore {
-        float musicBoxScore = 0.0f;   // 音乐盒匹配度 (0~1)
-        float pianoScore = 0.0f;      // 钢琴匹配度 (0~1)
-        float chairScore = 0.0f;      // 凳子匹配度 (累加)
-        int   chairCount = 0;         // 匹配的凳子数量
-        float musicBoxDist = 1e10f;   // 音乐盒匹配距离
-        float pianoDist = 1e10f;      // 钢琴匹配距离
-        bool playerInBounds = false;  // 玩家坐标验证
-        bool musicBoxMatched = false; // 是否有音乐盒匹配
-        bool pianoMatched = false;    // 是否有钢琴匹配
+    // 收集各地图的评分
+    struct Map120Score {
+        int   mapIndex = -1;
+        float musicBoxScore = 0.0f;   // 0~40
+        float stoolCountScore = 0.0f; // 0~20
+        float stoolPosScore = 0.0f;   // 0~30
+        float pianoScore = 0.0f;      // 0~30
+        float totalScore = 0.0f;      // 0~120
     };
+    std::vector<Map120Score> scores;
 
-    // 收集所有地图的评分
-    static std::vector<MultiSignalScore> map_scores;
-    map_scores.assign(g_all_maps.size(), MultiSignalScore{});
+    // 遍历所有地图计算评分
+    int num_maps = (int)g_all_maps.size();
+    for (int mi = 0; mi < num_maps; mi++) {
+        if (g_all_maps[mi].empty()) continue;
 
-    // A) 音乐盒匹配：按距离评分
-    if (musicbox_found) {
-        for (int i = 0; i < (int)g_musicbox_db.size(); i++) {
-            auto& entry = g_musicbox_db[i];
-            if (entry.mapIndex < 0 || entry.mapIndex >= (int)map_scores.size()) continue;
-            float dx = musicbox_pos.X - entry.x;
-            float dy = musicbox_pos.Y - entry.y;
-            float dist = sqrtf(dx * dx + dy * dy);
-            if (dist <= entry.tolerance) {
-                auto& score = map_scores[entry.mapIndex];
-                if (dist < score.musicBoxDist) {
-                    score.musicBoxDist = dist;
-                    // 距离越近评分越高：1.0 - (dist / tolerance) * 0.5
-                    // 完全匹配=1.0，边界匹配=0.5
-                    score.musicBoxScore = 1.0f - (dist / entry.tolerance) * 0.5f;
-                    score.musicBoxMatched = true;
-                }
-            }
-        }
-    }
+        Map120Score s;
+        s.mapIndex = mi;
 
-    // B) 钢琴匹配：按距离评分（作为第二信号源，权重略低于音乐盒）
-    if (piano_found) {
-        for (int i = 0; i < (int)g_piano_db.size(); i++) {
-            auto& entry = g_piano_db[i];
-            if (entry.mapIndex < 0 || entry.mapIndex >= (int)map_scores.size()) continue;
-            float dx = piano_pos.X - entry.x;
-            float dy = piano_pos.Y - entry.y;
-            float dist = sqrtf(dx * dx + dy * dy);
-            if (dist <= entry.tolerance) {
-                auto& score = map_scores[entry.mapIndex];
-                if (dist < score.pianoDist) {
-                    score.pianoDist = dist;
-                    // 钢琴权重0.8（相比音乐盒的1.0略低）
-                    score.pianoScore = (1.0f - (dist / entry.tolerance) * 0.5f) * 0.8f;
-                    score.pianoMatched = true;
-                }
-            }
-        }
-    }
-
-    // B2) 凳子匹配：每个凳子独立评分 + 累加（最可靠的信号，权重最高）
-    if (!g_detected_chairs.empty()) {
-        for (auto& chair_pos : g_detected_chairs) {
-            for (int i = 0; i < (int)g_chair_db.size(); i++) {
-                auto& entry = g_chair_db[i];
-                if (entry.mapIndex < 0 || entry.mapIndex >= (int)map_scores.size()) continue;
-                float dx = chair_pos.X - entry.x;
-                float dy = chair_pos.Y - entry.y;
+        // ---- 1) 音乐盒匹配 (0~40) ----
+        if (musicbox_found) {
+            for (auto& entry : g_musicbox_db) {
+                if (entry.mapIndex != mi) continue;
+                float dx = musicbox_pos.X - entry.x;
+                float dy = musicbox_pos.Y - entry.y;
                 float dist = sqrtf(dx * dx + dy * dy);
-                if (dist <= entry.tolerance) {
-                    auto& score = map_scores[entry.mapIndex];
-                    // 每个匹配的凳子 +0.6，距离越近分越高
-                    float chair_contrib = (1.0f - (dist / entry.tolerance) * 0.5f) * 0.6f;
-                    score.chairScore += chair_contrib;
-                    score.chairCount++;
+                if (dist <= 1.0f) {
+                    s.musicBoxScore = 40.0f;
+                } else {
+                    s.musicBoxScore = 40.0f / dist;
                 }
+                break; // 每个地图只有一个音乐盒
             }
         }
-    }
 
-    // C) 坐标验证奖励：玩家在范围内 +2.0
-    for (int i = 0; i < (int)map_scores.size(); i++) {
-        if (IsPlayerInMapBounds(i, Z)) {
-            map_scores[i].playerInBounds = true;
+        // ---- 2) 凳子数量匹配 (0~20) ----
+        int known_stool_count = 0;
+        for (auto& entry : g_chair_db) {
+            if (entry.mapIndex == mi) known_stool_count++;
         }
+        int detected_stool_count = (int)g_detected_chairs.size();
+        if (known_stool_count == detected_stool_count) {
+            s.stoolCountScore = 20.0f;
+        } else if (abs(known_stool_count - detected_stool_count) == 1) {
+            s.stoolCountScore = 10.0f;
+        } else {
+            s.stoolCountScore = 0.0f;
+        }
+
+        // ---- 3) 凳子位置匹配 (0~30) ----
+        // 收集该地图的所有已知凳子
+        std::vector<Vector3A> known_stools;
+        for (auto& entry : g_chair_db) {
+            if (entry.mapIndex == mi) {
+                known_stools.push_back({entry.x, entry.y, entry.z});
+            }
+        }
+        if (known_stools.empty() && detected_stool_count == 0) {
+            s.stoolPosScore = 30.0f; // 都没凳子 → 满分
+        } else if (known_stools.empty() && detected_stool_count > 0) {
+            s.stoolPosScore = 0.0f;  // 已知无但当前有 → 0
+        } else if (!known_stools.empty() && detected_stool_count == 0) {
+            s.stoolPosScore = 0.0f;  // 已知有但当前无 → 0
+        } else {
+            // 最近邻匹配：每个检测到的凳子找最近的已知凳子，距离<2.0算成功
+            int matched = 0;
+            for (auto& detected : g_detected_chairs) {
+                float best_dist = 1e10f;
+                for (auto& known : known_stools) {
+                    float dx = detected.X - known.X;
+                    float dy = detected.Y - known.Y;
+                    float dz = detected.Z - known.Z;
+                    float dist = sqrtf(dx*dx + dy*dy + dz*dz);
+                    if (dist < best_dist) best_dist = dist;
+                }
+                if (best_dist < 2.0f) matched++;
+            }
+            s.stoolPosScore = ((float)matched / (float)known_stools.size()) * 30.0f;
+        }
+
+        // ---- 4) 钢琴位置匹配 (0~30) ----
+        bool hasKnownPiano = false;
+        Vector3A known_piano_pos;
+        for (auto& entry : g_piano_db) {
+            if (entry.mapIndex == mi) {
+                hasKnownPiano = true;
+                known_piano_pos = {entry.x, entry.y, entry.z};
+                break;
+            }
+        }
+        bool hasDetectedPiano = (piano_found && (g_detected_piano_pos.X != 0.0f || g_detected_piano_pos.Y != 0.0f));
+
+        if (!hasDetectedPiano && !hasKnownPiano) {
+            s.pianoScore = 30.0f; // 都没钢琴 → 满分
+        } else if (hasDetectedPiano && hasKnownPiano) {
+            float dx = g_detected_piano_pos.X - known_piano_pos.X;
+            float dy = g_detected_piano_pos.Y - known_piano_pos.Y;
+            float dist = sqrtf(dx*dx + dy*dy);
+            if (dist < 3.0f) s.pianoScore = 30.0f;
+            else if (dist < 5.0f) s.pianoScore = 15.0f;
+            else s.pianoScore = 0.0f;
+        } else {
+            s.pianoScore = 0.0f; // 一个有但另一个没有 → 0
+        }
+
+        // ---- 总分 (0~120) ----
+        s.totalScore = s.musicBoxScore + s.stoolCountScore + s.stoolPosScore + s.pianoScore;
+        scores.push_back(s);
     }
 
-    // ---- 选出总分最高的地图 ----
+    // ---- 选出最佳地图（阈值65，并列处理）----
     int bestMapIndex = -1;
     float bestTotalScore = -1.0f;
-    bool bestHasMusicBox = false;
-    bool bestHasPiano = false;
-    int  bestHasChairs = 0;            // 最佳地图的凳子匹配数
-    float bestMusicBoxDist = 1e10f;
-    float bestPianoDist = 1e10f;
+    std::vector<int> tiedMaps; // 并列的地图
 
-    for (int i = 0; i < (int)map_scores.size(); i++) {
-        auto& s = map_scores[i];
-        if (!s.musicBoxMatched && !s.pianoMatched && s.chairCount == 0) continue; // 无任何信号匹配
+    for (auto& s : scores) {
+        int idx = s.mapIndex;
+        float total = s.totalScore;
 
-        // 总分计算
-        float totalScore = 0.0f;
-        totalScore += s.musicBoxScore;                    // 音乐盒匹配度
-        totalScore += s.pianoScore;                       // 钢琴匹配度
-        totalScore += s.chairScore;                       // 凳子匹配度（累加）
-        if (s.playerInBounds) totalScore += 2.0f;         // 坐标验证 +2
-        if (i == g_current_map_index) totalScore += 1.0f; // 当前地图连续性 +1
+        if (total < 65.0f) continue; // 低于阈值，忽略
 
-        // 决定是否为最佳
-        bool isBetter = false;
-        if (bestMapIndex < 0) {
-            isBetter = true;
-        } else if (totalScore > bestTotalScore) {
-            isBetter = true;  // 总分更高
-        } else if (fabsf(totalScore - bestTotalScore) < 0.01f) {
-            // 总分非常接近 → 比较信号源数量和距离
-            int sig_best = (bestHasMusicBox ? 1 : 0) + (bestHasPiano ? 1 : 0) + bestHasChairs;
-            int sig_curr = (s.musicBoxMatched ? 1 : 0) + (s.pianoMatched ? 1 : 0) + (s.chairCount > 0 ? 1 : 0);
-            if (sig_curr > sig_best) {
-                isBetter = true;  // 信号源更多
-            } else if (sig_curr == sig_best && s.musicBoxMatched &&
-                       s.musicBoxDist < bestMusicBoxDist) {
-                isBetter = true;  // 音乐盒距离更近
-            }
-        }
-
-        if (isBetter) {
-            bestMapIndex = i;
-            bestTotalScore = totalScore;
-            bestHasMusicBox = s.musicBoxMatched;
-            bestHasPiano = s.pianoMatched;
-            bestHasChairs = s.chairCount;
-            bestMusicBoxDist = s.musicBoxDist;
-            bestPianoDist = s.pianoDist;
+        if (total > bestTotalScore + 0.001f) {
+            bestTotalScore = total;
+            bestMapIndex = idx;
+            tiedMaps.clear();
+            tiedMaps.push_back(idx);
+        } else if (fabsf(total - bestTotalScore) < 0.001f) {
+            tiedMaps.push_back(idx); // 并列
         }
     }
 
     // ---- 根据最佳结果决定地图切换 ----
-    int matched_db_entry = -1;
-
-    // 如果有最佳匹配，找到对应的 musicbox_db 条目（用于后续楼层索引）
-    if (bestMapIndex >= 0 && bestHasMusicBox) {
-        for (int i = 0; i < (int)g_musicbox_db.size(); i++) {
-            if (g_musicbox_db[i].mapIndex == bestMapIndex) {
-                matched_db_entry = i;
-                break;
+    // 用新评分系统：总分 >= 65 且唯一最佳 → 切换
+    if (bestMapIndex >= 0) {
+        // 若有多张地图并列最高分 → 歧义，不切换
+        if (tiedMaps.size() > 1) {
+            // 太多地图分数相同 → 保持当前地图
+            g_switch_candidate_index = -1;
+            g_switch_confirm_frames = 0;
+            g_musicbox_moved_on_same_map = true;
+            if (g_current_map_index != g_last_valid_map_index && g_last_valid_map_index >= 0) {
+                g_current_map_index = g_last_valid_map_index;
+                g_current_floor_index = g_last_valid_floor_index;
+                LoadMapTexture(g_current_map_index, g_current_floor_index);
             }
+            return;
         }
-    }
 
-    if (matched_db_entry >= 0) {
-        auto& entry = g_musicbox_db[matched_db_entry];
-
-        if (entry.mapIndex == g_current_map_index) {
-            // 匹配到当前地图 → 立即确认，并锁定地图防止误切换
-            g_last_valid_map_index = entry.mapIndex;
-            g_last_valid_floor_index = entry.floorIndex;
+        // 唯一最佳 → 切换（或确认当前地图）
+        if (bestMapIndex == g_current_map_index) {
+            // 跟当前地图一致 → 锁定
+            g_last_valid_map_index = bestMapIndex;
+            g_last_valid_floor_index = 0;
             g_new_map_detected = false;
             g_new_map_frame_counter = 0;
             g_new_map_prompted = false;
@@ -1964,125 +1958,17 @@ void TryAutoDetectMap(const std::vector<DataStruct>& data) {
             g_switch_candidate_index = -1;
             g_switch_confirm_frames = 0;
         } else {
-            // === 匹配到不同地图 → 多信号验证 ===
-
-            // 1) 检查玩家是否在最佳地图的坐标范围内
-            bool playerInCandidateMap = IsPlayerInMapBounds(entry.mapIndex, Z);
-
-            // 2) 多信号歧义检测：检查是否有其他地图与最佳地图总分非常接近
-            //    且同样有信号匹配 + 坐标验证通过
-            bool ambiguous = false;
-            if (bestMapIndex >= 0) {
-                for (int i = 0; i < (int)map_scores.size(); i++) {
-                    if (i == bestMapIndex) continue;
-                    auto& other = map_scores[i];
-                    if (!other.musicBoxMatched && !other.pianoMatched) continue;
-                    float otherTotal = other.musicBoxScore + other.pianoScore + other.chairScore;
-                    if (other.playerInBounds) otherTotal += 2.0f;
-                    float scoreDiff = fabsf(bestTotalScore - otherTotal);
-                    // 总分差 < 1.0 视为歧义
-                    if (scoreDiff < 1.0f && other.playerInBounds) {
-                        ambiguous = true;
-                        break;
-                    }
-                }
-            }
-
-            // 3) 决策：坐标验证通过且无歧义 → 接受切换
-            bool canSwitch = playerInCandidateMap && !ambiguous;
-
-            if (ambiguous) {
-                // 歧义保护：多信号下仍有歧义 → 不切换，保持当前地图
-                g_switch_candidate_index = -1;
-                g_switch_confirm_frames = 0;
-                g_musicbox_moved_on_same_map = true;
-                g_detected_musicbox_pos = musicbox_pos;
-                if (g_current_map_index != g_last_valid_map_index) {
-                    g_current_map_index = g_last_valid_map_index;
-                    g_current_floor_index = g_last_valid_floor_index;
-                    LoadMapTexture(g_current_map_index, g_current_floor_index);
-                }
-            } else if (!canSwitch) {
-                // 无法通过坐标验证 → fallback 到原保护逻辑（玩家位置+稳定性）
-                bool playerInCurrentOrLast = false;
-                if (g_current_map_index >= 0 && IsPlayerInMapBounds(g_current_map_index, Z))
-                    playerInCurrentOrLast = true;
-                if (!playerInCurrentOrLast && g_last_valid_map_index >= 0 &&
-                    g_last_valid_map_index != g_current_map_index)
-                    playerInCurrentOrLast = IsPlayerInMapBounds(g_last_valid_map_index, Z);
-
-                if (g_current_map_index >= 0 && g_last_valid_map_index >= 0) {
-                    g_map_stable_frames++;
-                } else {
-                    g_map_stable_frames = 0;
-                }
-                bool mapIsStable = (g_map_stable_frames > 30);
-
-                if (playerInCurrentOrLast || mapIsStable) {
-                    g_switch_candidate_index = -1;
-                    g_switch_confirm_frames = 0;
-                    g_musicbox_moved_on_same_map = true;
-                    g_detected_musicbox_pos = musicbox_pos;
-                    if (g_current_map_index != g_last_valid_map_index) {
-                        g_current_map_index = g_last_valid_map_index;
-                        g_current_floor_index = g_last_valid_floor_index;
-                        LoadMapTexture(g_current_map_index, g_current_floor_index);
-                    }
-                } else {
-                    // 启动连续帧确认（原逻辑）
-                    if (g_switch_candidate_index == entry.mapIndex) {
-                        g_switch_confirm_frames++;
-                        if (g_switch_confirm_frames >= SWITCH_CONFIRM_REQUIRED) {
-                            g_current_map_index = entry.mapIndex;
-                            g_current_floor_index = entry.floorIndex;
-                            g_last_valid_map_index = entry.mapIndex;
-                            g_last_valid_floor_index = entry.floorIndex;
-                            g_new_map_detected = false;
-                            g_new_map_frame_counter = 0;
-                            g_new_map_prompted = false;
-                            g_musicbox_moved_on_same_map = false;
-                            g_switch_candidate_index = -1;
-                            g_switch_confirm_frames = 0;
-                            g_map_stable_frames = 0;
-                            LoadMapTexture(g_current_map_index, g_current_floor_index);
-                        }
-                    } else {
-                        g_switch_candidate_index = entry.mapIndex;
-                        g_switch_confirm_frames = 1;
-                    }
-                }
-            } else {
-                // 坐标验证通过且无歧义 → 直接切换（玩家明确在候选地图内）
-                g_switch_candidate_index = -1;
-                g_switch_confirm_frames = 0;
-                g_current_map_index = entry.mapIndex;
-                g_current_floor_index = entry.floorIndex;
-                g_last_valid_map_index = entry.mapIndex;
-                g_last_valid_floor_index = entry.floorIndex;
-                g_new_map_detected = false;
-                g_new_map_frame_counter = 0;
-                g_new_map_prompted = false;
-                g_musicbox_moved_on_same_map = false;
-                g_map_stable_frames = 0;
-                LoadMapTexture(g_current_map_index, g_current_floor_index);
-            }
-        }
-        return;
-    }
-
-    // === 无音乐盒匹配，但有钢琴信号匹配 → 钢琴兜底切换 ===
-    if (bestMapIndex >= 0 && bestHasPiano && !bestHasMusicBox) {
-        // 钢琴信号匹配到了最佳地图，切换到该地图
-        if (bestMapIndex != g_current_map_index) {
+            // 切换地图
+            g_switch_candidate_index = -1;
+            g_switch_confirm_frames = 0;
             g_current_map_index = bestMapIndex;
             g_current_floor_index = 0;
             g_last_valid_map_index = bestMapIndex;
             g_last_valid_floor_index = 0;
             g_new_map_detected = false;
+            g_new_map_frame_counter = 0;
             g_new_map_prompted = false;
             g_musicbox_moved_on_same_map = false;
-            g_switch_candidate_index = -1;
-            g_switch_confirm_frames = 0;
             g_map_stable_frames = 0;
             LoadMapTexture(g_current_map_index, g_current_floor_index);
         }
