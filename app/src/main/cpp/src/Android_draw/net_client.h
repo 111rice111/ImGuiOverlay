@@ -13,14 +13,16 @@
 #include <string>
 #include <vector>
 #include <cstring>
+#include <thread>
+#include <chrono>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <netdb.h>
 #include <unistd.h>
 #include <sstream>
-#include <chrono>
 #include "json.hpp"
+#include "crypto.h"
 using json = nlohmann::json;
 
 // ========== 配置 ==========
@@ -74,7 +76,7 @@ inline std::string get_device_id() {
     return result;
 }
 
-// 简单 HTTP POST
+// 底层 HTTP 请求 (原始)
 inline std::string http_request(const std::string& host, int port,
                                  const std::string& path,
                                  const std::string& body,
@@ -127,6 +129,14 @@ inline std::string http_request(const std::string& host, int port,
     return resp.substr(pos + 4);
 }
 
+// 加密 HTTP POST (AES + hex 编码)
+inline std::string http_post_enc(const std::string& path, const std::string& plain_body) {
+    std::string enc = aes_encrypt(plain_body);
+    std::string resp = http_request(NET_SERVER_HOST, NET_SERVER_PORT, path, enc, true);
+    if (resp.empty()) return "";
+    return aes_decrypt(resp);
+}
+
 // ========== 核心 API ==========
 static LicenseInfo g_license;
 static std::string g_device_id;
@@ -138,10 +148,10 @@ inline bool api_verify_key(const std::string& key) {
     req["key"] = key;
     req["device_id"] = g_device_id;
     req["hwid"] = g_device_id;
-    req["version"] = 211; // v2.11
+    req["version"] = 213;
+    req["ts"] = (int64_t)time(nullptr);
 
-    std::string resp = http_request(NET_SERVER_HOST, NET_SERVER_PORT,
-                                     "/api/verify", req.dump());
+    std::string resp = http_post_enc("/api/verify", req.dump());
     if (resp.empty()) {
         printf("[License] 服务器无响应\n");
         return false;
@@ -204,7 +214,23 @@ inline bool api_download_update(const std::string& url, const std::string& out_p
     return true;
 }
 
-// 4. 轮询远程指令
+// 4. 心跳包 (服务端可随时下发禁止指令)
+inline bool api_heartbeat() {
+    if (!g_license.verified) return false;
+    json req;
+    req["device_id"] = g_device_id;
+    req["token"] = g_license.token;
+    req["ts"] = (int64_t)time(nullptr);
+    std::string resp = http_post_enc("/api/heartbeat", req.dump());
+    if (resp.empty()) return false;
+    try {
+        json j = json::parse(resp);
+        if (j.value("banned", false)) { printf("[Heart] 已封禁!\n"); g_license.verified = false; return false; }
+    } catch(...) {}
+    return true;
+}
+
+// 5. 轮询远程指令
 inline RemoteCommand api_poll_command() {
     RemoteCommand cmd;
     if (!g_license.verified) return cmd;
