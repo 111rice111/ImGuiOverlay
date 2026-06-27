@@ -1670,14 +1670,10 @@ int ExtractPrice(const char* prop_name) {
 
 // ========== 导航系统功能函数 ==========
 
-// 楼层判断：使用当前地图配置的 floorZThreshold 而非硬编码 190
-// 每张地图有自己的 Z 阈值（map_config.json 中 floor_z_threshold 字段）
+// 楼层判断：Z > 190 为二楼
+// ========== 楼层阈值：Z > 190 判定为 2楼，≤ 190 为 1楼 ==========
 static inline int GetFloorFromPlayerZ(const Vector3A& pos) {
-    float threshold = 250.0f; // 默认阈值
-    if (g_current_map_index >= 0 && g_current_map_index < (int)g_all_maps.size() && !g_all_maps[g_current_map_index].empty()) {
-        threshold = g_all_maps[g_current_map_index][0].floorZThreshold;
-    }
-    return (pos.Z > threshold) ? 1 : 0;
+    return (pos.Z > 190.0f) ? 1 : 0;
 }
 
 // 安全钳制楼层索引到当前地图的有效范围内（防止越界导致显示错误地图）
