@@ -4822,6 +4822,30 @@ void Draw_Main_Optimized(ImDrawList *Draw) {
     // ========== 摸金导航地图 ==========
     if (g_map_enabled) {
         TryAutoDetectMap(current_data);
+        // ★ 楼层自动检测（防抖：Z 持续在对面 30 帧才切换，避免楼梯抖动/瞬移误触）
+        if (g_current_map_index >= 0) {
+            static int g_floor_debounce = 0;
+            static int g_floor_target = -1;
+            int rawFloor = GetFloorFromPlayerZ(Z);
+            if (rawFloor != g_current_floor_index) {
+                if (g_floor_target != rawFloor) {
+                    g_floor_target = rawFloor;
+                    g_floor_debounce = 0;
+                }
+                g_floor_debounce++;
+                if (g_floor_debounce >= 30) {
+                    printf("[Floor] Z=%.1f 持续%d帧 → %d楼→%d楼\n",
+                        Z.Z, g_floor_debounce, g_current_floor_index + 1, rawFloor + 1);
+                    g_current_floor_index = rawFloor;
+                    LoadMapTexture(g_current_map_index, rawFloor);
+                    g_floor_target = -1;
+                    g_floor_debounce = 0;
+                }
+            } else {
+                g_floor_target = -1;
+                g_floor_debounce = 0;
+            }
+        }
         Draw_MapOverlay(Draw, current_data);
     }
 
@@ -6554,29 +6578,9 @@ void Layout_tick_UI(bool *main_thread_flag) {
                             g_current_map_index,
                             g_all_maps[g_current_map_index][dispFloor].texturePath);
 
-                        // ★ 手动楼层切换按钮
-                        ImGui::Spacing();
-                        auto& curFloors = g_all_maps[g_current_map_index];
-                        char floorLabel[32];
-                        for (int fi = 0; fi < (int)curFloors.size(); fi++) {
-                            snprintf(floorLabel, sizeof(floorLabel), "%d楼", fi + 1);
-                            if (fi > 0) ImGui::SameLine();
-                            bool isActive = (fi == g_current_floor_index);
-                            if (isActive) {
-                                ImGui::PushStyleColor(ImGuiCol_Button, g_theme.success);
-                                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, g_theme.success);
-                            }
-                            if (ImGui::Button(floorLabel)) {
-                                if (fi != g_current_floor_index) {
-                                    g_current_floor_index = fi;
-                                    LoadMapTexture(g_current_map_index, fi);
-                                    printf("[Floor] 手动切换: map[%d] -> %d楼\n", g_current_map_index, fi + 1);
-                                }
-                            }
-                            if (isActive) {
-                                ImGui::PopStyleColor(2);
-                            }
-                        }
+                        ImGui::SameLine();
+                        const char* floorName = (g_current_floor_index == 0) ? "(1楼)" : "(2楼)";
+                        ImGui::TextColored(g_theme.text_muted, "%s", floorName);
 
                         ImGui::TextColored(g_theme.text_muted, "%s", g_score_debug_buf);
 
