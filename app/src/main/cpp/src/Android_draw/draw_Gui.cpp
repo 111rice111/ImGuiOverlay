@@ -1670,10 +1670,14 @@ int ExtractPrice(const char* prop_name) {
 
 // ========== 导航系统功能函数 ==========
 
-// 楼层判断：Z > 190 为二楼
-// ========== 楼层阈值：Z > 190 判定为 2楼，≤ 190 为 1楼 ==========
+// 楼层判断：使用当前地图配置的 floorZThreshold 而非硬编码 190
+// 每张地图有自己的 Z 阈值（map_config.json 中 floor_z_threshold 字段）
 static inline int GetFloorFromPlayerZ(const Vector3A& pos) {
-    return (pos.Z > 190.0f) ? 1 : 0;
+    float threshold = 250.0f; // 默认阈值
+    if (g_current_map_index >= 0 && g_current_map_index < (int)g_all_maps.size() && !g_all_maps[g_current_map_index].empty()) {
+        threshold = g_all_maps[g_current_map_index][0].floorZThreshold;
+    }
+    return (pos.Z > threshold) ? 1 : 0;
 }
 
 // 安全钳制楼层索引到当前地图的有效范围内（防止越界导致显示错误地图）
@@ -1838,7 +1842,7 @@ void TryAutoDetectMap(const std::vector<DataStruct>& data) {
         snprintf(g_detect_status_text, sizeof(g_detect_status_text), "SWITCH...");
         snprintf(g_map_detect_debug, sizeof(g_map_detect_debug), "New: SWITCH dist=%.0f",
             sqrtf((Z.X-g_prev_player_pos.X)*(Z.X-g_prev_player_pos.X)+(Z.Y-g_prev_player_pos.Y)*(Z.Y-g_prev_player_pos.Y)));
-        // 瞬移时也同步更新楼层（用 Z > 190 规则）
+        // 瞬移时也同步更新楼层（用当前地图的 floorZThreshold）
         int newFloor = GetFloorFromPlayerZ(Z);
         int clamped = SafeClampFloorIdx(g_current_map_index, newFloor);
         if (clamped != g_current_floor_index) {

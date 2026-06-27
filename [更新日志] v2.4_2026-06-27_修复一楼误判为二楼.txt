@@ -1,0 +1,35 @@
+========================================
+  [更新日志] v2.4 - 修复一楼误判为二楼
+========================================
+构建日期: 2026-06-27 16:50
+编译方式: gradlew assembleRelease（增量编译）
+编译结果: BUILD SUCCESSFUL
+
+变更内容:
+
+1. [修复] ★ GetFloorFromPlayerZ 使用地图专属阈值
+   - 移除硬编码 Z > 190 判定为 2 楼
+   - 改为使用 g_all_maps[当前地图索引][0].floorZThreshold
+   - 每张地图有自己的 floor_z_threshold（来自 map_config.json）
+
+2. [原因]
+   - 部分游戏地图的 1 楼海拔本身就超过 190（例如建在山坡上）
+   - 硬编码 190 阈值总是把这部分地图的 1 楼判为 2 楼
+
+3. [影响范围]
+   - 玩家楼层检测 GetFloorFromPlayerZ
+   - 瞬移时楼层同步（SWITCH_DETECTED）
+   - 楼层切换（FLOOR_CHANGE）
+   - 常规验证 UpdateCurrentFloor
+   - ExecuteMapSwitch 首次设定楼层
+
+4. [默认值]
+   - 无地图时（g_current_map_index < 0）回退 250
+   - JSON 中未设 floor_z_threshold 时默认 250
+   - 可在 地图管理 → 校准参数 中调整
+
+安装:
+- 推送至 /data/local/tmp/overlay (chmod 777)
+- 重启 overlay 即可生效
+
+========================================
