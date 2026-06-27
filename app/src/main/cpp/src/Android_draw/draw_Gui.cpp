@@ -45,7 +45,7 @@
 using json = nlohmann::json;
 
 // ★ 地图数据根目录
-#define MAPS_ROOT "/data/local/tmp/maps"
+#define MAPS_ROOT "/data/local/tmp/maps/"
 #include <cstdarg>
 #include <list>
 #include <deque>
@@ -1048,7 +1048,7 @@ static void SaveConfig() {
     // === 滚动备份：保留最近 3 个版本 ===
     // 每次保存前，将旧版本往后推：.bak2 → 删除, .bak1 → .bak2, .bak → .bak1, 当前 → .bak
     {
-        const char* backup_dir = MAPS_ROOT "/calib_backup";
+        const char* backup_dir = MAPS_ROOT "calib_backup";
         // 确保目录存在（mkdir -p 等效）
         mkdir(MAPS_ROOT, 0755);
         mkdir(backup_dir, 0755);
