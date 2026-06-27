@@ -4817,14 +4817,27 @@ void Draw_Main_Optimized(ImDrawList *Draw) {
     // ========== 摸金导航地图 ==========
     if (g_map_enabled) {
         TryAutoDetectMap(current_data);
-        // ★ 每帧强制执行：地图识别完成后，基于实时 Z 坐标更新楼层（不受状态机影响）
-        if (g_current_map_index >= 0) {
+        // ★ 每帧强制同步楼层：绕过 UpdateCurrentFloor 的所有边界检查，直接基于 Z 判定
+        {
             static int g_floor_frame = 0;
             g_floor_frame++;
-            if (g_floor_frame % 60 == 1) { // 每秒打印一次
-                printf("[Floor] Z=%.1f floor=%d (map[%d])\n", Z.Z, g_current_floor_index, g_current_map_index);
+            int rawFloor = GetFloorFromPlayerZ(Z);  // Z > 190 ? 1 : 0
+            if (g_current_map_index >= 0) {
+                // 诊断：打印不一致的情况
+                if (rawFloor != g_current_floor_index) {
+                    printf("[Floor FIX] Z=%.1f raw=%d cur=%d (map[%d] floors=%zu) → CORRECTING\n",
+                        Z.Z, rawFloor, g_current_floor_index, g_current_map_index,
+                        g_all_maps[g_current_map_index].size());
+                    g_current_floor_index = rawFloor;
+                    LoadMapTexture(g_current_map_index, g_current_floor_index);
+                } else if (g_floor_frame % 60 == 1) {
+                    printf("[Floor OK] Z=%.1f floor=%d (map[%d])\n", Z.Z, g_current_floor_index, g_current_map_index);
+                }
+            } else {
+                if (g_floor_frame % 60 == 1) {
+                    printf("[Floor SKIP] g_current_map_index=%d (no map yet)\n", g_current_map_index);
+                }
             }
-            UpdateCurrentFloor();
         }
         Draw_MapOverlay(Draw, current_data);
     }
