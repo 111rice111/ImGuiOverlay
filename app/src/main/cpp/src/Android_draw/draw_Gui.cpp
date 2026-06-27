@@ -1953,10 +1953,6 @@ void TryAutoDetectMap(const std::vector<DataStruct>& data) {
         if (musicbox_found) { g_cached_musicbox_pos = musicbox_pos; g_has_cached_musicbox = true; }
         if (piano_found) { g_cached_piano_pos = piano_pos; g_has_cached_piano = true; }
     }
-    // ★ 每帧更新楼层：基于实时 Z 坐标判断，防止楼层"冻住"
-    if (g_current_map_index >= 0) {
-        UpdateCurrentFloor();
-    }
     snprintf(g_map_detect_debug, sizeof(g_map_detect_debug), "New: OK fp=%d s=%.1f", g_detect_best_fp_id, g_detect_best_score);
 }
 static void LoadMapConfigFromJSON() {
@@ -4817,28 +4813,6 @@ void Draw_Main_Optimized(ImDrawList *Draw) {
     // ========== 摸金导航地图 ==========
     if (g_map_enabled) {
         TryAutoDetectMap(current_data);
-        // ★ 每帧强制同步楼层：绕过 UpdateCurrentFloor 的所有边界检查，直接基于 Z 判定
-        {
-            static int g_floor_frame = 0;
-            g_floor_frame++;
-            int rawFloor = GetFloorFromPlayerZ(Z);  // Z > 190 ? 1 : 0
-            if (g_current_map_index >= 0) {
-                // 诊断：打印不一致的情况
-                if (rawFloor != g_current_floor_index) {
-                    printf("[Floor FIX] Z=%.1f raw=%d cur=%d (map[%d] floors=%zu) → CORRECTING\n",
-                        Z.Z, rawFloor, g_current_floor_index, g_current_map_index,
-                        g_all_maps[g_current_map_index].size());
-                    g_current_floor_index = rawFloor;
-                    LoadMapTexture(g_current_map_index, g_current_floor_index);
-                } else if (g_floor_frame % 60 == 1) {
-                    printf("[Floor OK] Z=%.1f floor=%d (map[%d])\n", Z.Z, g_current_floor_index, g_current_map_index);
-                }
-            } else {
-                if (g_floor_frame % 60 == 1) {
-                    printf("[Floor SKIP] g_current_map_index=%d (no map yet)\n", g_current_map_index);
-                }
-            }
-        }
         Draw_MapOverlay(Draw, current_data);
     }
 
@@ -6570,6 +6544,31 @@ void Layout_tick_UI(bool *main_thread_flag) {
                         ImGui::TextColored(g_theme.text_muted, " [idx=%d tex=%s]",
                             g_current_map_index,
                             g_all_maps[g_current_map_index][dispFloor].texturePath);
+
+                        // ★ 手动楼层切换按钮
+                        ImGui::Spacing();
+                        auto& curFloors = g_all_maps[g_current_map_index];
+                        char floorLabel[32];
+                        for (int fi = 0; fi < (int)curFloors.size(); fi++) {
+                            snprintf(floorLabel, sizeof(floorLabel), "%d楼", fi + 1);
+                            if (fi > 0) ImGui::SameLine();
+                            bool isActive = (fi == g_current_floor_index);
+                            if (isActive) {
+                                ImGui::PushStyleColor(ImGuiCol_Button, g_theme.success);
+                                ImGui::PushStyleColor(ImGuiCol_ButtonHovered, g_theme.success);
+                            }
+                            if (ImGui::Button(floorLabel)) {
+                                if (fi != g_current_floor_index) {
+                                    g_current_floor_index = fi;
+                                    LoadMapTexture(g_current_map_index, fi);
+                                    printf("[Floor] 手动切换: map[%d] -> %d楼\n", g_current_map_index, fi + 1);
+                                }
+                            }
+                            if (isActive) {
+                                ImGui::PopStyleColor(2);
+                            }
+                        }
+
                         ImGui::TextColored(g_theme.text_muted, "%s", g_score_debug_buf);
 
                         // === 音乐盒被移动到了同地图其他位置 ===
