@@ -396,7 +396,6 @@ static bool g_has_cached_piano = false;
 
 // 新地图检测提示
 static bool g_new_map_prompt_shown = false;
-static bool g_map_manually_selected = false; // 手动选图锁定，阻止自动检测覆盖
 
 // 评分日志（用于UI调试显示）
 static char g_score_debug_buf[2048] = "";
@@ -1845,7 +1844,6 @@ void TryAutoDetectMap(const std::vector<DataStruct>& data) {
         if (tp == TeleportType::MAP_SWITCH) {
             printf("[MapDetect] SWITCH XY jumped\n");
             ResetObjectCacheOnMapSwitch();
-            g_map_manually_selected = false; // 传送切图 → 解锁手动选择
             g_detect_phase = MapDetectPhase::SWITCH_DETECTED;
             g_detect_debounce_frames = DETECT_DEBOUNCE_FRAMES;
             g_switch_cooldown = 120; // 2秒冷却：防止瞬移时连续触发导致崩溃
@@ -1930,7 +1928,7 @@ void TryAutoDetectMap(const std::vector<DataStruct>& data) {
         snprintf(g_score_debug_buf, sizeof(g_score_debug_buf), "%s", sr.debug_text.c_str());
         if (sr.fp_id >= 0 && sr.score >= 60.0f && !sr.is_tie) {
             // ★ 首次检测：g_current_map_index == -1 时直接切换到正确地图
-            if (g_current_map_index < 0 && !g_map_manually_selected) {
+            if (g_current_map_index < 0) {
                 // 预检：fp_id 必须在映射表中有对应的 map_idx
                 int tgt = (sr.fp_id < (int)g_mapidx_from_fp_id.size()) ? g_mapidx_from_fp_id[sr.fp_id] : -1;
                 if (tgt >= 0 && tgt < (int)g_all_maps.size()) {
@@ -1965,7 +1963,7 @@ void TryAutoDetectMap(const std::vector<DataStruct>& data) {
                 // 使用sr.second_score作为当前地图的近似参考
                 // 如果#1候选 ≥ 60分 且 远超第二名 ≥ 15分 → 说明当前地图不对劲
                 if (sr.fp_id >= 0 && sr.score >= 60.0f && !sr.is_tie
-                    && (sr.score - sr.second_score) >= 15.0f && !g_map_manually_selected) {
+                    && (sr.score - sr.second_score) >= 15.0f) {
                     recheck_confirm_count++;
                     if (recheck_confirm_count >= 3) {
                         printf("[MapDetect] LOCKED重检: fp=%d (%.0f分) 远超第二名(%.0f分) 持续3秒\n",
@@ -5162,7 +5160,6 @@ void read_thread(long int 状态数值, long int PD2, long int PD3) {
                 g_has_cached_piano = false;
                 g_cached_chairs.clear();
                 g_new_map_prompt_shown = false;
-                g_map_manually_selected = false; // 重连重置手动锁定
                 g_detected_musicbox_pos = Vector3A{};
                 g_detected_piano_pos = Vector3A{};
 
@@ -6550,16 +6547,11 @@ void Layout_tick_UI(bool *main_thread_flag) {
                                 g_current_floor_index = SafeClampFloorIdx(g_current_map_index, 0);
                                 g_detect_phase = MapDetectPhase::LOCKED;
                                 g_detect_debounce_frames = 0;
-                                g_detect_best_fp_id = -1;
-                                g_map_manually_selected = true;
+                                g_detect_best_fp_id = -1;  // 手动选择后清除指纹关联
                                 snprintf(g_detect_status_text, sizeof(g_detect_status_text),
                                     "手动: map[%d]", manual_idx);
                                 LoadMapTexture(g_current_map_index, g_current_floor_index);
                             }
-                        }
-                        if (g_map_manually_selected) {
-                            ImGui::SameLine();
-                            ImGui::TextColored(g_theme.warning, "[已锁定]");
                         }
                     } else {
                         ImGui::TextColored(ImVec4(1,0,0,1), "无地图配置");

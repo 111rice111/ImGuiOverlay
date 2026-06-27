@@ -1,5 +1,27 @@
 # ImGuiOverlay 项目记忆
 
+## ★ v2.9-stable — 当前稳定版 (2026-06-27 18:47)
+
+二进制: `E:\ImGuiOverlay\overlay-v2.9-stable` (MD5: 6425eaa414dc76d6fad72c662d599400)
+源码备份: `E:\ImGuiOverlay\draw_Gui.cpp-v2.9-backup`
+Git commit: 4130378, tag: v2.9-stable
+
+### v2.9 核心修复清单
+| 修复 | 说明 |
+|------|------|
+| ★ 指纹映射覆盖 | `g_mapidx_from_fp_id` 只取首次匹配，防止 JSON 中"二楼"条目覆盖"一楼" |
+| SWITCH 冷却 | 2秒（120帧），防瞬移6连触发 → segfault |
+| LOW_CONFIDENCE 死循环 | fp_id 无映射时留在 LOW_CONFIDENCE 等超时，不再跳 LOCKED |
+| 首次检测预检 | ExecuteMapSwitch 前检查 g_mapidx_from_fp_id |
+| 防抖自动楼层 | 30帧（0.5s）持续在对面才切换，避免楼梯抖动 |
+| SWITCH 楼层安全 | g_current_map_index < 0 时跳过楼层更新 |
+
+### v2.9 已知注意事项
+- JSON 中同一地图不应有多个独立条目（"一楼"和"二楼"应合并为一个 slot 的两层）
+- 指纹映射只在 LoadFingerprintDB 时建立，新地图需重启 overlay 或手动刷新
+
+---
+
 ## 关键 Bug 历史
 
 ### v1.5 - g_all_maps 索引越界 (2026-06-27)
