@@ -1911,10 +1911,19 @@ void TryAutoDetectMap(const std::vector<DataStruct>& data) {
         if (sr.fp_id >= 0 && sr.score >= 60.0f && !sr.is_tie) {
             // ★ 首次检测：g_current_map_index == -1 时直接切换到正确地图
             if (g_current_map_index < 0) {
-                ExecuteMapSwitch(sr.fp_id);
-                g_detect_phase = MapDetectPhase::LOCKED;
-                printf("[MapDetect] 首次检测: fp=%d (%.0f分) → map[%d]\n",
-                    sr.fp_id, sr.score, g_current_map_index);
+                // 预检：fp_id 必须在映射表中有对应的 map_idx
+                int tgt = (sr.fp_id < (int)g_mapidx_from_fp_id.size()) ? g_mapidx_from_fp_id[sr.fp_id] : -1;
+                if (tgt >= 0 && tgt < (int)g_all_maps.size()) {
+                    ExecuteMapSwitch(sr.fp_id);
+                    g_detect_phase = MapDetectPhase::LOCKED;
+                    printf("[MapDetect] 首次检测: fp=%d (%.0f分) → map[%d]\n",
+                        sr.fp_id, sr.score, g_current_map_index);
+                } else {
+                    // fp_id 未关联到任何地图，跳到 LOW_CONFIDENCE 等待用户手动选择
+                    printf("[MapDetect] fp_id=%d 未关联到 g_all_maps 索引，转到 LOW_CONFIDENCE\n", sr.fp_id);
+                    g_detect_phase = MapDetectPhase::LOW_CONFIDENCE;
+                    g_low_confidence_counter = 0;
+                }
             } else {
                 // 已有地图，仅更新映射关系
                 int cfp = (g_current_map_index < (int)g_fp_id_from_mapidx.size()) ? g_fp_id_from_mapidx[g_current_map_index] : -1;
