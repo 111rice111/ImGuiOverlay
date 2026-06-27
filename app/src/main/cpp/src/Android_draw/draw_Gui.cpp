@@ -4817,6 +4817,15 @@ void Draw_Main_Optimized(ImDrawList *Draw) {
     // ========== 摸金导航地图 ==========
     if (g_map_enabled) {
         TryAutoDetectMap(current_data);
+        // ★ 每帧强制执行：地图识别完成后，基于实时 Z 坐标更新楼层（不受状态机影响）
+        if (g_current_map_index >= 0) {
+            static int g_floor_frame = 0;
+            g_floor_frame++;
+            if (g_floor_frame % 60 == 1) { // 每秒打印一次
+                printf("[Floor] Z=%.1f floor=%d (map[%d])\n", Z.Z, g_current_floor_index, g_current_map_index);
+            }
+            UpdateCurrentFloor();
+        }
         Draw_MapOverlay(Draw, current_data);
     }
 
@@ -4837,9 +4846,9 @@ void Draw_Main_Optimized(ImDrawList *Draw) {
         if (g_current_map_index >= 0 && g_current_map_index < (int)g_all_maps.size() && !g_all_maps[g_current_map_index].empty()) {
             const char* map_name = g_all_maps[g_current_map_index][0].name;
             if (!map_name) map_name = "?";
-            snprintf(status_line, sizeof(status_line), "[%s] %s - %s fp=%d floor=%d",
+            snprintf(status_line, sizeof(status_line), "[%s] %s - %s fp=%d floor=%d Z=%.0f",
                 phase_str, map_name,
-                g_detect_status_text, g_detect_best_fp_id, g_current_floor_index);
+                g_detect_status_text, g_detect_best_fp_id, g_current_floor_index, Z.Z);
         } else {
             snprintf(status_line, sizeof(status_line), "[%s] - %s fp=%d",
                 phase_str, g_detect_status_text, g_detect_best_fp_id);
