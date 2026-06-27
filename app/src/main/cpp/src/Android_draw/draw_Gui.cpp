@@ -396,7 +396,6 @@ static bool g_has_cached_piano = false;
 
 // 新地图检测提示
 static bool g_new_map_prompt_shown = false;
-static bool g_map_manually_selected = false; // 手动选图锁定，阻止自动检测覆盖
 
 // 评分日志（用于UI调试显示）
 static char g_score_debug_buf[2048] = "";
@@ -1712,147 +1711,62 @@ void UpdateCurrentFloor() {
         LoadMapTexture(g_current_map_index, targetFloor);
     }
 }
-
 // ========== 异步纹理加载 ==========
-struct PendingTexture {
-    int mapIdx;
-    int floorIdx;
-    unsigned char* pixels = nullptr;
-    int w = 0, h = 0;
-    bool ready = false;       // stbi_load 完成
-    bool uploaded = false;    // glTexImage2D 完成
-    bool failed = false;
-};
-static std::vector<PendingTexture> g_pending_textures;
-static std::mutex g_pending_mutex;
-static std::thread g_loader_thread;
-static bool g_loader_running = false;
+struct PendingTex { int map, floor; unsigned char* px; int w, h; bool ready, fail, uploaded; };
+static std::vector<PendingTex> g_pending;
+static std::mutex g_pending_mtx;
+static std::thread g_loader;
+static bool g_loader_on = false;
 
-// 后台线程：解码 PNG
-static void TextureLoaderThread() {
-    while (g_loader_running) {
-        PendingTexture task;
-        {
-            std::lock_guard<std::mutex> lock(g_pending_mutex);
-            // 找第一个未开始的任务
-            for (auto& pt : g_pending_textures) {
-                if (!pt.pixels && !pt.ready && !pt.failed) {
-                    task = pt;  // copy metadata
-                    break;
-                }
-            }
+static void LoaderLoop() {
+    while (g_loader_on) {
+        PendingTex task{-1,-1}; {
+            std::lock_guard<std::mutex> lk(g_pending_mtx);
+            for (auto& t : g_pending) if (!t.px && !t.ready && !t.fail) { task = t; break; }
         }
-        if (task.mapIdx < 0) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        if (task.map < 0) { std::this_thread::sleep_for(std::chrono::milliseconds(10)); continue; }
+        int sf = SafeClampFloorIdx(task.map, task.floor);
+        if (task.map >= (int)g_all_maps.size() || sf >= (int)g_all_maps[task.map].size()) {
+            std::lock_guard<std::mutex> lk(g_pending_mtx);
+            for (auto& t : g_pending) if (t.map == task.map && t.floor == task.floor) t.fail = true;
             continue;
         }
-
-        int safeFloor = SafeClampFloorIdx(task.mapIdx, task.floorIdx);
-        if (task.mapIdx >= (int)g_all_maps.size() || safeFloor >= (int)g_all_maps[task.mapIdx].size()) {
-            std::lock_guard<std::mutex> lock(g_pending_mutex);
-            for (auto& pt : g_pending_textures) {
-                if (pt.mapIdx == task.mapIdx && pt.floorIdx == task.floorIdx) pt.failed = true;
-            }
-            continue;
-        }
-
-        const char* path = g_all_maps[task.mapIdx][safeFloor].texturePath;
         int w, h, n;
-        unsigned char* data = stbi_load(path, &w, &h, &n, 4);
-
-        {
-            std::lock_guard<std::mutex> lock(g_pending_mutex);
-            for (auto& pt : g_pending_textures) {
-                if (pt.mapIdx == task.mapIdx && pt.floorIdx == task.floorIdx && !pt.ready && !pt.failed) {
-                    if (data) {
-                        pt.pixels = data; pt.w = w; pt.h = h; pt.ready = true;
-                    } else {
-                        pt.failed = true;
-                    }
-                    break;
-                }
+        unsigned char* d = stbi_load(g_all_maps[task.map][sf].texturePath, &w, &h, &n, 4);
+        { std::lock_guard<std::mutex> lk(g_pending_mtx);
+            for (auto& t : g_pending) if (t.map == task.map && t.floor == task.floor && !t.ready) {
+                if (d) { t.px = d; t.w = w; t.h = h; t.ready = true; } else t.fail = true;
             }
         }
-        if (!data) stbi_image_free(data); // cleanup on mismatch
+        if (!d) stbi_image_free(d);
     }
 }
 
-// 启动后台加载线程
-static void StartTextureLoader() {
-    if (g_loader_running) return;
-    g_loader_running = true;
-    g_loader_thread = std::thread(TextureLoaderThread);
-    g_loader_thread.detach();
-}
+static void StartLoader() { if (!g_loader_on) { g_loader_on = true; g_loader = std::thread(LoaderLoop); g_loader.detach(); } }
 
-// 每帧调用：把已解码的像素上传到 GL
-static void FlushTextureLoads() {
-    if (g_pending_textures.empty()) return;
-    std::lock_guard<std::mutex> lock(g_pending_mutex);
-    for (size_t i = 0; i < g_pending_textures.size(); ) {
-        auto& pt = g_pending_textures[i];
-        if (pt.uploaded || pt.failed) { i++; continue; }
-        if (!pt.ready) { i++; continue; }
-
-        // 删除旧纹理
-        if (g_map_textures[pt.mapIdx][pt.floorIdx] != 0) {
-            glDeleteTextures(1, &g_map_textures[pt.mapIdx][pt.floorIdx]);
-            g_map_textures[pt.mapIdx][pt.floorIdx] = 0;
-        }
-
-        GLuint tex = 0;
-        glGenTextures(1, &tex);
-        if (tex == 0) { pt.failed = true; i++; continue; }
-
-        glActiveTexture(GL_TEXTURE0);
-        glBindTexture(GL_TEXTURE_2D, tex);
+static void FlushTextures() {
+    std::lock_guard<std::mutex> lk(g_pending_mtx);
+    for (size_t i = 0; i < g_pending.size(); ) {
+        auto& t = g_pending[i]; if (!t.ready) { i++; continue; }
+        if (g_map_textures[t.map][t.floor]) { glDeleteTextures(1, &g_map_textures[t.map][t.floor]); g_map_textures[t.map][t.floor] = 0; }
+        GLuint tex = 0; glGenTextures(1, &tex);
+        if (!tex) { t.fail = true; i++; continue; }
+        glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, tex);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, pt.w, pt.h, 0, GL_RGBA, GL_UNSIGNED_BYTE, pt.pixels);
-        GLenum err = glGetError();
-        if (err != GL_NO_ERROR) {
-            glDeleteTextures(1, &tex);
-            pt.failed = true;
-            stbi_image_free(pt.pixels);
-            i++;
-            continue;
-        }
-
-        g_map_textures[pt.mapIdx][pt.floorIdx] = tex;
-        pt.uploaded = true;
-        stbi_image_free(pt.pixels);
-        i++;
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, t.w, t.h, 0, GL_RGBA, GL_UNSIGNED_BYTE, t.px);
+        if (glGetError() != GL_NO_ERROR) { glDeleteTextures(1, &tex); stbi_image_free(t.px); t.fail = true; i++; continue; }
+        g_map_textures[t.map][t.floor] = tex; stbi_image_free(t.px); t.ready = false; t.uploaded = true; i++;
     }
-    // 清理已完成/失败的任务
-    g_pending_textures.erase(
-        std::remove_if(g_pending_textures.begin(), g_pending_textures.end(),
-            [](const PendingTexture& pt) { return pt.uploaded || pt.failed; }),
-        g_pending_textures.end());
+    g_pending.erase(std::remove_if(g_pending.begin(), g_pending.end(), [](const PendingTex& t) { return t.uploaded || t.fail; }), g_pending.end());
 }
 
 void LoadMapTexture(int mapIdx, int floorIdx) {
-    if (mapIdx < 0 || mapIdx >= MAX_MAP_COUNT || floorIdx < 0 || floorIdx >= MAX_FLOOR_COUNT) {
-        snprintf(g_texture_status, sizeof(g_texture_status), "参数错误 (map=%d, floor=%d)", mapIdx, floorIdx);
-        return;
-    }
-
-    // 启动后台线程（首次调用时）
-    StartTextureLoader();
-
-    // 加入加载队列
-    {
-        std::lock_guard<std::mutex> lock(g_pending_mutex);
-        // 移除同一目标的旧任务
-        g_pending_textures.erase(
-            std::remove_if(g_pending_textures.begin(), g_pending_textures.end(),
-                [=](const PendingTexture& pt) { return pt.mapIdx == mapIdx && pt.floorIdx == floorIdx; }),
-            g_pending_textures.end());
-        // 添加新任务
-        PendingTexture pt;
-        pt.mapIdx = mapIdx;
-        pt.floorIdx = floorIdx;
-        g_pending_textures.push_back(pt);
-    }
+    if (mapIdx < 0 || mapIdx >= MAX_MAP_COUNT || floorIdx < 0 || floorIdx >= MAX_FLOOR_COUNT) return;
+    StartLoader();
+    { std::lock_guard<std::mutex> lk(g_pending_mtx);
+        g_pending.erase(std::remove_if(g_pending.begin(), g_pending.end(), [=](const PendingTex& t) { return t.map == mapIdx && t.floor == floorIdx; }), g_pending.end());
+        g_pending.push_back({mapIdx, floorIdx}); }
 }
 
 // 辅助函数：检查玩家坐标是否在指定地图的任意楼层范围内
@@ -1932,7 +1846,6 @@ void TryAutoDetectMap(const std::vector<DataStruct>& data) {
         if (tp == TeleportType::MAP_SWITCH) {
             printf("[MapDetect] SWITCH XY jumped\n");
             ResetObjectCacheOnMapSwitch();
-            g_map_manually_selected = false; // 传送切图 → 解锁手动选择
             g_detect_phase = MapDetectPhase::SWITCH_DETECTED;
             g_detect_debounce_frames = DETECT_DEBOUNCE_FRAMES;
             g_switch_cooldown = 120; // 2秒冷却：防止瞬移时连续触发导致崩溃
@@ -2017,7 +1930,7 @@ void TryAutoDetectMap(const std::vector<DataStruct>& data) {
         snprintf(g_score_debug_buf, sizeof(g_score_debug_buf), "%s", sr.debug_text.c_str());
         if (sr.fp_id >= 0 && sr.score >= 60.0f && !sr.is_tie) {
             // ★ 首次检测：g_current_map_index == -1 时直接切换到正确地图
-            if (g_current_map_index < 0 && !g_map_manually_selected) {
+            if (g_current_map_index < 0) {
                 // 预检：fp_id 必须在映射表中有对应的 map_idx
                 int tgt = (sr.fp_id < (int)g_mapidx_from_fp_id.size()) ? g_mapidx_from_fp_id[sr.fp_id] : -1;
                 if (tgt >= 0 && tgt < (int)g_all_maps.size()) {
@@ -2052,7 +1965,7 @@ void TryAutoDetectMap(const std::vector<DataStruct>& data) {
                 // 使用sr.second_score作为当前地图的近似参考
                 // 如果#1候选 ≥ 60分 且 远超第二名 ≥ 15分 → 说明当前地图不对劲
                 if (sr.fp_id >= 0 && sr.score >= 60.0f && !sr.is_tie
-                    && (sr.score - sr.second_score) >= 15.0f && !g_map_manually_selected) {
+                    && (sr.score - sr.second_score) >= 15.0f) {
                     recheck_confirm_count++;
                     if (recheck_confirm_count >= 3) {
                         printf("[MapDetect] LOCKED重检: fp=%d (%.0f分) 远超第二名(%.0f分) 持续3秒\n",
@@ -2308,73 +2221,37 @@ static void LoadMapConfigFromJSON() {
         }
     }
 
-    // ★ 去重合并：同一地图的"一楼""二楼"独立 slot → 合并为一个双楼层 slot
+    // ★ JSON去重：同地图号的"一楼""二楼"独立slot → 合并
     {
-        std::vector<bool> mark_remove(g_all_maps.size(), false);
+        std::vector<int> dup_slots; // 待删除的重复 slot
         for (int i = 0; i < (int)g_all_maps.size(); i++) {
-            if (mark_remove[i] || g_all_maps[i].empty()) continue;
-            const char* name_i = g_all_maps[i][0].name;
-            if (!name_i || strncmp(name_i, "地图", 6) != 0) continue;
-            int num_i = atoi(name_i + 6);
+            if (g_all_maps[i].empty()) continue;
+            const char* ni = g_all_maps[i][0].name;
+            if (!ni || strncmp(ni, "地图", 6) != 0) continue;
+            int num_i = atoi(ni + 6);
 
             for (int j = i + 1; j < (int)g_all_maps.size(); j++) {
-                if (mark_remove[j] || g_all_maps[j].empty()) continue;
-                const char* name_j = g_all_maps[j][0].name;
-                if (!name_j || strncmp(name_j, "地图", 6) != 0) continue;
-                int num_j = atoi(name_j + 6);
+                if (g_all_maps[j].empty()) continue;
+                const char* nj = g_all_maps[j][0].name;
+                if (!nj || strncmp(nj, "地图", 6) != 0) continue;
+                int num_j = atoi(nj + 6);
                 if (num_i != num_j) continue;
 
-                // 同一地图，合并 j 到 i
+                // j 是重复的，把它的数据合并到 i，然后标记 j 删除
                 for (int fj = 0; fj < (int)g_all_maps[j].size(); fj++) {
-                    int targetFloor = g_all_maps[j][fj].floorIndex;
-                    // 确保 i 有对应楼层
-                    while (targetFloor >= (int)g_all_maps[i].size()) {
-                        MapConfig fallback = g_all_maps[i][0];
-                        fallback.floorIndex = (int)g_all_maps[i].size();
-                        g_all_maps[i].push_back(fallback);
-                    }
-                    // 用 j 的数据覆盖 i 的对应楼层（保留更完整的数据）
-                    g_all_maps[i][targetFloor] = g_all_maps[j][fj];
-
-                    // 合并 exits
-                    while ((int)g_exits.size() <= i) g_exits.push_back({});
-                    while ((int)g_exits[i].size() <= targetFloor) g_exits[i].push_back({});
-                    if (j < (int)g_exits.size() && fj < (int)g_exits[j].size()) {
-                        auto& srcExits = g_exits[j][fj];
-                        auto& dstExits = g_exits[i][targetFloor];
-                        dstExits.insert(dstExits.end(), srcExits.begin(), srcExits.end());
-                    }
-                    // 合并 exit_uvs
-                    while ((int)g_exit_uvs.size() <= i) g_exit_uvs.push_back({});
-                    while ((int)g_exit_uvs[i].size() <= targetFloor) g_exit_uvs[i].push_back({});
-                    if (j < (int)g_exit_uvs.size() && fj < (int)g_exit_uvs[j].size()) {
-                        auto& srcUVs = g_exit_uvs[j][fj];
-                        auto& dstUVs = g_exit_uvs[i][targetFloor];
-                        dstUVs.insert(dstUVs.end(), srcUVs.begin(), srcUVs.end());
-                    }
-                    // 合并 player_paths
-                    while ((int)g_saved_paths_by_map.size() <= i) g_saved_paths_by_map.push_back({});
-                    while ((int)g_saved_paths_by_map[i].size() <= targetFloor) g_saved_paths_by_map[i].push_back({});
-                    if (j < (int)g_saved_paths_by_map.size() && fj < (int)g_saved_paths_by_map[j].size()) {
-                        auto& srcPaths = g_saved_paths_by_map[j][fj];
-                        auto& dstPaths = g_saved_paths_by_map[i][targetFloor];
-                        dstPaths.insert(dstPaths.end(), srcPaths.begin(), srcPaths.end());
-                    }
+                    int tf = g_all_maps[j][fj].floorIndex;
+                    while (tf >= (int)g_all_maps[i].size())
+                        g_all_maps[i].push_back(g_all_maps[i][0]);
+                    g_all_maps[i][tf] = g_all_maps[j][fj];
                 }
-                mark_remove[j] = true;
-                printf("[MapConfig] 合并: map[%d]=%s + map[%d]=%s → 统一为 %s\n",
-                    i, name_i, j, name_j, g_all_maps[i][0].name);
+                dup_slots.push_back(j);
             }
         }
-        // 移除被合并的 slot（从后往前避免索引偏移）
-        for (int k = (int)g_all_maps.size() - 1; k >= 0; k--) {
-            if (mark_remove[k]) {
-                g_all_maps.erase(g_all_maps.begin() + k);
-                if (k < (int)g_exits.size()) g_exits.erase(g_exits.begin() + k);
-                if (k < (int)g_exit_uvs.size()) g_exit_uvs.erase(g_exit_uvs.begin() + k);
-                if (k < (int)g_saved_paths_by_map.size()) g_saved_paths_by_map.erase(g_saved_paths_by_map.begin() + k);
-            }
-        }
+        // 从后往前删，避免索引偏移
+        std::sort(dup_slots.begin(), dup_slots.end());
+        dup_slots.erase(std::unique(dup_slots.begin(), dup_slots.end()), dup_slots.end());
+        for (int k = (int)dup_slots.size() - 1; k >= 0; k--)
+            g_all_maps.erase(g_all_maps.begin() + dup_slots[k]);
     }
 }
 
@@ -4998,7 +4875,7 @@ void Draw_Main_Optimized(ImDrawList *Draw) {
 
     // ========== 摸金导航地图 ==========
     if (g_map_enabled) {
-        FlushTextureLoads();  // ★ 上传后台线程解码完成的纹理
+        FlushTextures();  // 上传后台线程解码完成的纹理
         TryAutoDetectMap(current_data);
         // ★ 楼层自动检测（防抖：Z 持续在对面 30 帧才切换，避免楼梯抖动/瞬移误触）
         if (g_current_map_index >= 0) {
@@ -5319,7 +5196,6 @@ void read_thread(long int 状态数值, long int PD2, long int PD3) {
                 g_has_cached_piano = false;
                 g_cached_chairs.clear();
                 g_new_map_prompt_shown = false;
-                g_map_manually_selected = false; // 重连重置手动锁定
                 g_detected_musicbox_pos = Vector3A{};
                 g_detected_piano_pos = Vector3A{};
 
@@ -6707,16 +6583,11 @@ void Layout_tick_UI(bool *main_thread_flag) {
                                 g_current_floor_index = SafeClampFloorIdx(g_current_map_index, 0);
                                 g_detect_phase = MapDetectPhase::LOCKED;
                                 g_detect_debounce_frames = 0;
-                                g_detect_best_fp_id = -1;
-                                g_map_manually_selected = true;
+                                g_detect_best_fp_id = -1;  // 手动选择后清除指纹关联
                                 snprintf(g_detect_status_text, sizeof(g_detect_status_text),
                                     "手动: map[%d]", manual_idx);
                                 LoadMapTexture(g_current_map_index, g_current_floor_index);
                             }
-                        }
-                        if (g_map_manually_selected) {
-                            ImGui::SameLine();
-                            ImGui::TextColored(g_theme.warning, "[已锁定]");
                         }
                     } else {
                         ImGui::TextColored(ImVec4(1,0,0,1), "无地图配置");
@@ -6768,41 +6639,23 @@ void Layout_tick_UI(bool *main_thread_flag) {
 
                         ImGui::TextColored(g_theme.text_muted, "%s", g_score_debug_buf);
 
-                        // ★ 评分可视化：解析 g_score_debug_buf 中的 Top3 绘制进度条
-                        {
-                            const char* p = g_score_debug_buf;
-                            for (int rank = 0; rank < 3; rank++) {
-                                // 查找 "#N fp[" 模式
-                                const char* hash = strstr(p, "#");
-                                if (!hash) break;
-                                const char* slash = strstr(hash, "/");
-                                if (!slash) break;
-                                // 提取分数（在 ": " 和 "/" 之间）
-                                const char* colon = strchr(hash, ':');
-                                if (!colon) { colon = strstr(hash, "] "); if (!colon) break; colon += 2; }
-                                float score = strtof(colon, nullptr);
-                                float pct = score / 110.0f;
-                                // 提取名称
-                                char label[64] = "";
-                                const char* lb = strstr(hash, "fp[");
-                                const char* rb = lb ? strchr(lb + 3, ']') : nullptr;
-                                if (lb && rb) {
-                                    int n = (int)(rb - lb - 3);
-                                    if (n > 30) n = 30;
-                                    snprintf(label, sizeof(label), "%.*s", n, lb + 3);
-                                }
-                                // 提取子分
-                                char subs[64] = "";
-                                const char* sb = strstr(hash, "[M");
-                                if (sb) {
-                                    const char* se = strchr(sb, ']');
-                                    if (se) { int n = (int)(se - sb - 1); if (n > 50) n = 50; snprintf(subs, sizeof(subs), "%.*s", n, sb + 1); }
-                                }
-                                char barLabel[128];
-                                snprintf(barLabel, sizeof(barLabel), "#%d 地图%s %.0f/110 %s", rank + 1, label, score, subs);
-                                ImGui::ProgressBar(pct, ImVec2(-1, 0), barLabel);
-                                p = slash + 1;
-                            }
+                        // ★ 评分可视化：解析 Top3 绘制进度条
+                        const char* p = g_score_debug_buf;
+                        for (int rank = 0; rank < 3; rank++) {
+                            const char* hash = strstr(p, "#");
+                            if (!hash) break;
+                            const char* colon = strstr(hash, "] ");
+                            if (!colon) break;
+                            colon += 2;
+                            float score = strtof(colon, nullptr);
+                            const char* fp = strstr(hash, "fp[");
+                            const char* fpe = fp ? strchr(fp+3, ']') : nullptr;
+                            char lbl[80];
+                            if (fp && fpe) snprintf(lbl, sizeof(lbl), "#%d 地图%.*s %.0f/110", rank+1, (int)(fpe-fp-3), fp+3, score);
+                            else snprintf(lbl, sizeof(lbl), "#%d %.0f/110", rank+1, score);
+                            ImGui::ProgressBar(score / 110.0f, ImVec2(-1, 0), lbl);
+                            p = strstr(colon, "#");
+                            if (!p) break;
                         }
 
                         // === 音乐盒被移动到了同地图其他位置 ===
