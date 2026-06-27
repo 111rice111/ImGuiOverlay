@@ -1,0 +1,31 @@
+========================================
+  [更新日志] v2.3 - 修复首次地图识别为"地图1"
+========================================
+构建日期: 2026-06-27 16:34
+编译方式: gradlew clean assembleRelease
+编译结果: BUILD SUCCESSFUL
+
+变更内容:
+
+1. [修复] g_current_map_index 默认值 0 → -1
+   - 原来启动后默认显示 g_all_maps[0].name = "地图1 一楼"
+   - 现在显示"无地图"直到自动识别完成
+
+2. [修复] 移除 config 对 g_current_map_index 的持久化恢复
+   - 不再从 overlay_config.txt 恢复旧地图索引
+   - 每次启动强制重检测
+
+3. [修复] LOCKED 状态新增首次检测逻辑
+   - 当 g_current_map_index == -1 且评分 ≥ 60 分、无并列时
+   - ExecuteMapSwitch 自动切换到正确地图
+
+根因:
+- g_current_map_index = 0 始终指向"地图1"
+- LOCKED 只在"重检"(60帧+15分差距×3秒)时才切换
+- 首次进入游戏从未执行完整识别→切换流程
+
+安装:
+- 推送至 /data/local/tmp/overlay (chmod 777)
+- 重启 overlay 即可生效
+
+========================================

@@ -50,17 +50,12 @@
 #include "stb_image.h"
 #include <set>
 #include <queue>
+#include "Structs.h"
+#include "DataManager.h"
 
 using json = nlohmann::json;
 
 static void LoadMapConfigFromJSON();
-
-struct Vector3A {
-    float X{}, Y{}, Z{};
-    constexpr Vector3A() = default;
-    constexpr Vector3A(float x, float y, float z) noexcept : X(x), Y(y), Z(z) {}
-    bool IsZero() const { return X == 0.0f && Y == 0.0f && Z == 0.0f; }
-};
 
 inline ImVec2 operator-(const ImVec2 &a, const ImVec2 &b) noexcept {
     return {a.x - b.x, a.y - b.y};
@@ -83,12 +78,9 @@ static float Global_Filter_Min_Z = -300.0f;
 static float Global_Filter_Max_Z = 300.0f;
 static float Global_Filter_Max_Distance = 300.0f;
 
-static bool g_new_map_prompted = false;
 static bool MemuSwitch = true;
 static bool voice = true;
 static bool show_mimic_overlay = false;
-
-static int g_new_map_frame_counter = 0;
 
 static bool is_meeting_detected = false;
 static float meeting_center_x = 0.0f;
@@ -97,26 +89,15 @@ static int meeting_total_seats = 12;
 static float meeting_radius = 30.0f;
 static std::unordered_map<std::string, int> bound_seat_by_class;
 
-static bool g_new_map_detected = false;
-static std::chrono::steady_clock::time_point g_new_map_detect_time;
 static Vector3A g_detected_musicbox_pos;
 static Vector3A g_detected_piano_pos;
 
-// === 音乐盒拾取/放置容错 ===
-static int g_last_valid_map_index = -1;        // 最后已知的有效地图索引
-static int g_last_valid_floor_index = 0;       // 最后已知的有效楼层
-static int g_frames_since_musicbox_lost = 0;   // 音乐盒消失以来的帧数
-static const int MUSICBOX_LOST_GRACE_FRAMES = 600; // 音乐盒消失后保留地图的帧数(10秒@60fps)
-static bool g_musicbox_moved_on_same_map = false;  // 同一张图上音乐盒被移动了
+// ===（已废弃：音乐盒拾取/放置容错相关变量）===
+
 static int g_last_rendered_map_index = -1;         // 最后一次渲染的地图索引（用于检测地图切换）
 static int g_last_rendered_floor_index = -1;       // 最后一次渲染的楼层索引
-static int g_map_stable_frames = 0;                // 地图稳定锁定计数
-static Vector3A g_last_player_pos;                 // 上一帧玩家位置（用于检测大幅跳跃 = 切地图）
-static bool   g_has_last_player_pos = false;
 
-// === 地图切换冷却：防止音乐盒残留数据导致误切换 ===
-static int g_switch_candidate_index = -1;      // 候选切换目标地图
-static int g_switch_confirm_frames = 0;        // 候选已连续匹配的帧数
+// === 地图切换冷却（已废弃：改用 DetectPlayerTeleport 瞬移检测）===
 static const int SWITCH_CONFIRM_REQUIRED = 30;  // 需要连续30帧(~0.5秒)才确认切换
 
 // 评分显示缓存（用于界面调试）
@@ -151,6 +132,18 @@ static Vector3A g_via_point;
 static bool g_has_via_point = false;
 
 static int g_route_min_value = 0;
+
+// === 脏标记：延迟写 JSON，减少 /sdcard 写入 ===
+static bool g_dirty_exits = false;     // 出口数据待保存
+static bool g_dirty_paths = false;     // 路径数据待保存
+static int g_dirty_flush_counter = 0;  // 刷写倒计时（帧数）
+static const int DIRTY_FLUSH_INTERVAL = 1800; // 每30秒(@60fps)强制刷写一次
+
+// 标记出口数据为脏
+static void MarkExitsDirty() { g_dirty_exits = true; g_dirty_flush_counter = DIRTY_FLUSH_INTERVAL; }
+// 标记路径数据为脏
+static void MarkPathsDirty() { g_dirty_paths = true; g_dirty_flush_counter = DIRTY_FLUSH_INTERVAL; }
+static void FlushDirtyData();  // 前向声明，函数体在 g_current_map_index 之后
 
 struct Notification {
     std::string text;
@@ -200,36 +193,14 @@ static bool  g_show_saved_paths = true;
 static bool  g_ortho_draw = false;          // 正交路径绘制开关（默认关闭，自由绘制）
 static float g_path_draw_threshold = 15.0f; // 添加新点的最小距离阈值（越小曲线越平滑）
 
-// ========== 新增：可通行图数据结构 ==========
-struct GraphNode {
-    Vector3A pos;
-    int id = -1;
-    bool isItem = false;
-    bool isExit = false;
-    bool isPlayer = false;
-};
-
-struct GraphEdge {
-    int from, to;
-    float weight;
-    std::vector<Vector3A> pathPoints;
-};
-
-struct PathGraph {
-    std::vector<GraphNode> nodes;
-    std::vector<GraphEdge> edges;
-    std::vector<std::vector<int>> adj;
-    bool dirty = true;
-
-    void clear() { nodes.clear(); edges.clear(); adj.clear(); dirty = true; }
-    void buildFromSavedPaths(const std::vector<std::vector<Vector3A>>& paths,
-                             const std::vector<Vector3A>& exits);
-    std::vector<int> dijkstra(int startNode) const;
-};
-
 static PathGraph g_pathGraph;
 static bool g_show_graph_debug = false;
 static bool g_graph_ready = false;
+
+// ========== 辅助函数：获取当前活动的 MapConfig（带全局回退）==========
+// 此函数定义在 g_all_maps 等全局变量声明之后（见文件后部）
+// 请确保调用前相关变量已初始化
+// 使用 CoordTransform::WorldToUV/UVToWorld
 
 namespace GlobalMemory {
     static uintptr_t libbase{};
@@ -341,48 +312,32 @@ namespace MjSubsystem {
     bool ShouldShowGhost() { return draw_props; }
 }
 
-struct MapConfig {
-    float minX, maxX, minY, maxY;
-    bool isVerticalMap;
-    const char* name;
-    int floorIndex;
-    const char* texturePath;
-    float scaleX = 1.0f;
-    float scaleY = 1.0f;
-    float offsetU = 0.0f;
-    float offsetV = 0.0f;
-    bool flipX = false;
-    bool flipY = false;
-    bool calibrated = false;
-};
-
 std::vector<std::vector<MapConfig>> g_all_maps;
-int g_current_map_index = 0;
+int g_current_map_index = -1;
 int g_current_floor_index = 0;
 
-struct MusicboxKey {
-    float x, y, z;
-    int mapIndex, floorIndex;
-    float tolerance = 3.0f;
-    float texU, texV;
-};
+// 前向声明（SaveExitsToJSON/SavePlayerPathsToJSON 在后面定义）
+void SaveExitsToJSON(int mapIdx, int floorIdx);
+void SavePlayerPathsToJSON(int mapIdx, int floorIdx);
+
+// 刷写所有脏数据到 JSON（必须在此处定义，依赖 g_current_map_index）
+static void FlushDirtyData() {
+    if (g_dirty_exits && g_current_map_index >= 0) {
+        SaveExitsToJSON(g_current_map_index, g_current_floor_index);
+        g_dirty_exits = false;
+    }
+    if (g_dirty_paths && g_current_map_index >= 0) {
+        SavePlayerPathsToJSON(g_current_map_index, g_current_floor_index);
+        g_dirty_paths = false;
+    }
+}
+
 std::vector<MusicboxKey> g_musicbox_db;
 
 // === 钢琴位置数据库（第二信号源）===
-// 每张地图的钢琴有固定坐标，作为音乐盒之外的空间参考点
-struct PianoKey {
-    float x, y, z;
-    int mapIndex;
-    float tolerance = 5.0f;  // 钢琴比音乐盒大，容差略宽
-};
 std::vector<PianoKey> g_piano_db;
 
 // === 凳子位置数据库（第三信号源，最可靠）===
-struct ChairKey {
-    float x, y, z;
-    int mapIndex;
-    float tolerance = 4.0f;
-};
 std::vector<ChairKey> g_chair_db;
 std::vector<Vector3A> g_detected_chairs;  // 当前帧检测到的凳子位置
 
@@ -393,15 +348,6 @@ GLuint g_map_textures[MAX_MAP_COUNT][MAX_FLOOR_COUNT] = {{0}};
 // =============================================================
 // 新架构：地图切换事件驱动的自动识别系统 (v3.0)
 // =============================================================
-
-// 地图指纹：从 JSON 中提取的每张地图唯一特征
-struct MapFingerprint {
-    int id = -1;                   // 唯一 ID
-    Vector3A musicBox;             // 音乐盒坐标
-    std::vector<Vector3A> stools;  // 凳子坐标列表
-    std::vector<Vector3A> pianos;  // 钢琴坐标列表（0~1架）
-    bool valid = false;
-};
 
 // 指纹数据库
 static std::vector<MapFingerprint> g_fingerprint_db;
@@ -425,6 +371,7 @@ static int g_detect_debounce_frames = 0;           // 防抖倒计时
 static const int DETECT_DEBOUNCE_FRAMES = 12;       // ~200ms @ 60fps
 static const int LOW_CONFIDENCE_TIMEOUT = 180;      // 低置信度超时 ~3秒
 static int g_low_confidence_counter = 0;            // 低置信度持续帧数
+static int g_locked_stable_frames = 0;              // 稳定锁定帧数（用于防抖判断）
 static float g_detect_best_score = 0.0f;            // 最新评分的最高分
 static int g_detect_best_fp_id = -1;                // 最新评分的最佳指纹ID
 static char g_detect_status_text[256] = "等待识别"; // 状态文本（UI显示）
@@ -500,6 +447,22 @@ static bool g_map_flip_x = false;
 static bool g_map_flip_y = false;
 static bool g_show_nav_line = false;
 static float g_map_label_scale = 0.45f;
+
+// GetActiveMapConfig 函数体（必须在 g_all_maps, g_map_scale_x 等之后定义）
+static const MapConfig& GetActiveMapConfig() {
+    static MapConfig s_fallback;
+    if (g_current_map_index >= 0 && g_current_map_index < (int)g_all_maps.size() &&
+        g_current_floor_index >= 0 && g_current_floor_index < (int)g_all_maps[g_current_map_index].size()) {
+        return g_all_maps[g_current_map_index][g_current_floor_index];
+    }
+    s_fallback = MapConfig{};
+    s_fallback.scaleX = g_map_scale_x; s_fallback.scaleY = g_map_scale_y;
+    s_fallback.offsetU = g_map_offset_u; s_fallback.offsetV = g_map_offset_v;
+    s_fallback.flipX = g_map_flip_x; s_fallback.flipY = g_map_flip_y;
+    s_fallback.calibrated = false;
+    s_fallback.floorZThreshold = 250.0f;
+    return s_fallback;
+}
 
 // ========== 道具映射表 ==========
 // (完整定义将在后续段中，此处省略以确保连贯，实际文件中包含全部)
@@ -856,7 +819,7 @@ static void LoadConfig() {
 
     getBool("g_map_enabled", g_map_enabled);
     getBool("g_map_auto_detect", g_map_auto_detect);
-    if (map.count("g_current_map_index")) g_current_map_index = std::stoi(map["g_current_map_index"]);
+    // 不恢复 g_current_map_index — 每次启动强制重检测，避免残留旧地图索引导致显示错乱
     getFloat("g_map_display_size", g_map_display_size);
     getFloat("g_map_pos_x", g_map_pos_x);
     getFloat("g_map_pos_y", g_map_pos_y);
@@ -1397,6 +1360,14 @@ static Vector3A g_mirrorCenter;
 static Vector3A g_mirrorNormal;
 static std::atomic<int> g_selfAction{0};
 
+// === 玩家识别诊断（供调试标签页显示）===
+static int g_debug_scanned_count = 0;        // 当前帧扫描到的对象总数
+static int g_debug_player_count = 0;         // 当前帧 阵营==2 的对象数
+static int g_debug_boss_count = 0;           // 当前帧 阵营==1 的对象数
+static bool g_debug_self_found = false;      // 玩家自识别是否成功
+static float g_debug_last_cam_z = 0.0f;      // 最后一个 cam_z 值
+static char g_debug_self_cls[128] = "";      // 当前识别的玩家类名
+
 inline Vector3A getObjectCoordinates(uintptr_t coorBase, bool isProp = false) noexcept {
     Vector3A pos{};
     if (coorBase) {
@@ -1520,6 +1491,7 @@ void ResetMapState() {
     g_last_rendered_map_index = -1;
     g_last_rendered_floor_index = -1;
     g_selected_path_index = -1;
+    g_locked_stable_frames = 0;
 }
 
 void InvalidateMapTextures() {
@@ -1699,6 +1671,7 @@ int ExtractPrice(const char* prop_name) {
 // ========== 导航系统功能函数 ==========
 
 // 楼层判断：Z > 190 为二楼
+// ========== 楼层阈值：Z > 190 判定为 2楼，≤ 190 为 1楼 ==========
 static inline int GetFloorFromPlayerZ(const Vector3A& pos) {
     return (pos.Z > 190.0f) ? 1 : 0;
 }
@@ -1812,6 +1785,14 @@ static int FindMapByPlayerPos(const Vector3A& playerPos) {
     return -1;
 }
 
+// =============================================================
+// 地图识别 + 楼层判定（v2.1）
+// =============================================================
+// 1) 地图识别：使用原有的多特征指纹匹配（音乐盒/凳子/钢琴评分）
+// 2) 楼层判定：Z > 190 → 2楼, Z ≤ 190 → 1楼（与物品过滤阈值统一）
+// 3) 瞬移重检：单帧跳跃 > 80(XY)/50(Z) → 立即触发完整重检
+// 4) 路径隔离：按地图索引+楼层索引严格分离
+// =============================================================
 void TryAutoDetectMap(const std::vector<DataStruct>& data) {
     if (!g_map_auto_detect || !g_map_enabled) {
         g_detect_phase = MapDetectPhase::LOCKED;
@@ -1821,7 +1802,8 @@ void TryAutoDetectMap(const std::vector<DataStruct>& data) {
         return;
     }
     if (g_fingerprint_db.empty()) LoadFingerprintDB();
-    // Step1: 扫描信号源
+    
+    // Step1: 扫描信号源（音乐盒/钢琴/凳子）
     Vector3A musicbox_pos{}, piano_pos{};
     bool musicbox_found = false, piano_found = false;
     g_detected_chairs.clear();
@@ -1845,7 +1827,8 @@ void TryAutoDetectMap(const std::vector<DataStruct>& data) {
             }
         }
     }
-    // Step2: 检测传送
+    
+    // Step2: 检测传送（瞬移重检）
     TeleportType tp = DetectPlayerTeleport(Z);
     if (tp == TeleportType::MAP_SWITCH) {
         printf("[MapDetect] SWITCH XY jumped\n");
@@ -1853,16 +1836,30 @@ void TryAutoDetectMap(const std::vector<DataStruct>& data) {
         g_detect_phase = MapDetectPhase::SWITCH_DETECTED;
         g_detect_debounce_frames = DETECT_DEBOUNCE_FRAMES;
         snprintf(g_detect_status_text, sizeof(g_detect_status_text), "SWITCH...");
-        snprintf(g_map_detect_debug, sizeof(g_map_detect_debug), "New: SWITCH dist=%.0f", sqrtf((Z.X-g_prev_player_pos.X)*(Z.X-g_prev_player_pos.X)+(Z.Y-g_prev_player_pos.Y)*(Z.Y-g_prev_player_pos.Y)));
+        snprintf(g_map_detect_debug, sizeof(g_map_detect_debug), "New: SWITCH dist=%.0f",
+            sqrtf((Z.X-g_prev_player_pos.X)*(Z.X-g_prev_player_pos.X)+(Z.Y-g_prev_player_pos.Y)*(Z.Y-g_prev_player_pos.Y)));
+        // 瞬移时也同步更新楼层（用 Z > 190 规则）
+        int newFloor = GetFloorFromPlayerZ(Z);
+        int clamped = SafeClampFloorIdx(g_current_map_index, newFloor);
+        if (clamped != g_current_floor_index) {
+            g_current_floor_index = clamped;
+            g_last_paths_map_idx = -1;
+            g_pathGraph.dirty = true;
+        }
     } else if (tp == TeleportType::FLOOR_CHANGE) {
+        // Z 轴瞬移 → 楼层切换
         int nf = GetFloorFromPlayerZ(Z);
         g_current_floor_index = SafeClampFloorIdx(g_current_map_index, nf);
+        g_last_paths_map_idx = -1;
+        g_pathGraph.dirty = true;
         LoadMapTexture(g_current_map_index, g_current_floor_index);
         g_detect_phase = MapDetectPhase::LOCKED;
         snprintf(g_map_detect_debug, sizeof(g_map_detect_debug), "New: FLOOR z=%.0f->%d", Z.Z, nf);
+        AddNotification(nf == 0 ? "切换到1楼" : "切换到2楼", 1.5f, ImVec4(0.3f, 0.8f, 1.0f, 1.0f));
         return;
     }
-    // Step3: 状态机
+    
+    // Step3: 状态机（保留原有的指纹匹配流程）
     if (g_detect_phase == MapDetectPhase::SWITCH_DETECTED || g_detect_phase == MapDetectPhase::IDENTIFYING) {
         MapScoreResult sr = ScoreMapFingerprints(musicbox_pos, musicbox_found, piano_pos, piano_found, g_detected_chairs);
         g_detect_best_score = sr.score; g_detect_best_fp_id = sr.fp_id;
@@ -1872,10 +1869,20 @@ void TryAutoDetectMap(const std::vector<DataStruct>& data) {
             g_detect_phase = MapDetectPhase::IDENTIFYING;
             if (g_detect_debounce_frames <= 0) {
                 if (sr.fp_id >= 0) {
-                    bool sw = (sr.score >= 65.0f && !sr.is_tie) || (sr.score >= 40.0f && !sr.is_tie && (sr.score - sr.second_score) >= 20.0f);
-                    if (sw) { ExecuteMapSwitch(sr.fp_id); g_detect_phase = MapDetectPhase::LOCKED; }
-                    else { g_detect_phase = MapDetectPhase::LOW_CONFIDENCE; g_low_confidence_counter = 0; }
-                } else { g_detect_phase = MapDetectPhase::LOW_CONFIDENCE; g_low_confidence_counter = 0; }
+                    bool sw = (sr.score >= 60.0f && !sr.is_tie) || (sr.score >= 37.0f && !sr.is_tie && (sr.score - sr.second_score) >= 20.0f);
+                    if (sw) {
+                        ExecuteMapSwitch(sr.fp_id);
+                        g_detect_phase = MapDetectPhase::LOCKED;
+                        snprintf(g_detect_status_text, sizeof(g_detect_status_text), "OK map[%d] %.0f分", sr.fp_id, sr.score);
+                    } else {
+                        g_detect_phase = MapDetectPhase::LOW_CONFIDENCE;
+                        g_low_confidence_counter = 0;
+                        snprintf(g_detect_status_text, sizeof(g_detect_status_text), "低置信度 %.0f分", sr.score);
+                    }
+                } else {
+                    g_detect_phase = MapDetectPhase::LOW_CONFIDENCE;
+                    g_low_confidence_counter = 0;
+                }
             }
         }
         return;
@@ -1885,10 +1892,13 @@ void TryAutoDetectMap(const std::vector<DataStruct>& data) {
         g_detect_best_score = sr.score; g_detect_best_fp_id = sr.fp_id;
         snprintf(g_score_debug_buf, sizeof(g_score_debug_buf), "%s", sr.debug_text.c_str());
         g_low_confidence_counter++;
-        if (sr.fp_id >= 0 && sr.score >= 65.0f && !sr.is_tie) {
-            ExecuteMapSwitch(sr.fp_id); g_detect_phase = MapDetectPhase::LOCKED; g_low_confidence_counter = 0;
+        if (sr.fp_id >= 0 && sr.score >= 60.0f && !sr.is_tie) {
+            ExecuteMapSwitch(sr.fp_id);
+            g_detect_phase = MapDetectPhase::LOCKED;
+            g_low_confidence_counter = 0;
         } else if (g_low_confidence_counter > LOW_CONFIDENCE_TIMEOUT) {
-            g_detect_phase = MapDetectPhase::LOCKED; g_low_confidence_counter = 0;
+            g_detect_phase = MapDetectPhase::LOCKED;
+            g_low_confidence_counter = 0;
         }
         return;
     }
@@ -1896,18 +1906,47 @@ void TryAutoDetectMap(const std::vector<DataStruct>& data) {
     if (musicbox_found || piano_found || !g_detected_chairs.empty()) {
         MapScoreResult sr = ScoreMapFingerprints(musicbox_pos, musicbox_found, piano_pos, piano_found, g_detected_chairs);
         snprintf(g_score_debug_buf, sizeof(g_score_debug_buf), "%s", sr.debug_text.c_str());
-        if (sr.fp_id >= 0 && sr.score >= 65.0f && !sr.is_tie) {
-            int cfp = (g_current_map_index >= 0 && g_current_map_index < (int)g_fp_id_from_mapidx.size()) ? g_fp_id_from_mapidx[g_current_map_index] : -1;
-            if (cfp < 0 && g_current_map_index >= 0 && g_current_map_index < (int)g_all_maps.size() && sr.fp_id < (int)g_mapidx_from_fp_id.size() && g_mapidx_from_fp_id[sr.fp_id] < 0) {
-                g_mapidx_from_fp_id[sr.fp_id] = g_current_map_index;
-                if (g_current_map_index >= (int)g_fp_id_from_mapidx.size()) g_fp_id_from_mapidx.resize(g_current_map_index+1, -1);
-                g_fp_id_from_mapidx[g_current_map_index] = sr.fp_id;
+        if (sr.fp_id >= 0 && sr.score >= 60.0f && !sr.is_tie) {
+            // ★ 首次检测：g_current_map_index == -1 时直接切换到正确地图
+            if (g_current_map_index < 0) {
+                ExecuteMapSwitch(sr.fp_id);
+                g_detect_phase = MapDetectPhase::LOCKED;
+                printf("[MapDetect] 首次检测: fp=%d (%.0f分) → map[%d]\n",
+                    sr.fp_id, sr.score, g_current_map_index);
+            } else {
+                // 已有地图，仅更新映射关系
+                int cfp = (g_current_map_index < (int)g_fp_id_from_mapidx.size()) ? g_fp_id_from_mapidx[g_current_map_index] : -1;
+                if (cfp < 0 && g_current_map_index < (int)g_all_maps.size() && sr.fp_id < (int)g_mapidx_from_fp_id.size() && g_mapidx_from_fp_id[sr.fp_id] < 0) {
+                    g_mapidx_from_fp_id[sr.fp_id] = g_current_map_index;
+                    if (g_current_map_index >= (int)g_fp_id_from_mapidx.size()) g_fp_id_from_mapidx.resize(g_current_map_index+1, -1);
+                    g_fp_id_from_mapidx[g_current_map_index] = sr.fp_id;
+                }
             }
             UpdateCurrentFloor();
         }
-        if (musicbox_found && g_current_map_index >= 0 && g_has_cached_musicbox) {
-            float dd = sqrtf((musicbox_pos.X-g_cached_musicbox_pos.X)*(musicbox_pos.X-g_cached_musicbox_pos.X)+(musicbox_pos.Y-g_cached_musicbox_pos.Y)*(musicbox_pos.Y-g_cached_musicbox_pos.Y));
-            if (dd > 10.0f) g_musicbox_moved = true;
+        // ★ LOCKED 定期重检：每60帧检查#1候选是否远超当前(+15分)且持续3秒
+        {
+            static int recheck_counter = 0;
+            static int recheck_confirm_count = 0;
+            recheck_counter++;
+            if (recheck_counter >= 60) {
+                recheck_counter = 0;
+                // 使用sr.second_score作为当前地图的近似参考
+                // 如果#1候选 ≥ 60分 且 远超第二名 ≥ 15分 → 说明当前地图不对劲
+                if (sr.fp_id >= 0 && sr.score >= 60.0f && !sr.is_tie
+                    && (sr.score - sr.second_score) >= 15.0f) {
+                    recheck_confirm_count++;
+                    if (recheck_confirm_count >= 3) {
+                        printf("[MapDetect] LOCKED重检: fp=%d (%.0f分) 远超第二名(%.0f分) 持续3秒\n",
+                            sr.fp_id, sr.score, sr.second_score);
+                        ExecuteMapSwitch(sr.fp_id);
+                        g_detect_phase = MapDetectPhase::LOCKED;
+                        recheck_confirm_count = 0;
+                    }
+                } else {
+                    recheck_confirm_count = 0;
+                }
+            }
         }
         if (musicbox_found) { g_cached_musicbox_pos = musicbox_pos; g_has_cached_musicbox = true; }
         if (piano_found) { g_cached_piano_pos = piano_pos; g_has_cached_piano = true; }
@@ -1973,6 +2012,7 @@ static void LoadMapConfigFromJSON() {
             new_map["maxX"] = 5000.0;
             new_map["minY"] = -3000.0;
             new_map["maxY"] = 1500.0;
+            new_map["floor_z_threshold"] = 250.0;
             new_map["music_x"] = 0.0;
             new_map["music_y"] = 0.0;
             new_map["music_z"] = 0.0;
@@ -2028,6 +2068,7 @@ static void LoadMapConfigFromJSON() {
         cfg.maxY = m.value("maxY", 1500.0);
         cfg.isVerticalMap = false;
         cfg.calibrated = false;
+        cfg.floorZThreshold = m.value("floor_z_threshold", 250.0f);
 
         std::vector<MapConfig> floor_vec;
         floor_vec.push_back(cfg);
@@ -2309,26 +2350,26 @@ static MapScoreResult ScoreMapFingerprints(
         float stoolPosScore = 0.0f;
         float pianoScore = 0.0f;
 
-        // 1) 音乐盒匹配 (0~40)
+        // 1) 音乐盒匹配 (0~40)——容差5单位吸收波动，>25不计数
         if (musicbox_found && fp.musicBox.X != 0.0f) {
             float dx = musicbox_pos.X - fp.musicBox.X;
             float dy = musicbox_pos.Y - fp.musicBox.Y;
             float dist = sqrtf(dx*dx + dy*dy);
-            if (dist <= 1.0f) musicBoxScore = 40.0f;
-            else if (dist < 10.0f) musicBoxScore = 40.0f - dist * 3.0f; // 线性递减
-            // dist >= 10 → 0
+            if (dist <= 5.0f) musicBoxScore = 40.0f;
+            else if (dist < 25.0f) musicBoxScore = 40.0f - (dist - 5.0f) * 2.0f;
+            // dist >= 25 → 0
         }
 
-        // 2) 凳子数量匹配 (0~20)
+        // 2) 凳子数量匹配 (0~10)——只占10分，容忍±1浮动
         int known_count = (int)fp.stools.size();
         int detected_count = (int)detected_chairs.size();
-        if (known_count == detected_count) stoolCountScore = 20.0f;
-        else if (abs(known_count - detected_count) <= 1) stoolCountScore = 10.0f;
+        if (known_count == detected_count) stoolCountScore = 10.0f;
+        else if (abs(known_count - detected_count) <= 1) stoolCountScore = 5.0f;
         // 差距 ≥2 → 0
 
-        // 3) 凳子位置匹配 (0~30)
+        // 3) ★ 凳子位置重合度 (0~50)——决胜关键，阈值<4.0
         if (fp.stools.empty() && detected_chairs.empty()) {
-            stoolPosScore = 30.0f;  // 都没凳子
+            stoolPosScore = 50.0f;  // 都没凳子
         } else if (fp.stools.empty() || detected_chairs.empty()) {
             stoolPosScore = 0.0f;   // 一个有但另一个没有
         } else {
@@ -2342,16 +2383,16 @@ static MapScoreResult ScoreMapFingerprints(
                     float dist = sqrtf(dx*dx + dy*dy + dz*dz);
                     if (dist < best) best = dist;
                 }
-                if (best < 5.0f) matched++;
+                if (best < 4.0f) matched++;
             }
-            stoolPosScore = ((float)matched / (float)std::max(1, (int)fp.stools.size())) * 30.0f;
+            // 按比例换算到50分：全部匹配=50，部分匹配线性递减
+            float ratio = (float)matched / (float)std::max(1, (int)fp.stools.size());
+            stoolPosScore = ratio * 50.0f;
         }
 
-        // 4) 钢琴匹配 (0~30)
+        // 4) ★ 钢琴纯加分 (0~10)——没扫到默认10分，扫到匹配上加分
         bool fp_has_piano = !fp.pianos.empty();
-        if (!piano_found && !fp_has_piano) {
-            pianoScore = 30.0f; // 都没钢琴
-        } else if (piano_found && fp_has_piano) {
+        if (piano_found && fp_has_piano) {
             float best_dist = 1e10f;
             for (auto& kp : fp.pianos) {
                 float dx = piano_pos.X - kp.X;
@@ -2359,11 +2400,15 @@ static MapScoreResult ScoreMapFingerprints(
                 float dist = sqrtf(dx*dx + dy*dy);
                 if (dist < best_dist) best_dist = dist;
             }
-            if (best_dist < 3.0f) pianoScore = 30.0f;
-            else if (best_dist < 8.0f) pianoScore = 15.0f;
-        } // 一个有但另一个没有 → 0
+            if (best_dist < 3.0f) pianoScore = 10.0f;
+            else if (best_dist < 8.0f) pianoScore = 5.0f;
+        } else if (!piano_found) {
+            pianoScore = 10.0f;  // 没扫到钢琴→中性分
+        }
+        // 扫到了但已知无钢琴 → 0（不扣分，纯不加）
 
         float total = musicBoxScore + stoolCountScore + stoolPosScore + pianoScore;
+        if (total > 110.0f) total = 110.0f;  // 上限110分
         scored_list.push_back({fp.id, total, musicBoxScore, stoolCountScore, stoolPosScore, pianoScore});
     }
 
@@ -2396,13 +2441,13 @@ static MapScoreResult ScoreMapFingerprints(
     int show = std::min(3, (int)scored_list.size());
     for (int i = 0; i < show; i++) {
         int chars = snprintf(buf + pos, sizeof(buf) - pos,
-            "\n #%d fp[%d]: %.1f/120 [M%.0f+C%.0f+S%.0f+P%.0f]",
+            "\n #%d fp[%d]: %.1f/110 [M%.0f+C%.0f+S%.0f+P%.0f]",
             i+1, scored_list[i].fp_id, scored_list[i].total,
             scored_list[i].ms, scored_list[i].sc, scored_list[i].sp, scored_list[i].ps);
         if (chars > 0) pos += chars;
         if (pos >= (int)sizeof(buf) - 20) break;
     }
-    if (!scored_list.empty() && !result.is_tie && result.score < 65.0f && result.score >= 40.0f
+    if (!scored_list.empty() && !result.is_tie && result.score < 60.0f && result.score >= 37.0f
         && (result.score - result.second_score) >= 20.0f) {
         pos += snprintf(buf + pos, sizeof(buf) - pos, " (差距兜底)");
     }
@@ -2450,6 +2495,7 @@ static void ResetObjectCacheOnMapSwitch() {
     g_has_cached_musicbox = false;
     g_has_cached_piano = false;
     g_cached_chairs.clear();
+    g_locked_stable_frames = 0; // 重置稳定帧计数器
     // 不重置 g_new_map_prompt_shown
 }
 
@@ -2727,6 +2773,28 @@ void Draw_MapOverlay(ImDrawList* Draw, const std::vector<DataStruct>& data) {
     }
     Draw->AddRect(map_pos, map_end, ImColor(255, 255, 255, 100), 5.0f, 0, 1.5f);
 
+    // ========== 地图/楼层标识（固定在左上角，半透明背景）==========
+    {
+        char map_label[128];
+        snprintf(map_label, sizeof(map_label), "第 %d 地图 - 第 %d 层",
+                 g_current_map_index + 1, g_current_floor_index + 1);
+        if (cfg.calibrated) {
+            strcat(map_label, " [已校准]");
+        } else {
+            strcat(map_label, " [未校准]");
+        }
+        ImVec2 label_sz = ImGui::CalcTextSize(map_label);
+        float label_pad = 6.0f;
+        ImVec2 label_pos(map_pos.x + label_pad, map_pos.y + label_pad);
+        Draw->AddRectFilled(
+            ImVec2(label_pos.x - 4, label_pos.y - 2),
+            ImVec2(label_pos.x + label_sz.x + 8, label_pos.y + label_sz.y + 4),
+            IM_COL32(0, 0, 0, 160), 4.0f);
+        Draw->AddText(g_font_ui, 14.0f, label_pos,
+                      cfg.calibrated ? IM_COL32(100, 255, 100, 240) : IM_COL32(255, 200, 100, 240),
+                      map_label);
+    }
+
     auto ToMap = [&](const Vector3A& pos) -> ImVec2 {
         float sx, sy, ou, ov;
         bool fx, fy;
@@ -2843,8 +2911,8 @@ void Draw_MapOverlay(ImDrawList* Draw, const std::vector<DataStruct>& data) {
         Vector3A pos = getObjectCoordinates(item.objcoor, true);
         if (!isValidCoordinate(pos)) continue;
 
-        if (g_current_floor_index == 0) { if (pos.Z > 175.0f) continue; }
-        else if (g_current_floor_index == 1) { if (pos.Z <= 175.0f) continue; }
+        if (g_current_floor_index == 0) { if (pos.Z > 190.0f) continue; }
+        else if (g_current_floor_index == 1) { if (pos.Z <= 190.0f) continue; }
 
         if (isMonster) {
             float dist = FastMath::fastDistance(pos, Z) / 距离比例;
@@ -3476,8 +3544,6 @@ void Draw_MapOverlay(ImDrawList* Draw, const std::vector<DataStruct>& data) {
             if (d < 15.0f) {
                 if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && g_drag_exit_idx < 0) {
                     g_drag_exit_idx = (int)ei;
-                    // 阻止事件穿透到小地图拖动层
-                    g_map_drag_blocked = true;
                 }
                 if (ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
                     g_del_exit_idx = (int)ei;
@@ -3489,30 +3555,17 @@ void Draw_MapOverlay(ImDrawList* Draw, const std::vector<DataStruct>& data) {
                 float u_drag = std::clamp((ms.x - map_pos.x) / map_w, 0.0f, 1.0f);
                 float v_drag = std::clamp((ms.y - map_pos.y) / map_h, 0.0f, 1.0f);
                 uv_exits[ei] = ImVec2(u_drag, v_drag);
-                // 同步更新世界坐标（用于路径规划）
-                float sx_d, sy_d, ou_d, ov_d;
-                bool fx_d, fy_d;
-                if (cfg.calibrated) {
-                    sx_d = cfg.scaleX; sy_d = cfg.scaleY;
-                    ou_d = cfg.offsetU; ov_d = cfg.offsetV;
-                    fx_d = cfg.flipX; fy_d = cfg.flipY;
-                } else {
-                    sx_d = g_map_scale_x; sy_d = g_map_scale_y;
-                    ou_d = g_map_offset_u; ov_d = g_map_offset_v;
-                    fx_d = g_map_flip_x; fy_d = g_map_flip_y;
-                }
-                float u_world = u_drag, v_world = v_drag;
-                if (fx_d) u_world = 1.0f - u_world;
-                if (fy_d) v_world = 1.0f - v_world;
-                e.X = (u_world - ou_d) / sx_d;
-                e.Y = (v_world - ov_d) / sy_d;
+                // 同步更新世界坐标（使用 CoordTransform 统一管道）
+                const auto& drag_cfg = GetActiveMapConfig();
+                e.X = CoordTransform::UVToX(u_drag, drag_cfg);
+                e.Y = CoordTransform::UVToY(v_drag, drag_cfg);
                 // 拖动时显示高亮边框
                 Draw->AddRect(ImVec2(p.x-9, p.y-9), ImVec2(p.x+9, p.y+9), IM_COL32(255, 255, 255, 255), 2.0f, 0, 2.0f);
             }
             // 松开鼠标保存
             if ((int)ei == g_drag_exit_idx && ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
                 g_drag_exit_idx = -1;
-                SaveExitsToJSON(g_current_map_index, g_current_floor_index);
+                MarkExitsDirty();
                 g_pathGraph.dirty = true;
                 AddNotification("出口位置已更新", 1.5f, ImVec4(0.3f, 1.0f, 0.3f, 1.0f));
             }
@@ -3628,22 +3681,10 @@ void Draw_MapOverlay(ImDrawList* Draw, const std::vector<DataStruct>& data) {
             // 避免手指抬起或点击弹窗按钮时的坐标偏移
             float u_click = (g_press_pos.x - map_pos.x) / map_w;
             float v_click = (g_press_pos.y - map_pos.y) / map_h;
-            // 使用与 ToMap 完全一致的变换参数，确保 round-trip 无偏移
-            float sx, sy, ou, ov;
-            bool fx, fy;
-            if (cfg.calibrated) {
-                sx = cfg.scaleX; sy = cfg.scaleY;
-                ou = cfg.offsetU; ov = cfg.offsetV;
-                fx = cfg.flipX; fy = cfg.flipY;
-            } else {
-                sx = g_map_scale_x; sy = g_map_scale_y;
-                ou = g_map_offset_u; ov = g_map_offset_v;
-                fx = g_map_flip_x; fy = g_map_flip_y;
-            }
-            if (fx) u_click = 1.0f - u_click;
-            if (fy) v_click = 1.0f - v_click;
-            float worldX = (u_click - ou) / sx;
-            float worldY = (v_click - ov) / sy;
+            // 使用 CoordTransform 统一管道
+            const auto& act_cfg = GetActiveMapConfig();
+            float worldX = CoordTransform::UVToX(u_click, act_cfg);
+            float worldY = CoordTransform::UVToY(v_click, act_cfg);
 
             while (g_exits.size() <= g_current_map_index) { g_exits.push_back({}); g_exit_uvs.push_back({}); }
             while (g_exits[g_current_map_index].size() <= g_current_floor_index) { g_exits[g_current_map_index].push_back({}); g_exit_uvs[g_current_map_index].push_back({}); }
@@ -3665,21 +3706,11 @@ void Draw_MapOverlay(ImDrawList* Draw, const std::vector<DataStruct>& data) {
             // 使用长按起始位置(g_press_pos)而非当前mouse位置
             float u_click = (g_press_pos.x - map_pos.x) / map_w;
             float v_click = (g_press_pos.y - map_pos.y) / map_h;
-            // 使用与 ToMap 完全一致的变换参数
-            float sx, sy, ou, ov;
-            bool fx, fy;
-            if (cfg.calibrated) {
-                sx = cfg.scaleX; sy = cfg.scaleY;
-                ou = cfg.offsetU; ov = cfg.offsetV;
-                fx = cfg.flipX; fy = cfg.flipY;
-            } else {
-                sx = g_map_scale_x; sy = g_map_scale_y;
-                ou = g_map_offset_u; ov = g_map_offset_v;
-                fx = g_map_flip_x; fy = g_map_flip_y;
-            }
-            if (fx) u_click = 1.0f - u_click;
-            if (fy) v_click = 1.0f - v_click;
-            g_via_point = Vector3A((u_click - ou) / sx, (v_click - ov) / sy, Z.Z);
+            // 使用 CoordTransform 统一管道
+            const auto& act_cfg = GetActiveMapConfig();
+            float wx = CoordTransform::UVToX(u_click, act_cfg);
+            float wy = CoordTransform::UVToY(v_click, act_cfg);
+            g_via_point = Vector3A(wx, wy, Z.Z);
             g_has_via_point = true;
             AddNotification("途经点已设置", 2.0f, ImVec4(1.0f, 0.5f, 1.0f, 1.0f));
             ImGui::CloseCurrentPopup();
@@ -3707,7 +3738,7 @@ void Draw_MapOverlay(ImDrawList* Draw, const std::vector<DataStruct>& data) {
             if (ImGui::Button("删除此出口")) {
                 g_exits[g_current_map_index][g_current_floor_index].erase(
                         g_exits[g_current_map_index][g_current_floor_index].begin() + nearby_exit);
-                SaveExitsToJSON(g_current_map_index, g_current_floor_index);
+                MarkExitsDirty();
                 g_pathGraph.dirty = true;
                 AddNotification("出口已删除", 2.0f, ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
                 ImGui::CloseCurrentPopup();
@@ -3734,7 +3765,7 @@ void Draw_MapOverlay(ImDrawList* Draw, const std::vector<DataStruct>& data) {
                 g_saved_paths.erase(g_saved_paths.begin() + nearby_path);
                 if (g_selected_path_index == nearby_path) g_selected_path_index = -1;
                 else if (g_selected_path_index > nearby_path) g_selected_path_index--;
-                SavePlayerPathsToJSON(g_current_map_index, g_current_floor_index);
+                MarkPathsDirty();
                 g_pathGraph.dirty = true;
                 AddNotification("路径已删除", 2.0f, ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
                 ImGui::CloseCurrentPopup();
@@ -3876,7 +3907,7 @@ void Draw_MapOverlay(ImDrawList* Draw, const std::vector<DataStruct>& data) {
                     while (g_saved_paths_by_map[g_current_map_index].size() <= g_current_floor_index)
                         g_saved_paths_by_map[g_current_map_index].push_back({});
                     g_saved_paths_by_map[g_current_map_index][g_current_floor_index].push_back(g_current_drawing_path);
-                    SavePlayerPathsToJSON(g_current_map_index, g_current_floor_index);
+                    MarkPathsDirty();
                     g_pathGraph.dirty = true;
                     AddNotification("路径已保存 [OK]", 2.0f, ImVec4(0.3f, 1.0f, 0.3f, 1.0f));
                 } else {
@@ -3893,12 +3924,12 @@ void Draw_MapOverlay(ImDrawList* Draw, const std::vector<DataStruct>& data) {
     // ========== 地图拖动（出口拖拽时禁用）==========
     static bool dragging_map = false;
     static ImVec2 drag_offset;
-    if (g_map_drag_blocked) {
+    // 出口拖拽优先：如果在拖拽出口，强制禁止地图拖动
+    if (g_drag_exit_idx >= 0) {
         dragging_map = false;
-        g_map_drag_blocked = false;
     }
     if (ImGui::IsMouseClicked(ImGuiMouseButton_Left) && hover_map && g_drag_point == 0 && g_path_edit_mode == 0
-        && !g_map_drag_blocked && g_drag_exit_idx < 0) {
+        && g_drag_exit_idx < 0) {
         dragging_map = true;
         drag_offset = ImVec2(mouse.x - map_pos.x, mouse.y - map_pos.y);
     }
@@ -4549,9 +4580,19 @@ void Draw_Main_Optimized(ImDrawList *Draw) {
     int best_candidate_index = -1;
     bool is_mj_active = MjSubsystem::ShouldBypassFilter();
 
+    // 重置诊断计数
+    g_debug_scanned_count = maxDrawCount;
+    g_debug_player_count = 0;
+    g_debug_boss_count = 0;
+    g_debug_self_found = false;
+    g_debug_last_cam_z = 0.0f;
+
     for (int i = 0; i < maxDrawCount; ++i) {
         const auto &item = current_data[i];
         if (item.阵营 != 1 && item.阵营 != 2) continue;
+        // 诊断计数
+        if (item.阵营 == 2) g_debug_player_count++;
+        if (item.阵营 == 1) g_debug_boss_count++;
         Vector3A pos = getObjectCoordinates(item.objcoor, false);
         if (!isValidCoordinate(pos) || pos.Z < Global_Filter_Min_Z || pos.Z > Global_Filter_Max_Z) continue;
         float cam_z = matrix[3] * pos.X + matrix[7] * pos.Z + matrix[11] * pos.Y + matrix[15];
@@ -4570,6 +4611,8 @@ void Draw_Main_Optimized(ImDrawList *Draw) {
 
         float rx_calc = px + (matrix[0] * pos.X + matrix[4] * pos.Z + matrix[8] * pos.Y + matrix[12]) / cam_z * px;
         float dist_from_center = std::fabs(rx_calc - px);
+        // 诊断：记录最后计算的 cam_z
+        g_debug_last_cam_z = cam_z;
         if (dist_from_center < min_center_dist && dist_from_center < 150.0f) {
             min_center_dist = dist_from_center;
             best_candidate_index = i;
@@ -4577,10 +4620,13 @@ void Draw_Main_Optimized(ImDrawList *Draw) {
     }
 
     if (best_candidate_index != -1) {
-        GlobalMemory::自身 = current_data[best_candidate_index].obj;
-        Z = getObjectCoordinates(current_data[best_candidate_index].objcoor, false);
+        const auto& self_item = current_data[best_candidate_index];
+        GlobalMemory::自身 = self_item.obj;
+        Z = getObjectCoordinates(self_item.objcoor, false);
         found_self = true;
-        g_selfAction.store(current_data[best_candidate_index].action);
+        g_selfAction.store(self_item.action);
+        g_debug_self_found = true;
+        snprintf(g_debug_self_cls, sizeof(g_debug_self_cls), "%s", self_item.类名);
     } else {
         if (Z.X == 0.0f) {
             for (int i = 0; i < maxDrawCount; ++i) {
@@ -4783,8 +4829,10 @@ void Draw_Main_Optimized(ImDrawList *Draw) {
         }
         char status_line[256];
         if (g_current_map_index >= 0 && g_current_map_index < (int)g_all_maps.size() && !g_all_maps[g_current_map_index].empty()) {
+            const char* map_name = g_all_maps[g_current_map_index][0].name;
+            if (!map_name) map_name = "?";
             snprintf(status_line, sizeof(status_line), "[%s] %s - %s fp=%d floor=%d",
-                phase_str, g_all_maps[g_current_map_index][0].name,
+                phase_str, map_name,
                 g_detect_status_text, g_detect_best_fp_id, g_current_floor_index);
         } else {
             snprintf(status_line, sizeof(status_line), "[%s] - %s fp=%d",
@@ -4823,13 +4871,15 @@ void Draw_Main_Optimized(ImDrawList *Draw) {
                 Draw->AddRectFilled(box_min, box_max, bg_color, 20.0f);
                 Draw->AddRect(box_min, box_max, border_color, 20.0f, 0, 2.0f);
                 Draw->AddRectFilled(box_min, ImVec2(box_min.x + 5, box_max.y), accent_color, 20.0f);
+                if (g_font_ui && g_font_ui->IsLoaded()) {
                 ImGui::PushFont(g_font_ui);
                 ImVec2 title_size = ImGui::CalcTextSize(line1);
                 ImVec2 text1_pos(box_min.x + (box_width - title_size.x) * 0.5f, box_min.y + 14.0f);
                 Draw->AddText(g_font_ui, ImGui::GetFontSize() * 1.1f, text1_pos, accent_color, line1);
-                ImGui::PopFont();
                 ImVec2 text2_pos(box_min.x + (box_width - line2_size.x) * 0.5f, text1_pos.y + title_size.y + 10.0f);
-                Draw->AddText(text2_pos, IM_COL32(230, 232, 240, (int)(255 * alpha)), line2);
+                Draw->AddText(g_font_ui, ImGui::GetFontSize() * 0.9f, text2_pos, ImColor(230, 232, 240, (int)(255 * alpha)), line2);
+                ImGui::PopFont();
+            }
             }
         } else {
             g_low_conf_popup_counter = 0;
@@ -5967,6 +6017,14 @@ void Layout_tick_UI(bool *main_thread_flag) {
     Draw_Main_Optimized(ImGui::GetForegroundDrawList());
     AutoWoodCheck();
 
+    // 延迟写 JSON：脏标记倒计时刷写
+    if (g_dirty_flush_counter > 0) {
+        g_dirty_flush_counter--;
+        if (g_dirty_flush_counter <= 0) {
+            FlushDirtyData();
+        }
+    }
+
     const float base = static_cast<float>(std::min(displayInfo.width, displayInfo.height));
     const float g_density = std::clamp(std::sqrt(base) * 0.0045f, 0.8f, 2.0f);
     g_ui_density = g_density;
@@ -6080,9 +6138,14 @@ void Layout_tick_UI(bool *main_thread_flag) {
                 {"自动盖板", "\xee\xa5\x85"}, {"模仿者",   "\xee\xa6\x83"},
                 {"摸金模式", "\xee\xa8\x84"},
                 {"地图管理", "\xee\xa9\x85"},
+                {"数据管理", "\xee\xa3\x91"},  // 新增：数据导入/导出/查看
+                {"调试信息", "\xee\xa7\x81"},
                 {"关于",     "\xee\xa7\x81"},
         };
         static int current_tab = 0;
+        // 限制 current_tab 不超过最大索引
+        if (current_tab >= (int)(sizeof(nav_items)/sizeof(nav_items[0])))
+            current_tab = 0;
 
         float max_text_width = 0.0f;
         for (const auto& item : nav_items) {
@@ -6425,10 +6488,15 @@ void Layout_tick_UI(bool *main_thread_flag) {
                         if (manual_idx < 0 || manual_idx >= (int)manual_names.size()) manual_idx = (int)manual_names.size() - 1;
                         ImGui::SetNextItemWidth(120);
                         if (ImGui::Combo("手动选择", &manual_idx, manual_names.data(), manual_names.size())) {
-                            if (manual_idx >= 0 && manual_idx < (int)g_all_maps.size()) {
+                            if (manual_idx >= 0 && manual_idx < (int)g_all_maps.size() && !g_all_maps[manual_idx].empty()) {
                                 g_current_map_index = manual_idx;
-                                g_current_floor_index = 0;
-                                LoadMapTexture(g_current_map_index, 0);
+                                g_current_floor_index = SafeClampFloorIdx(g_current_map_index, 0);
+                                g_detect_phase = MapDetectPhase::LOCKED;
+                                g_detect_debounce_frames = 0;
+                                g_detect_best_fp_id = -1;  // 手动选择后清除指纹关联
+                                snprintf(g_detect_status_text, sizeof(g_detect_status_text),
+                                    "手动: map[%d]", manual_idx);
+                                LoadMapTexture(g_current_map_index, g_current_floor_index);
                             }
                         }
                     } else {
@@ -6510,6 +6578,7 @@ void Layout_tick_UI(bool *main_thread_flag) {
                             SaveSceneObjectsToJSON(g_current_map_index, g_current_floor_index);
                             AddNotification("已同步: 钢琴 + " + std::to_string(g_detected_chairs.size()) + "个凳子",
                                 3.0f, ImVec4(0.3f, 1.0f, 0.3f, 1.0f));
+                            MarkExitsDirty(); // 场景物体也走脏标记刷写
                         }
                     } else {
                         ImGui::TextColored(g_theme.danger, "地图索引无效");
@@ -6570,25 +6639,11 @@ void Layout_tick_UI(bool *main_thread_flag) {
                                 g_exit_uvs[g_current_map_index].push_back({});
                             }
                             g_exits[g_current_map_index][g_current_floor_index].push_back(Z);
-                            // UI按钮使用玩家当前位置，UV从世界坐标计算
-                            float sx_b, sy_b, ou_b, ov_b;
-                            bool fx_b, fy_b;
-                            if (g_all_maps[g_current_map_index][g_current_floor_index].calibrated) {
-                                auto& c = g_all_maps[g_current_map_index][g_current_floor_index];
-                                sx_b = c.scaleX; sy_b = c.scaleY;
-                                ou_b = c.offsetU; ov_b = c.offsetV;
-                                fx_b = c.flipX; fy_b = c.flipY;
-                            } else {
-                                sx_b = g_map_scale_x; sy_b = g_map_scale_y;
-                                ou_b = g_map_offset_u; ov_b = g_map_offset_v;
-                                fx_b = g_map_flip_x; fy_b = g_map_flip_y;
-                            }
-                            float u_w = Z.X * sx_b + ou_b;
-                            float v_w = Z.Y * sy_b + ov_b;
-                            if (fx_b) u_w = 1.0f - u_w;
-                            if (fy_b) v_w = 1.0f - v_w;
-                            g_exit_uvs[g_current_map_index][g_current_floor_index].push_back(ImVec2(u_w, v_w));
-                            SaveExitsToJSON(g_current_map_index, g_current_floor_index);
+                            // 使用 CoordTransform 统一管道
+                            const auto& act_cfg = GetActiveMapConfig();
+                            ImVec2 uv = CoordTransform::WorldToUV(Z, act_cfg);
+                            g_exit_uvs[g_current_map_index][g_current_floor_index].push_back(uv);
+                            MarkExitsDirty();
                             g_pathGraph.dirty = true;
                             AddNotification("出口已标记", 2.0f, ImVec4(0.3f, 1.0f, 0.3f, 1.0f));
                         }
@@ -6603,7 +6658,7 @@ void Layout_tick_UI(bool *main_thread_flag) {
                             if (g_current_map_index < g_exits.size() &&
                                 g_current_floor_index < g_exits[g_current_map_index].size()) {
                                 g_exits[g_current_map_index][g_current_floor_index].clear();
-                                SaveExitsToJSON(g_current_map_index, g_current_floor_index);
+                                MarkExitsDirty();
                                 g_pathGraph.dirty = true;
                                 AddNotification("出口已清除", 2.0f, ImVec4(1.0f, 0.5f, 0.0f, 1.0f));
                             }
@@ -6650,7 +6705,7 @@ void Layout_tick_UI(bool *main_thread_flag) {
                             g_saved_paths.clear();
                             g_current_drawing_path.clear();
                             g_path_edit_mode = 0;
-                            SavePlayerPathsToJSON(g_current_map_index, g_current_floor_index);
+                            MarkPathsDirty();
                             g_pathGraph.dirty = true;
                             AddNotification("路径已清除", 2.0f, ImVec4(1.0f, 0.5f, 0.0f, 1.0f));
                             ImGui::CloseCurrentPopup();
@@ -6692,7 +6747,7 @@ void Layout_tick_UI(bool *main_thread_flag) {
                             g_saved_paths.erase(g_saved_paths.begin() + deleteTarget);
                             if (g_selected_path_index == deleteTarget) g_selected_path_index = -1;
                             else if (g_selected_path_index > deleteTarget) g_selected_path_index--;
-                            SavePlayerPathsToJSON(g_current_map_index, g_current_floor_index);
+                            MarkPathsDirty();
                             g_pathGraph.dirty = true;
                             AddNotification("路径已删除", 2.0f, ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
                         }
@@ -6702,7 +6757,7 @@ void Layout_tick_UI(bool *main_thread_flag) {
                         if (StyledButton("删除选中路径", ButtonVariant::Danger, ImVec2(0,0), g_density)) {
                             g_saved_paths.erase(g_saved_paths.begin() + g_selected_path_index);
                             g_selected_path_index = -1;
-                            SavePlayerPathsToJSON(g_current_map_index, g_current_floor_index);
+                            MarkPathsDirty();
                             g_pathGraph.dirty = true;
                             AddNotification("选中路径已删除", 2.0f, ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
                         }
@@ -7069,7 +7124,128 @@ void Layout_tick_UI(bool *main_thread_flag) {
                 }
             }
                 break;
-            case 6:  // 关于
+            case 6:  // 数据管理
+            {
+                StyledSectionHeader("数据管理", g_theme.text_title, g_density);
+                
+                // 数据统计
+                ImGui::TextColored(g_theme.info, "=== 数据存储状态 ===");
+                std::string stats = DataManager::GetDataStats();
+                ImGui::TextWrapped("%s", stats.c_str());
+                
+                ImGui::Spacing();
+                ImGui::Separator();
+                ImGui::Spacing();
+                
+                // 导出数据
+                if (StyledButton("📤 导出全部数据", ButtonVariant::Primary, ImVec2(0,0), g_density)) {
+                    std::string exported = DataManager::ExportAllData();
+                    // 导出到文件
+                    std::string export_path = "/sdcard/maps/map_config_export.json";
+                    std::ofstream ofs(export_path);
+                    if (ofs) {
+                        ofs << exported;
+                        ofs.close();
+                        AddNotification("数据已导出到: " + export_path, 3.0f, ImVec4(0.3f, 1.0f, 0.3f, 1.0f));
+                    } else {
+                        AddNotification("导出失败: 无法写入 " + export_path, 3.0f, ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
+                    }
+                }
+                ImGui::SameLine();
+                if (StyledButton("📥 从备份恢复", ButtonVariant::Secondary, ImVec2(0,0), g_density)) {
+                    if (DataManager::RestoreFromBackup()) {
+                        AddNotification("已从备份恢复，请重启脚本应用", 4.0f, ImVec4(0.3f, 1.0f, 0.3f, 1.0f));
+                    } else {
+                        AddNotification("恢复失败: 备份文件不存在", 3.0f, ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
+                    }
+                }
+                
+                ImGui::Spacing();
+                if (StyledButton("💾 立即保存所有数据", ButtonVariant::Success, ImVec2(0,0), g_density)) {
+                    SaveConfig();
+                    // 立即刷写所有脏数据
+                    g_dirty_exits = true; g_dirty_paths = true;
+                    FlushDirtyData();
+                    SaveSceneObjectsToJSON(g_current_map_index, g_current_floor_index);
+                    AddNotification("所有数据已保存", 2.0f, ImVec4(0.3f, 1.0f, 0.3f, 1.0f));
+                }
+                
+                ImGui::Spacing();
+                ImGui::TextColored(g_theme.text_muted, "配置文件路径: /sdcard/maps/map_config.json");
+                ImGui::TextColored(g_theme.text_muted, "备份文件: map_config.json.bak (自动创建)");
+            }
+                break;
+            case 7:  // 调试信息
+            {
+                StyledSectionHeader("实时调试信息", g_theme.text_title, g_density);
+                
+                ImGui::TextColored(g_theme.info, "=== 地图识别状态 ===");
+                ImGui::Text("检测阶段: %d", (int)g_detect_phase);
+                ImGui::Text("稳定帧数: %d", g_locked_stable_frames);
+                ImGui::Text("音乐盒: %s (%.1f, %.1f, %.1f)",
+                    g_has_cached_musicbox ? "已缓存" : "未缓存",
+                    g_cached_musicbox_pos.X, g_cached_musicbox_pos.Y, g_cached_musicbox_pos.Z);
+                ImGui::Text("钢琴: %s", g_has_cached_piano ? "已缓存" : "未缓存");
+                ImGui::Text("凳子数: %zu", g_cached_chairs.size());
+                ImGui::Text("识别状态: %s", g_detect_status_text);
+                ImGui::Text("评分调试: %s", g_score_debug_buf);
+                ImGui::TextColored(g_theme.text_muted, "%s", g_map_detect_debug);
+                ImGui::Text("出口列表: %zu", 
+                    g_current_map_index < g_exits.size() && g_current_floor_index < g_exits[g_current_map_index].size()
+                    ? g_exits[g_current_map_index][g_current_floor_index].size() : 0);
+                ImGui::Text("路径数: %zu", g_saved_paths.size());
+                
+                ImGui::Spacing();
+                ImGui::Separator();
+                ImGui::Spacing();
+                
+                ImGui::TextColored(g_theme.info, "=== 玩家坐标 ===");
+                ImGui::Text("玩家位置: (%.1f, %.1f, %.1f)", Z.X, Z.Y, Z.Z);
+                ImGui::Text("当前地图: [%d]", g_current_map_index);
+                ImGui::Text("当前楼层: [%d]", g_current_floor_index);
+                if (g_current_map_index >= 0 && g_current_map_index < (int)g_all_maps.size() && 
+                    g_current_floor_index < (int)g_all_maps[g_current_map_index].size()) {
+                    ImGui::Text("地图名称: %s", g_all_maps[g_current_map_index][g_current_floor_index].name);
+                    ImGui::Text("纹理路径: %s", g_all_maps[g_current_map_index][g_current_floor_index].texturePath);
+                }
+                
+                ImGui::Spacing();
+                ImGui::Separator();
+                ImGui::Spacing();
+                
+                ImGui::TextColored(g_theme.info, "=== 玩家识别诊断 ===");
+                ImGui::Text("扫描对象总数: %d", g_debug_scanned_count);
+                ImGui::Text("求生者(阵营2): %d", g_debug_player_count);
+                ImGui::Text("监管者(阵营1): %d", g_debug_boss_count);
+                ImGui::Text("自识别结果: %s", g_debug_self_found ? "✅ 成功" : "❌ 失败");
+                ImGui::Text("识别的类名: %s", g_debug_self_cls);
+                ImGui::Text("自识别地址: 0x%lx", (unsigned long)GlobalMemory::自身);
+                ImGui::Text("最后一个 cam_z: %.2f", g_debug_last_cam_z);
+                ImGui::Text("matrix[15]: %.4f", matrix[15]);
+                ImGui::Text("FPS: %.1f", ImGui::GetIO().Framerate);
+                ImGui::Text("游戏状态: %d", GlobalMemory::状态);
+                
+                ImGui::Spacing();
+                ImGui::Separator();
+                ImGui::Spacing();
+                
+                ImGui::TextColored(g_theme.info, "=== 渲染调试 ===");
+                ImGui::Checkbox("显示出口调试十字", &g_show_exit_debug);
+                ImGui::Checkbox("显示通行网络", &g_show_graph_debug);
+                if (g_show_exit_debug) {
+                    ImGui::Text("出口点击位置: (%.0f, %.0f)", g_last_exit_screen_pos.x, g_last_exit_screen_pos.y);
+                    ImGui::Text("出口渲染位置: (%.0f, %.0f)", g_last_exit_rendered_pos.x, g_last_exit_rendered_pos.y);
+                }
+                ImGui::Text("屏幕分辨率: %d x %d", displayInfo.width, displayInfo.height);
+                ImGui::Text("地图尺寸: %.0f x %.0f", g_map_display_size, g_map_display_size);
+                
+                // 清除调试标志
+                if (StyledButton("清除出口调试十字", ButtonVariant::Secondary, ImVec2(0,0), g_density)) {
+                    g_show_exit_debug = false;
+                }
+            }
+                break;
+            case 8:  // 关于
                 ImGui::PushFont(g_font_ui);
                 ImGui::TextColored(g_theme.danger, "超级框架");
                 ImGui::PopFont();
@@ -7120,6 +7296,7 @@ void Layout_tick_UI(bool *main_thread_flag) {
                         existing["piano_y"] = new_piano_y;
                         existing["piano_z"] = new_piano_z;
                         if (strlen(new_texture) > 0) existing["texture"] = new_texture;
+                        existing["floor_z_threshold"] = 250.0f;
                         updated = true;
                         break;
                     }
@@ -7130,6 +7307,7 @@ void Layout_tick_UI(bool *main_thread_flag) {
                 json m;
                 m["name"] = new_name; m["floor"] = 0; m["texture"] = new_texture;
                 m["minX"] = -500.0f; m["maxX"] = 5000.0f; m["minY"] = -3000.0f; m["maxY"] = 1500.0f;
+                m["floor_z_threshold"] = 250.0f;
                 m["music_x"] = new_music_x; m["music_y"] = new_music_y; m["music_z"] = new_music_z;
                 m["piano_x"] = new_piano_x; m["piano_y"] = new_piano_y; m["piano_z"] = new_piano_z;
                 m["music_texU"] = 0.5; m["music_texV"] = 0.5;

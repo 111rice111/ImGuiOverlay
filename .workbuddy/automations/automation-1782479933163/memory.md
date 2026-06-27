@@ -38,3 +38,28 @@
 - 状态：无需推送
 - origin/main..main 无待推送 commit
 - 备注：静默退出
+
+## 2026-06-27 13:02
+- 状态：推送失败
+- 待推送 commit：1 个
+  - a37ed59 add version-latest.txt for phone-side change tracking
+- 原因：Recv failure: Connection was reset
+- 备注：按规则静默退出，等待下一轮自动重推
+
+## 2026-06-27 13:58
+- 状态：推送失败（网络不可用）
+- 原因：Recv failure: Connection was reset（git fetch 阶段即失败）
+- 备注：按规则静默退出，等待下一轮自动重推
+
+## 2026-06-27 14:55
+- 状态：推送失败（网络不可用）
+- 原因：Recv failure: Connection was reset（git fetch 阶段即失败）
+- 备注：按规则静默退出，等待下一轮自动重推
+
+## 2026-06-27 15:51
+- 状态：成功推送
+- 推送 commit 数：2
+- commit：
+  - d3be02e v3.0 自动识别地图全面重构
+  - a37ed59 add version-latest.txt for phone-side change tracking
+- 备注：自动重推任务触发，推送成功
