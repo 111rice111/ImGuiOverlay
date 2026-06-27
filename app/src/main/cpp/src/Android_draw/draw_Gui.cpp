@@ -1698,6 +1698,8 @@ void UpdateCurrentFloor() {
     if (targetFloor >= (int)floors.size()) return;
 
     if (targetFloor != g_current_floor_index) {
+        printf("[Floor] Z=%.1f → %d楼 (阈值190, map[%d] floors=%zu, 旧楼层=%d)\n",
+            Z.Z, targetFloor + 1, g_current_map_index, floors.size(), g_current_floor_index);
         g_current_floor_index = targetFloor;
 
         g_pt1_wx = 0.0f; g_pt1_wy = 0.0f;
@@ -1922,7 +1924,7 @@ void TryAutoDetectMap(const std::vector<DataStruct>& data) {
                     g_fp_id_from_mapidx[g_current_map_index] = sr.fp_id;
                 }
             }
-            UpdateCurrentFloor();
+            // ★ 首次检测时 ExecuteMapSwitch 已设楼层；每帧更新已移到 TryAutoDetectMap 末尾
         }
         // ★ LOCKED 定期重检：每60帧检查#1候选是否远超当前(+15分)且持续3秒
         {
@@ -1950,6 +1952,10 @@ void TryAutoDetectMap(const std::vector<DataStruct>& data) {
         }
         if (musicbox_found) { g_cached_musicbox_pos = musicbox_pos; g_has_cached_musicbox = true; }
         if (piano_found) { g_cached_piano_pos = piano_pos; g_has_cached_piano = true; }
+    }
+    // ★ 每帧更新楼层：基于实时 Z 坐标判断，防止楼层"冻住"
+    if (g_current_map_index >= 0) {
+        UpdateCurrentFloor();
     }
     snprintf(g_map_detect_debug, sizeof(g_map_detect_debug), "New: OK fp=%d s=%.1f", g_detect_best_fp_id, g_detect_best_score);
 }
