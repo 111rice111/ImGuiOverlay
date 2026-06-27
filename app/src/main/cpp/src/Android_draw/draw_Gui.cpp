@@ -1831,34 +1831,46 @@ void TryAutoDetectMap(const std::vector<DataStruct>& data) {
     }
     
     // Step2: 检测传送（瞬移重检）
-    TeleportType tp = DetectPlayerTeleport(Z);
-    if (tp == TeleportType::MAP_SWITCH) {
-        printf("[MapDetect] SWITCH XY jumped\n");
-        ResetObjectCacheOnMapSwitch();
-        g_detect_phase = MapDetectPhase::SWITCH_DETECTED;
-        g_detect_debounce_frames = DETECT_DEBOUNCE_FRAMES;
-        snprintf(g_detect_status_text, sizeof(g_detect_status_text), "SWITCH...");
-        snprintf(g_map_detect_debug, sizeof(g_map_detect_debug), "New: SWITCH dist=%.0f",
-            sqrtf((Z.X-g_prev_player_pos.X)*(Z.X-g_prev_player_pos.X)+(Z.Y-g_prev_player_pos.Y)*(Z.Y-g_prev_player_pos.Y)));
-        // 瞬移时也同步更新楼层（用当前地图的 floorZThreshold）
-        int newFloor = GetFloorFromPlayerZ(Z);
-        int clamped = SafeClampFloorIdx(g_current_map_index, newFloor);
-        if (clamped != g_current_floor_index) {
-            g_current_floor_index = clamped;
+    static int g_switch_cooldown = 0;
+    if (g_switch_cooldown > 0) {
+        g_switch_cooldown--;
+        // 冷却期内更新位置历史但不触发新的传送检测
+        if (Z.X != 0.0f || Z.Y != 0.0f) {
+            g_prev_player_pos = Z;
+            g_has_prev_pos = true;
+        }
+    } else {
+        TeleportType tp = DetectPlayerTeleport(Z);
+        if (tp == TeleportType::MAP_SWITCH) {
+            printf("[MapDetect] SWITCH XY jumped\n");
+            ResetObjectCacheOnMapSwitch();
+            g_detect_phase = MapDetectPhase::SWITCH_DETECTED;
+            g_detect_debounce_frames = DETECT_DEBOUNCE_FRAMES;
+            g_switch_cooldown = 120; // 2秒冷却：防止瞬移时连续触发导致崩溃
+            snprintf(g_detect_status_text, sizeof(g_detect_status_text), "SWITCH...");
+            snprintf(g_map_detect_debug, sizeof(g_map_detect_debug), "New: SWITCH dist=%.0f",
+                sqrtf((Z.X-g_prev_player_pos.X)*(Z.X-g_prev_player_pos.X)+(Z.Y-g_prev_player_pos.Y)*(Z.Y-g_prev_player_pos.Y)));
+            if (g_current_map_index >= 0) {
+                int newFloor = GetFloorFromPlayerZ(Z);
+                int clamped = SafeClampFloorIdx(g_current_map_index, newFloor);
+                if (clamped != g_current_floor_index) {
+                    g_current_floor_index = clamped;
+                    g_last_paths_map_idx = -1;
+                    g_pathGraph.dirty = true;
+                }
+            }
+        } else if (tp == TeleportType::FLOOR_CHANGE) {
+            // Z 轴瞬移 → 楼层切换
+            int nf = GetFloorFromPlayerZ(Z);
+            g_current_floor_index = SafeClampFloorIdx(g_current_map_index, nf);
             g_last_paths_map_idx = -1;
             g_pathGraph.dirty = true;
+            LoadMapTexture(g_current_map_index, g_current_floor_index);
+            g_detect_phase = MapDetectPhase::LOCKED;
+            snprintf(g_map_detect_debug, sizeof(g_map_detect_debug), "New: FLOOR z=%.0f->%d", Z.Z, nf);
+            AddNotification(nf == 0 ? "切换到1楼" : "切换到2楼", 1.5f, ImVec4(0.3f, 0.8f, 1.0f, 1.0f));
+            return;
         }
-    } else if (tp == TeleportType::FLOOR_CHANGE) {
-        // Z 轴瞬移 → 楼层切换
-        int nf = GetFloorFromPlayerZ(Z);
-        g_current_floor_index = SafeClampFloorIdx(g_current_map_index, nf);
-        g_last_paths_map_idx = -1;
-        g_pathGraph.dirty = true;
-        LoadMapTexture(g_current_map_index, g_current_floor_index);
-        g_detect_phase = MapDetectPhase::LOCKED;
-        snprintf(g_map_detect_debug, sizeof(g_map_detect_debug), "New: FLOOR z=%.0f->%d", Z.Z, nf);
-        AddNotification(nf == 0 ? "切换到1楼" : "切换到2楼", 1.5f, ImVec4(0.3f, 0.8f, 1.0f, 1.0f));
-        return;
     }
     
     // Step3: 状态机（保留原有的指纹匹配流程）
@@ -1895,10 +1907,16 @@ void TryAutoDetectMap(const std::vector<DataStruct>& data) {
         snprintf(g_score_debug_buf, sizeof(g_score_debug_buf), "%s", sr.debug_text.c_str());
         g_low_confidence_counter++;
         if (sr.fp_id >= 0 && sr.score >= 60.0f && !sr.is_tie) {
-            ExecuteMapSwitch(sr.fp_id);
-            g_detect_phase = MapDetectPhase::LOCKED;
-            g_low_confidence_counter = 0;
-        } else if (g_low_confidence_counter > LOW_CONFIDENCE_TIMEOUT) {
+            // 预检：fp_id 必须有映射才能切换
+            int tgt = (sr.fp_id < (int)g_mapidx_from_fp_id.size()) ? g_mapidx_from_fp_id[sr.fp_id] : -1;
+            if (tgt >= 0 && tgt < (int)g_all_maps.size()) {
+                ExecuteMapSwitch(sr.fp_id);
+                g_detect_phase = MapDetectPhase::LOCKED;
+                g_low_confidence_counter = 0;
+            }
+            // 没映射 → 留在 LOW_CONFIDENCE 等超时
+        }
+        if (g_low_confidence_counter > LOW_CONFIDENCE_TIMEOUT) {
             g_detect_phase = MapDetectPhase::LOCKED;
             g_low_confidence_counter = 0;
         }
@@ -2291,7 +2309,8 @@ static void LoadFingerprintDB() {
                 for (auto& fp : g_fingerprint_db) {
                     if (fp.id == map_num) {
                         int fp_id = fp.id;
-                        if (fp_id < (int)g_mapidx_from_fp_id.size()) {
+                        // ★ 只取首次匹配（优先一楼），防止"地图N 二楼"覆盖"地图N 一楼"
+                        if (fp_id < (int)g_mapidx_from_fp_id.size() && g_mapidx_from_fp_id[fp_id] < 0) {
                             g_mapidx_from_fp_id[fp_id] = mi;
                         }
                         break;
