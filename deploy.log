@@ -1,15 +1,15 @@
-=== 部署开始: 2026-06-28 01:18:21 模式=dev ===
-[[0;36m2026-06-28 01:18:21[0m] ===== 阶段 1/5: 设备连接检查 =====
+=== 部署开始: 2026-06-28 01:30:39 模式=dev ===
+[[0;36m2026-06-28 01:30:39[0m] ===== 阶段 1/5: 设备连接检查 =====
 [[0;32m  OK  [0m] adb 已找到: /c/Windows/system32/adb
 [[0;32m  OK  [0m] 设备已连接: b5fac603               device product:OPD2413 model:OPD2413 device:OP615EL1 transport_id:1
 [[0;32m  OK  [0m] 设备已 root
 [[0;32m  OK  [0m] Android 版本: 15
-[[0;36m2026-06-28 01:18:21[0m] ===== 阶段 2/5: 环境准备 =====
+[[0;36m2026-06-28 01:30:39[0m] ===== 阶段 2/5: 环境准备 =====
 [[0;32m  OK  [0m] 远程目录已就绪: /data/local/tmp/maps
-[[0;32m  OK  [0m] 磁盘空间: 382147280KB
-[[0;36m2026-06-28 01:18:21[0m] 备份远程版本 (MD5: 45c94694c88f9bcd58da1f13849fd4a6)
-[[0;36m2026-06-28 01:18:21[0m] ===== 阶段 3/5: 编译构建 =====
-[[0;36m2026-06-28 01:18:21[0m] 执行增量编译...
+[[0;32m  OK  [0m] 磁盘空间: 382126812KB
+[[0;36m2026-06-28 01:30:39[0m] 备份远程版本 (MD5: e51be1c36f62f366ff967dbcabb91e06)
+[[0;36m2026-06-28 01:30:39[0m] ===== 阶段 3/5: 编译构建 =====
+[[0;36m2026-06-28 01:30:39[0m] 执行增量编译...
 xargs: environment is too large for exec
 > Task :app:preBuild UP-TO-DATE
 > Task :app:preReleaseBuild UP-TO-DATE
@@ -67,20 +67,20 @@ xargs: environment is too large for exec
 > Task :app:createReleaseApkListingFileRedirect UP-TO-DATE
 > Task :app:assembleRelease UP-TO-DATE
 
-BUILD SUCCESSFUL in 31s
+BUILD SUCCESSFUL in 29s
 48 actionable tasks: 3 executed, 45 up-to-date
 Consider enabling configuration cache to speed up this build: https://docs.gradle.org/9.4.1/userguide/configuration_cache_enabling.html
 [[0;32m  OK  [0m] 构建成功
 [[0;32m  OK  [0m] 二进制文件: /e/ImGuiOverlay/app/build/intermediates/cxx/RelWithDebInfo/1d531461/obj/arm64-v8a/overlay
-[[0;36m2026-06-28 01:18:21[0m] 本地 MD5: 44fda586420e715624c8d75d379b7cea
-[[0;32m  OK  [0m] 文件大小: 1186728 bytes
-[[0;36m2026-06-28 01:18:21[0m] ===== 阶段 4/5: 部署执行 =====
-[[0;36m2026-06-28 01:18:21[0m] 推送二进制到 /data/local/tmp/overlay...
+[[0;36m2026-06-28 01:30:39[0m] 本地 MD5: 3cae7e0517ef395dab72c9b4b4a81147
+[[0;32m  OK  [0m] 文件大小: 1219320 bytes
+[[0;36m2026-06-28 01:30:39[0m] ===== 阶段 4/5: 部署执行 =====
+[[0;36m2026-06-28 01:30:39[0m] 推送二进制到 /data/local/tmp/overlay...
 [[0;32m  OK  [0m] 推送成功
-[[0;36m2026-06-28 01:18:21[0m] 设置权限 777...
+[[0;36m2026-06-28 01:30:39[0m] 设置权限 777...
 [[0;32m  OK  [0m] 权限已设置
-[[0;32m  OK  [0m] MD5 校验一致: 44fda586420e715624c8d75d379b7cea
-[[0;36m2026-06-28 01:18:21[0m] ===== 阶段 5/5: 部署后验证 =====
+[[0;32m  OK  [0m] MD5 校验一致: 3cae7e0517ef395dab72c9b4b4a81147
+[[0;36m2026-06-28 01:30:39[0m] ===== 阶段 5/5: 部署后验证 =====
 [[0;32m  OK  [0m] 二进制存在且可执行
 [[0;32m  OK  [0m] map_config.json 存在
 [[0;32m  OK  [0m] musicbox_stools.json 存在

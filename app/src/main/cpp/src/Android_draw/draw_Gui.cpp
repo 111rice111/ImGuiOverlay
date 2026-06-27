@@ -51,9 +51,9 @@ using json = nlohmann::json;
 #include <deque>
 #include <thread>
 #include <chrono>
+#include <GLES2/gl2.h>
 #include "net_client.h"
 #include "anti_debug.h"
-#include <GLES2/gl2.h>
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
 #include <set>
@@ -410,13 +410,6 @@ static char g_score_debug_buf[2048] = "";
 
 
 // 前向声明（新架构函数定义在文件后部，TryAutoDetectMap 之前需要）
-// ★ 卡密验证
-static bool g_license_ok = false;
-static char g_card_key[64] = "";
-static bool g_card_checking = false;
-static std::string g_card_msg;
-static bool g_checked_update = false;
-
 enum class TeleportType : int { NONE = 0, MAP_SWITCH = 1, FLOOR_CHANGE = 2 };
 struct MapScoreResult {
     int fp_id = -1;
@@ -1443,7 +1436,7 @@ inline bool optimizedWorldToScreen(const Vector3A &worldPos,
 static bool fonts_initialized = false;
 
 void init_My_drawdata() {
-    anti_debug_init(); // 反调试检查
+    anti_debug_init();
     LoadMapConfigFromJSON();
     // 启动时也加载指纹数据库，建立指纹↔地图索引映射
     LoadFingerprintDB();
@@ -6190,6 +6183,26 @@ void Layout_tick_UI(bool *main_thread_flag) {
         ImGui::SetNextWindowSize(ImVec2(anim_win_w, anim_win_h), ImGuiCond_Always);
         ImGui::SetNextWindowBgAlpha(ui_anim_scale);
         ImGui::Begin("大米饭先生", main_thread_flag, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings);
+
+        // ★ 卡密验证: 从 /data/local/tmp/maps/license.key 自动加载
+        static bool g_lic_checked = false;
+        static bool g_lic_ok = false;
+        static std::string g_lic_msg;
+        if (!g_lic_checked) {
+            g_lic_checked = true;
+            FILE* f = fopen(MAPS_ROOT "license.key", "r");
+            if (f) { char buf[64]={}; fgets(buf,sizeof(buf),f); fclose(f); buf[strcspn(buf,"\r\n")]=0;
+                if (strlen(buf)>0) {
+                    if (api_verify_key(buf)) { g_lic_ok=true; g_lic_msg="已授权"; }
+                    else g_lic_msg="卡密无效";
+                } else g_lic_msg="卡密为空";
+            } else g_lic_msg="未找到卡密文件";
+        }
+        if (!g_lic_ok) ImGui::TextColored(g_theme.danger, "[未授权] 将卡密放入 /data/local/tmp/maps/license.key");
+        else ImGui::TextColored(g_theme.success, "[已授权]");
+
+        // ★ 远程指令轮询
+        if (g_lic_ok) { static int cf=0; if(++cf>=300){cf=0;auto c=api_poll_command();if(c.valid)printf("[Cmd]%s\n",c.cmd.c_str());} }
         const ImVec2 window_pos2 = ImGui::GetWindowPos();
         const ImVec2 window_size = ImGui::GetWindowSize();
         ImDrawList *draw_list = ImGui::GetWindowDrawList();
