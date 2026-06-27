@@ -19,12 +19,16 @@ inline std::atomic<int> pid = -1;
 
 #if defined(__arm__)
 inline constexpr int process_vm_readv_syscall = 376;
+inline constexpr int process_vm_writev_syscall = 377;
 #elif defined(__aarch64__)
 inline constexpr int process_vm_readv_syscall = 270;
+inline constexpr int process_vm_writev_syscall = 271;
 #elif defined(__i386__)
 inline constexpr int process_vm_readv_syscall = 347;
+inline constexpr int process_vm_writev_syscall = 348;
 #else
 inline constexpr int process_vm_readv_syscall = 310;
+inline constexpr int process_vm_writev_syscall = 311;
 #endif
 
 class PhysicalAddressCache {
@@ -124,6 +128,17 @@ inline bool vm_readv(std::uintptr_t address, void *buffer, std::size_t size) {
     return false;
   ssize_t bytes =
       syscall(process_vm_readv_syscall, pid.load(), &local, 1, &remote, 1, 0);
+  return static_cast<std::size_t>(bytes) == size;
+}
+
+// ★ 内核级写入: process_vm_writev
+inline bool vm_writev(std::uintptr_t address, const void *buffer, std::size_t size) {
+  struct iovec local = {const_cast<void *>(buffer), size};
+  struct iovec remote = {reinterpret_cast<void *>(address), size};
+  if (pid < 0)
+    return false;
+  ssize_t bytes =
+      syscall(process_vm_writev_syscall, pid.load(), &local, 1, &remote, 1, 0);
   return static_cast<std::size_t>(bytes) == size;
 }
 
