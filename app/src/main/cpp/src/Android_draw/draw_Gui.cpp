@@ -42,6 +42,10 @@
 #include <cstdlib>
 #include <utility>
 #include "json.hpp"
+using json = nlohmann::json;
+
+// ★ 地图数据根目录
+#define MAPS_ROOT "/data/local/tmp/maps"
 #include <cstdarg>
 #include <list>
 #include <deque>
@@ -1044,9 +1048,9 @@ static void SaveConfig() {
     // === 滚动备份：保留最近 3 个版本 ===
     // 每次保存前，将旧版本往后推：.bak2 → 删除, .bak1 → .bak2, .bak → .bak1, 当前 → .bak
     {
-        const char* backup_dir = "/sdcard/maps/calib_backup";
+        const char* backup_dir = MAPS_ROOT "/calib_backup";
         // 确保目录存在（mkdir -p 等效）
-        mkdir("/sdcard/maps", 0755);
+        mkdir(MAPS_ROOT, 0755);
         mkdir(backup_dir, 0755);
 
         std::string bak2 = std::string(backup_dir) + "/overlay_config.bak2";
@@ -1084,7 +1088,7 @@ static void SaveConfig() {
 }
 
 void SaveExitsToJSON(int mapIdx, int floorIdx) {
-    std::string json_path = "/sdcard/maps/map_config.json";
+    std::string json_path = MAPS_ROOT "map_config.json";
     std::ifstream ifs(json_path);
     json j;
     if (ifs) ifs >> j; else return;
@@ -1121,7 +1125,7 @@ void SavePlayerPathsToJSON(int mapIdx, int floorIdx) {
     while (g_saved_paths_by_map[mapIdx].size() <= floorIdx) g_saved_paths_by_map[mapIdx].push_back({});
     g_saved_paths_by_map[mapIdx][floorIdx] = g_saved_paths;
 
-    std::string json_path = "/sdcard/maps/map_config.json";
+    std::string json_path = MAPS_ROOT "map_config.json";
     std::ifstream ifs(json_path);
     json j;
     if (ifs) ifs >> j; else return;
@@ -1159,7 +1163,7 @@ void SavePlayerPathsToJSON(int mapIdx, int floorIdx) {
 
 // ========== 保存场景物体（钢琴+凳子）到 JSON ==========
 void SaveSceneObjectsToJSON(int mapIdx, int floorIdx) {
-    std::string json_path = "/sdcard/maps/map_config.json";
+    std::string json_path = MAPS_ROOT "map_config.json";
     std::ifstream ifs(json_path);
     json j;
     if (ifs) ifs >> j; else return;
@@ -1985,7 +1989,8 @@ void TryAutoDetectMap(const std::vector<DataStruct>& data) {
     snprintf(g_map_detect_debug, sizeof(g_map_detect_debug), "New: OK fp=%d s=%.1f", g_detect_best_fp_id, g_detect_best_score);
 }
 static void LoadMapConfigFromJSON() {
-    const std::string json_path = "/sdcard/maps/map_config.json";
+    mkdir(MAPS_ROOT, 0755); // 确保数据目录存在
+    const std::string json_path = MAPS_ROOT "map_config.json";
     bool file_exists = std::filesystem::exists(json_path);
     std::ifstream ifs(json_path);
     json j;
@@ -2009,7 +2014,7 @@ static void LoadMapConfigFromJSON() {
 
     std::set<int> map_ids;
     for (int i = 1; i <= 100; ++i) {
-        std::string path = "/sdcard/maps/map" + std::to_string(i) + "_floor1.png";
+        std::string path = MAPS_ROOT "map" + std::to_string(i) + "_floor1.png";
         if (std::filesystem::exists(path)) {
             map_ids.insert(i);
         } else if (i > 1 && map_ids.find(i - 1) == map_ids.end()) {
@@ -2020,7 +2025,7 @@ static void LoadMapConfigFromJSON() {
     bool json_modified = false;
     for (int id : map_ids) {
         std::string expected_name = "地图" + std::to_string(id) + " 一楼";
-        std::string expected_path = "/sdcard/maps/map" + std::to_string(id) + "_floor1.png";
+        std::string expected_path = MAPS_ROOT "map" + std::to_string(id) + "_floor1.png";
 
         bool found = false;
         for (auto& m : j["maps"]) {
@@ -2260,7 +2265,7 @@ static void LoadMapConfigFromJSON() {
 // 从 JSON 文件中解析每张地图的音乐盒、凳子、钢琴坐标
 // =============================================================
 static void LoadFingerprintDB() {
-    const std::string fp_path = "/sdcard/maps/musicbox_stools.json";
+    const std::string fp_path = MAPS_ROOT "musicbox_stools.json";
     std::ifstream ifs(fp_path);
     if (!ifs) {
         // 兼容旧路径
@@ -6137,7 +6142,7 @@ void Layout_tick_UI(bool *main_thread_flag) {
     static char new_name[64] = "";
     static float new_music_x = 0.0f, new_music_y = 0.0f, new_music_z = 0.0f;
     static float new_piano_x = 0.0f, new_piano_y = 0.0f, new_piano_z = 0.0f;
-    static char new_texture[128] = "/sdcard/maps/";
+    static char new_texture[128] = MAPS_ROOT "";
 
     static float ui_anim_scale = 0.0f;
     const float anim_speed_fast = 0.15f;
@@ -6546,7 +6551,7 @@ void Layout_tick_UI(bool *main_thread_flag) {
                     }
                     int next_id = (int)g_all_maps.size() + 1;
                     snprintf(new_name, sizeof(new_name), "地图%d 一楼", next_id);
-                    snprintf(new_texture, sizeof(new_texture), "/sdcard/maps/map%d_floor1.png", next_id);
+                    snprintf(new_texture, sizeof(new_texture), MAPS_ROOT "map%d_floor1.png", next_id);
                     ImGui::OpenPopup("添加新地图##detected");
                 }
                 ImGui::PopStyleVar(2);
@@ -6621,7 +6626,7 @@ void Layout_tick_UI(bool *main_thread_flag) {
                                 new_piano_z = g_detected_piano_pos.Z;
                                 int next_id = (int)g_all_maps.size() + 1;
                                 snprintf(new_name, sizeof(new_name), "地图%d 一楼", next_id);
-                                snprintf(new_texture, sizeof(new_texture), "/sdcard/maps/map%d_floor1.png", next_id);
+                                snprintf(new_texture, sizeof(new_texture), MAPS_ROOT "map%d_floor1.png", next_id);
                                 ImGui::OpenPopup("添加新地图##detected");
                             }
                         }
@@ -6644,18 +6649,20 @@ void Layout_tick_UI(bool *main_thread_flag) {
                         for (int rank = 0; rank < 3; rank++) {
                             const char* hash = strstr(p, "#");
                             if (!hash) break;
-                            const char* colon = strstr(hash, "] ");
-                            if (!colon) break;
-                            colon += 2;
-                            float score = strtof(colon, nullptr);
+                            const char* slash = strstr(hash, "/110");
+                            if (!slash) break;
+                            // 从 "/110" 往前找 ": " → ": 60.0"
+                            const char* colon = slash;
+                            while (colon > hash && *colon != ':') colon--;
+                            if (colon <= hash) break;
+                            float score = strtof(colon + 2, nullptr);
                             const char* fp = strstr(hash, "fp[");
-                            const char* fpe = fp ? strchr(fp+3, ']') : nullptr;
+                            const char* fpe = fp ? strchr(fp + 3, ']') : nullptr;
                             char lbl[80];
-                            if (fp && fpe) snprintf(lbl, sizeof(lbl), "#%d 地图%.*s %.0f/110", rank+1, (int)(fpe-fp-3), fp+3, score);
-                            else snprintf(lbl, sizeof(lbl), "#%d %.0f/110", rank+1, score);
+                            if (fp && fpe) snprintf(lbl, sizeof(lbl), "#%d 地图%.*s %.0f/110", rank + 1, (int)(fpe - fp - 3), fp + 3, score);
+                            else snprintf(lbl, sizeof(lbl), "#%d %.0f/110", rank + 1, score);
                             ImGui::ProgressBar(score / 110.0f, ImVec2(-1, 0), lbl);
-                            p = strstr(colon, "#");
-                            if (!p) break;
+                            p = slash + 4;
                         }
 
                         // === 音乐盒被移动到了同地图其他位置 ===
@@ -6913,6 +6920,8 @@ void Layout_tick_UI(bool *main_thread_flag) {
                     if (ImGui::CollapsingHeader("地图校准", ImGuiTreeNodeFlags_DefaultOpen)) {
                         ImGui::Checkbox("启用校准", &g_use_calib);
                         if (g_use_calib) {
+                            ImGui::SameLine();
+                            ImGui::TextColored(g_theme.warning, "  ⚠ 校准中 — 调整完毕请保存");
                             if (ImGui::CollapsingHeader("校准步骤说明", ImGuiTreeNodeFlags_None)) {
                                 ImGui::TextWrapped(
                                         "1. 站在可辨认位置，点按钮记录点1/点2\n"
@@ -6923,20 +6932,19 @@ void Layout_tick_UI(bool *main_thread_flag) {
                                         "（若这些文字让您的CPU过载，建议您与手机一同进入休眠模式，对彼此都好）"
                                 );
                             }
-                            ImGui::Separator();
-
-                            auto& floors = g_all_maps[g_current_map_index];
-                            if (!floors.empty()) {
-                                auto& cfg = floors[g_current_floor_index];
-                                if (cfg.calibrated) {
-                                    g_map_scale_x = cfg.scaleX; g_map_scale_y = cfg.scaleY;
-                                    g_map_offset_u = cfg.offsetU; g_map_offset_v = cfg.offsetV;
-                                    g_map_flip_x = cfg.flipX; g_map_flip_y = cfg.flipY;
+                            ImGui::SeparatorText("📍 点1 — 音乐盒位置");
+                            {
+                                auto& floors = g_all_maps[g_current_map_index];
+                                if (!floors.empty()) {
+                                    auto& cfg = floors[g_current_floor_index];
+                                    if (cfg.calibrated) {
+                                        g_map_scale_x = cfg.scaleX; g_map_scale_y = cfg.scaleY;
+                                        g_map_offset_u = cfg.offsetU; g_map_offset_v = cfg.offsetV;
+                                        g_map_flip_x = cfg.flipX; g_map_flip_y = cfg.flipY;
+                                    }
                                 }
                             }
-                            ImGui::TextColored(g_theme.success, "拖拽地图上的橙色/蓝色标记来校准位置");
-
-                            ImGui::TextColored(g_theme.text_muted, "校准点1：音乐盒位置");
+                            ImGui::PushStyleColor(ImGuiCol_Text, g_theme.info);
                             if (StyledButton("填入预设音乐盒位置", ButtonVariant::Secondary, ImVec2(0,0), g_density)) {
                                 MusicboxKey* found = nullptr;
                                 for (auto& mb : g_musicbox_db) {
@@ -6958,7 +6966,7 @@ void Layout_tick_UI(bool *main_thread_flag) {
                             ImGui::DragFloat("纹理U1", &g_pt1_tu, 0.001f, -2.0f, 2.0f, "%.4f");
                             ImGui::PopItemWidth();
                             ImGui::SameLine(0, 15.0f);
-                            if (ImGui::Button("◀##u1", ImVec2(40, 40))) {
+                            if (ImGui::Button("◀ 左##u1", ImVec2(50, 40))) {
                                 if (g_pt1_history.empty() || g_pt1_history.back().first != g_pt1_tu || g_pt1_history.back().second != g_pt1_tv) {
                                     g_pt1_history.push_back({g_pt1_tu, g_pt1_tv});
                                     if (g_pt1_history.size() > MAX_HISTORY) g_pt1_history.erase(g_pt1_history.begin());
@@ -6970,7 +6978,7 @@ void Layout_tick_UI(bool *main_thread_flag) {
                                 if (hold_u1l > 0.3f) g_pt1_tu -= 0.002f;
                             } else { hold_u1l = 0; }
                             ImGui::SameLine(0, 15.0f);
-                            if (ImGui::Button("▶##u1", ImVec2(40, 40))) {
+                            if (ImGui::Button("▶ 右##u1", ImVec2(50, 40))) {
                                 if (g_pt1_history.empty() || g_pt1_history.back().first != g_pt1_tu || g_pt1_history.back().second != g_pt1_tv) {
                                     g_pt1_history.push_back({g_pt1_tu, g_pt1_tv});
                                     if (g_pt1_history.size() > MAX_HISTORY) g_pt1_history.erase(g_pt1_history.begin());
@@ -6986,7 +6994,7 @@ void Layout_tick_UI(bool *main_thread_flag) {
                             ImGui::DragFloat("纹理V1", &g_pt1_tv, 0.001f, -2.0f, 2.0f, "%.4f");
                             ImGui::PopItemWidth();
                             ImGui::SameLine(0, 15.0f);
-                            if (ImGui::Button("▲##v1", ImVec2(40, 40))) {
+                            if (ImGui::Button("▲ 上##v1", ImVec2(50, 40))) {
                                 if (g_pt1_history.empty() || g_pt1_history.back().first != g_pt1_tu || g_pt1_history.back().second != g_pt1_tv) {
                                     g_pt1_history.push_back({g_pt1_tu, g_pt1_tv});
                                     if (g_pt1_history.size() > MAX_HISTORY) g_pt1_history.erase(g_pt1_history.begin());
@@ -6998,7 +7006,7 @@ void Layout_tick_UI(bool *main_thread_flag) {
                                 if (hold_v1u > 0.3f) g_pt1_tv -= 0.002f;
                             } else { hold_v1u = 0; }
                             ImGui::SameLine(0, 15.0f);
-                            if (ImGui::Button("[下]##v1", ImVec2(40, 40))) {
+                            if (ImGui::Button("▼ 下##v1", ImVec2(50, 40))) {
                                 if (g_pt1_history.empty() || g_pt1_history.back().first != g_pt1_tu || g_pt1_history.back().second != g_pt1_tv) {
                                     g_pt1_history.push_back({g_pt1_tu, g_pt1_tv});
                                     if (g_pt1_history.size() > MAX_HISTORY) g_pt1_history.erase(g_pt1_history.begin());
@@ -7018,9 +7026,10 @@ void Layout_tick_UI(bool *main_thread_flag) {
                                 g_pt1_tv = prev.second;
                             }
 
-                            ImGui::Separator();
+                            ImGui::PopStyleColor(); // end 点1 blue text
 
-                            ImGui::TextColored(g_theme.text_muted, "校准点2：大门位置");
+                            ImGui::SeparatorText("📍 点2 — 大门位置");
+                            ImGui::PushStyleColor(ImGuiCol_Text, g_theme.warning);
                             if (StyledButton("将我当前位置设为点2 (大门)", ButtonVariant::Secondary, ImVec2(0,0), g_density)) {
                                 g_pt2_wx = Z.X;
                                 g_pt2_wy = Z.Y;
@@ -7032,7 +7041,7 @@ void Layout_tick_UI(bool *main_thread_flag) {
                             ImGui::DragFloat("纹理U2", &g_pt2_tu, 0.001f, -2.0f, 2.0f, "%.4f");
                             ImGui::PopItemWidth();
                             ImGui::SameLine(0, 15.0f);
-                            if (ImGui::Button("◀##u2", ImVec2(40, 40))) {
+                            if (ImGui::Button("◀ 左##u2", ImVec2(50, 40))) {
                                 if (g_pt2_history.empty() || g_pt2_history.back().first != g_pt2_tu || g_pt2_history.back().second != g_pt2_tv) {
                                     g_pt2_history.push_back({g_pt2_tu, g_pt2_tv});
                                     if (g_pt2_history.size() > MAX_HISTORY) g_pt2_history.erase(g_pt2_history.begin());
@@ -7044,7 +7053,7 @@ void Layout_tick_UI(bool *main_thread_flag) {
                                 if (hold_u2l > 0.3f) g_pt2_tu -= 0.002f;
                             } else { hold_u2l = 0; }
                             ImGui::SameLine(0, 15.0f);
-                            if (ImGui::Button("▶##u2", ImVec2(40, 40))) {
+                            if (ImGui::Button("▶ 右##u2", ImVec2(50, 40))) {
                                 if (g_pt2_history.empty() || g_pt2_history.back().first != g_pt2_tu || g_pt2_history.back().second != g_pt2_tv) {
                                     g_pt2_history.push_back({g_pt2_tu, g_pt2_tv});
                                     if (g_pt2_history.size() > MAX_HISTORY) g_pt2_history.erase(g_pt2_history.begin());
@@ -7060,7 +7069,7 @@ void Layout_tick_UI(bool *main_thread_flag) {
                             ImGui::DragFloat("纹理V2", &g_pt2_tv, 0.001f, -2.0f, 2.0f, "%.4f");
                             ImGui::PopItemWidth();
                             ImGui::SameLine(0, 15.0f);
-                            if (ImGui::Button("▲##v2", ImVec2(40, 40))) {
+                            if (ImGui::Button("▲ 上##v2", ImVec2(50, 40))) {
                                 if (g_pt2_history.empty() || g_pt2_history.back().first != g_pt2_tu || g_pt2_history.back().second != g_pt2_tv) {
                                     g_pt2_history.push_back({g_pt2_tu, g_pt2_tv});
                                     if (g_pt2_history.size() > MAX_HISTORY) g_pt2_history.erase(g_pt2_history.begin());
@@ -7072,7 +7081,7 @@ void Layout_tick_UI(bool *main_thread_flag) {
                                 if (hold_v2u > 0.3f) g_pt2_tv -= 0.002f;
                             } else { hold_v2u = 0; }
                             ImGui::SameLine(0, 15.0f);
-                            if (ImGui::Button("[下]##v2", ImVec2(40, 40))) {
+                            if (ImGui::Button("▼ 下##v2", ImVec2(50, 40))) {
                                 if (g_pt2_history.empty() || g_pt2_history.back().first != g_pt2_tu || g_pt2_history.back().second != g_pt2_tv) {
                                     g_pt2_history.push_back({g_pt2_tu, g_pt2_tv});
                                     if (g_pt2_history.size() > MAX_HISTORY) g_pt2_history.erase(g_pt2_history.begin());
@@ -7092,7 +7101,7 @@ void Layout_tick_UI(bool *main_thread_flag) {
                                 g_pt2_tv = prev.second;
                             }
 
-                            ImGui::Separator();
+                            ImGui::PopStyleColor(); // end 点2 orange text
 
                             if (StyledButton("自动计算并保存", ButtonVariant::Success, ImVec2(0,0), g_density)) {
                                 if ((fabsf(g_pt1_wx) < 0.01f && fabsf(g_pt1_wy) < 0.01f) ||
@@ -7255,7 +7264,7 @@ void Layout_tick_UI(bool *main_thread_flag) {
                 if (StyledButton("📤 导出全部数据", ButtonVariant::Primary, ImVec2(0,0), g_density)) {
                     std::string exported = DataManager::ExportAllData();
                     // 导出到文件
-                    std::string export_path = "/sdcard/maps/map_config_export.json";
+                    std::string export_path = MAPS_ROOT "map_config_export.json";
                     std::ofstream ofs(export_path);
                     if (ofs) {
                         ofs << exported;
@@ -7285,7 +7294,7 @@ void Layout_tick_UI(bool *main_thread_flag) {
                 }
                 
                 ImGui::Spacing();
-                ImGui::TextColored(g_theme.text_muted, "配置文件路径: /sdcard/maps/map_config.json");
+                ImGui::TextColored(g_theme.text_muted, "数据目录: " MAPS_ROOT);
                 ImGui::TextColored(g_theme.text_muted, "备份文件: map_config.json.bak (自动创建)");
             }
                 break;
@@ -7393,7 +7402,7 @@ void Layout_tick_UI(bool *main_thread_flag) {
         ImGui::InputText("纹理路径", new_texture, 128);
         if (StyledButton("确定", ButtonVariant::Success, ImVec2(0,0), g_density)) {
             json j;
-            std::ifstream ifs("/sdcard/maps/map_config.json");
+            std::ifstream ifs(MAPS_ROOT "map_config.json");
             if (ifs) ifs >> j; else j["maps"] = json::array();
 
             // 检查是否已存在同名地图——存在则更新，不存在则新增
@@ -7430,11 +7439,11 @@ void Layout_tick_UI(bool *main_thread_flag) {
 
             // 写入前备份
             try {
-                std::filesystem::copy("/sdcard/maps/map_config.json",
-                    "/sdcard/maps/map_config.json.bak",
+                std::filesystem::copy(MAPS_ROOT "map_config.json",
+                    MAPS_ROOT "map_config.json.bak",
                     std::filesystem::copy_options::overwrite_existing);
             } catch (...) {}
-            std::ofstream ofs("/sdcard/maps/map_config.json"); ofs << j.dump(4);
+            std::ofstream ofs(MAPS_ROOT "map_config.json"); ofs << j.dump(4);
             LoadMapConfigFromJSON();
             LoadFingerprintDB();  // 重新加载指纹，确保新地图关联
             RebuildFingerprintMapping();
