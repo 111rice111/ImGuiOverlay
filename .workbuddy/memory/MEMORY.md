@@ -52,11 +52,12 @@ Git commit: 4130378, tag: v2.9-stable
 - **地图识别防抖**: `g_locked_stable_frames ≥ 30` 后才检测音乐盒移动
 
 ## 交付流程（必须遵守）
-1. 修改代码 → 编译（`./gradlew clean assembleRelease`）
-2. adb push 二进制到 `/data/local/tmp/overlay`（**chmod 777**）
-3. 推送 CHANGELOG.txt + version-latest.txt + `[更新日志]` 到手机
-4. 更新 CHANGELOG.md
-5. git commit + git push
+1. **修改代码前**：先参考 `.agents/skills/` 中 mattpocock-skills 的工作流（diagnose → plan → implement）
+2. 修改代码 → 编译（`./gradlew clean assembleRelease`）
+3. adb push 二进制到 `/data/local/tmp/overlay`（**chmod 777**）
+4. 推送 CHANGELOG.txt + version-latest.txt + `[更新日志]` 到手机
+5. 更新 CHANGELOG.md
+6. git commit + git push
 
 ## 最终确定的优化方案
 
