@@ -26,7 +26,7 @@
 using json = nlohmann::json;
 
 // ========== 配置 ==========
-#define NET_SERVER_HOST "api.example.com"
+#define NET_SERVER_HOST "192.168.1.3"
 #define NET_SERVER_PORT 8080
 #define NET_TIMEOUT_SEC 10
 
@@ -131,10 +131,10 @@ inline std::string http_request(const std::string& host, int port,
 
 // 加密 HTTP POST (AES + hex 编码)
 inline std::string http_post_enc(const std::string& path, const std::string& plain_body) {
-    std::string enc = aes_encrypt(plain_body);
+    std::string enc = xor_encrypt(plain_body);
     std::string resp = http_request(NET_SERVER_HOST, NET_SERVER_PORT, path, enc, true);
     if (resp.empty()) return "";
-    return aes_decrypt(resp);
+    return xor_decrypt(resp);
 }
 
 // ========== 核心 API ==========
