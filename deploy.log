@@ -1,0 +1,88 @@
+=== 部署开始: 2026-06-28 01:18:21 模式=dev ===
+[[0;36m2026-06-28 01:18:21[0m] ===== 阶段 1/5: 设备连接检查 =====
+[[0;32m  OK  [0m] adb 已找到: /c/Windows/system32/adb
+[[0;32m  OK  [0m] 设备已连接: b5fac603               device product:OPD2413 model:OPD2413 device:OP615EL1 transport_id:1
+[[0;32m  OK  [0m] 设备已 root
+[[0;32m  OK  [0m] Android 版本: 15
+[[0;36m2026-06-28 01:18:21[0m] ===== 阶段 2/5: 环境准备 =====
+[[0;32m  OK  [0m] 远程目录已就绪: /data/local/tmp/maps
+[[0;32m  OK  [0m] 磁盘空间: 382147280KB
+[[0;36m2026-06-28 01:18:21[0m] 备份远程版本 (MD5: 45c94694c88f9bcd58da1f13849fd4a6)
+[[0;36m2026-06-28 01:18:21[0m] ===== 阶段 3/5: 编译构建 =====
+[[0;36m2026-06-28 01:18:21[0m] 执行增量编译...
+xargs: environment is too large for exec
+> Task :app:preBuild UP-TO-DATE
+> Task :app:preReleaseBuild UP-TO-DATE
+> Task :app:configureCMakeRelWithDebInfo[arm64-v8a]
+> Task :app:buildCMakeRelWithDebInfo[arm64-v8a]
+> Task :app:mergeReleaseJniLibFolders UP-TO-DATE
+> Task :app:mergeReleaseNativeLibs UP-TO-DATE
+> Task :app:stripReleaseDebugSymbols UP-TO-DATE
+> Task :app:extractReleaseNativeSymbolTables UP-TO-DATE
+> Task :app:mergeReleaseNativeDebugMetadata UP-TO-DATE
+> Task :app:checkReleaseDuplicateClasses UP-TO-DATE
+> Task :app:generateReleaseResources UP-TO-DATE
+> Task :app:packageReleaseResources UP-TO-DATE
+> Task :app:processReleaseNavigationResources UP-TO-DATE
+> Task :app:parseReleaseLocalResources UP-TO-DATE
+> Task :app:generateReleaseRFile UP-TO-DATE
+> Task :app:compileReleaseKotlin NO-SOURCE
+> Task :app:javaPreCompileRelease UP-TO-DATE
+> Task :app:compileReleaseJavaWithJavac NO-SOURCE
+> Task :app:checkReleaseAarMetadata UP-TO-DATE
+> Task :app:mapReleaseSourceSetPaths UP-TO-DATE
+> Task :app:compileReleaseNavigationResources UP-TO-DATE
+> Task :app:mergeReleaseResources UP-TO-DATE
+> Task :app:createReleaseCompatibleScreenManifests UP-TO-DATE
+> Task :app:extractDeepLinksRelease UP-TO-DATE
+> Task :app:processReleaseMainManifest UP-TO-DATE
+> Task :app:processReleaseManifest UP-TO-DATE
+> Task :app:processReleaseManifestForPackage UP-TO-DATE
+> Task :app:processReleaseResources UP-TO-DATE
+> Task :app:dexBuilderRelease UP-TO-DATE
+> Task :app:desugarReleaseFileDependencies UP-TO-DATE
+> Task :app:mergeReleaseStartupProfile UP-TO-DATE
+> Task :app:mergeExtDexRelease UP-TO-DATE
+> Task :app:mergeDexRelease UP-TO-DATE
+> Task :app:mergeReleaseArtProfile UP-TO-DATE
+> Task :app:mergeReleaseGlobalSynthetics UP-TO-DATE
+> Task :app:compileReleaseArtProfile UP-TO-DATE
+> Task :app:generateReleaseAssets UP-TO-DATE
+> Task :app:mergeReleaseAssets UP-TO-DATE
+> Task :app:compressReleaseAssets UP-TO-DATE
+> Task :app:extractReleaseVersionControlInfo UP-TO-DATE
+> Task :app:extractProguardFiles UP-TO-DATE
+> Task :app:generateReleaseLintVitalReportModel UP-TO-DATE
+> Task :app:lintVitalAnalyzeRelease UP-TO-DATE
+> Task :app:lintVitalReportRelease UP-TO-DATE
+> Task :app:lintVitalRelease
+> Task :app:processReleaseJavaRes NO-SOURCE
+> Task :app:mergeReleaseJavaResource UP-TO-DATE
+> Task :app:optimizeReleaseResources UP-TO-DATE
+> Task :app:collectReleaseDependencies UP-TO-DATE
+> Task :app:sdkReleaseDependencyData UP-TO-DATE
+> Task :app:writeReleaseAppMetadata UP-TO-DATE
+> Task :app:writeReleaseSigningConfigVersions UP-TO-DATE
+> Task :app:packageRelease UP-TO-DATE
+> Task :app:createReleaseApkListingFileRedirect UP-TO-DATE
+> Task :app:assembleRelease UP-TO-DATE
+
+BUILD SUCCESSFUL in 31s
+48 actionable tasks: 3 executed, 45 up-to-date
+Consider enabling configuration cache to speed up this build: https://docs.gradle.org/9.4.1/userguide/configuration_cache_enabling.html
+[[0;32m  OK  [0m] 构建成功
+[[0;32m  OK  [0m] 二进制文件: /e/ImGuiOverlay/app/build/intermediates/cxx/RelWithDebInfo/1d531461/obj/arm64-v8a/overlay
+[[0;36m2026-06-28 01:18:21[0m] 本地 MD5: 44fda586420e715624c8d75d379b7cea
+[[0;32m  OK  [0m] 文件大小: 1186728 bytes
+[[0;36m2026-06-28 01:18:21[0m] ===== 阶段 4/5: 部署执行 =====
+[[0;36m2026-06-28 01:18:21[0m] 推送二进制到 /data/local/tmp/overlay...
+[[0;32m  OK  [0m] 推送成功
+[[0;36m2026-06-28 01:18:21[0m] 设置权限 777...
+[[0;32m  OK  [0m] 权限已设置
+[[0;32m  OK  [0m] MD5 校验一致: 44fda586420e715624c8d75d379b7cea
+[[0;36m2026-06-28 01:18:21[0m] ===== 阶段 5/5: 部署后验证 =====
+[[0;32m  OK  [0m] 二进制存在且可执行
+[[0;32m  OK  [0m] map_config.json 存在
+[[0;32m  OK  [0m] musicbox_stools.json 存在
+[[0;32m  OK  [0m] 部署日志: /e/ImGuiOverlay/deploy.log
+[[0;32m  OK  [0m] ✓ 部署验证通过
