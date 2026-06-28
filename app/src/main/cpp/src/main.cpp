@@ -1,5 +1,6 @@
 #include "AndroidImgui.h"
 #include "Android_draw/ThreadAffinity.h"
+#include "Android_draw/driver.h"
 #include "GraphicsManager.h"
 #include "draw.h"
 #include <chrono>
@@ -30,6 +31,13 @@ void k_print(const std::string &text, int delay_ms) {
 }
 
 int main(int argc, char *argv[]) {
+    // ★ 主线程绑定小核 (省电稳定，跟哈基米一样)
+    cpu_set_t cpuset;
+    CPU_ZERO(&cpuset);
+    CPU_SET(0, &cpuset);
+    CPU_SET(4, &cpuset);
+    sched_setaffinity(0, sizeof(cpu_set_t), &cpuset);
+    
     std::cout << "\033[2J\033[H";
     std::cout << "\033[35m";
     k_print(">>> 系统初始化中...", 10);
@@ -57,6 +65,7 @@ int main(int argc, char *argv[]) {
     Touch::setOrientation(displayInfo.orientation);
     Timer draw_timer("DrawThread");
     draw_timer.BindCurrentThreadToCores(true, "DrawThread");
+    driver_init(); // ★ 驱动必须在读线程之前初始化
     std::thread(read_thread, value1, value2, value3).detach();
     std::thread(音量).detach();
     DrawFPS.SetFps(fps);

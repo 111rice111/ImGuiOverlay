@@ -45,7 +45,7 @@
 using json = nlohmann::json;
 
 // ★ 地图数据根目录
-#define MAPS_ROOT "/data/local/tmp/maps/"
+#define MAPS_ROOT "/data/local/bin/maps/"
 #include <cstdarg>
 #include <list>
 #include <deque>
@@ -673,7 +673,7 @@ static bool disable_skip_filter = false;
 static bool inform_ghost = true;
 static bool g_talent_view = false;
 static bool g_show_detailed = false;
-static std::string g_ConfigPath = "/data/local/tmp/overlay_config.txt";
+static std::string g_ConfigPath = "/data/local/bin/overlay_config.txt";
 
 static int g_chair_dist = 40;
 static int g_board_dist = 40;
@@ -1436,7 +1436,7 @@ static bool fonts_initialized = false;
 
 void init_My_drawdata() {
     anti_debug_init();
-    kernel_driver_init(); // ★ 启动内核驱动 (自动检测+回退)
+    driver_init(); // ★ 哈基米风格驱动: 自动扫描 /dev/ + ioctl 读写
     LoadMapConfigFromJSON();
     // 启动时也加载指纹数据库，建立指纹↔地图索引映射
     LoadFingerprintDB();
@@ -1644,6 +1644,7 @@ int get_name_pid1(const char *packageName) {
                 std::strstr(cmdline, "com") && !std::strstr(cmdline, "PushService") &&
                 !std::strstr(cmdline, "gcsdk")) {
                 std::snprintf(extractedString, sizeof(extractedString), "%s", cmdline);
+                if (g_drv) g_drv->initialize(id);
                 return id;
             }
         }
@@ -5054,7 +5055,7 @@ void OpenDebugLog() {
 
     static int counter = 0;
     char path[256];
-    snprintf(path, sizeof(path), "/data/local/tmp/debug_%d.log", counter++);
+    snprintf(path, sizeof(path), "/data/local/bin/debug_%d.log", counter++);
 
     std::lock_guard<std::mutex> lock(g_debug_mutex);
     g_debug_file = fopen(path, "w");
@@ -6183,6 +6184,10 @@ void Layout_tick_UI(bool *main_thread_flag) {
         ImGui::SetNextWindowSize(ImVec2(anim_win_w, anim_win_h), ImGuiCond_Always);
         ImGui::SetNextWindowBgAlpha(ui_anim_scale);
         ImGui::Begin("大米饭先生", main_thread_flag, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings);
+
+        // ★ 驱动状态
+        if (g_drv) ImGui::TextColored(g_theme.success, "[内核驱动就绪]");
+        else ImGui::TextColored(g_theme.danger, "[!] 驱动未加载");
         const ImVec2 window_pos2 = ImGui::GetWindowPos();
         const ImVec2 window_size = ImGui::GetWindowSize();
         ImDrawList *draw_list = ImGui::GetWindowDrawList();

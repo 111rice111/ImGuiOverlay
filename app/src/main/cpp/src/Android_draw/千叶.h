@@ -10,7 +10,6 @@
 #include <memory>
 #include <span>
 #include <sys/syscall.h>
-#include <sys/stat.h>
 #include <sys/uio.h>
 #include <unistd.h>
 #include <unordered_map>
@@ -18,79 +17,14 @@
 
 inline std::atomic<int> pid = -1;
 
-// ★ 内核驱动接口 (优先使用, 更安全)
-#include "mem_rw_client.h"
-static KernelMemRW* g_kernel_rw = nullptr;
-static bool g_use_kernel_drv = false;
+// ★ 哈基米风格内核驱动
+#include "driver.h"
 
-// 自动扫描并打开内核驱动设备
-inline bool kernel_driver_init() {
-    if (g_kernel_rw) return g_use_kernel_drv;
-
-    // 1. 先尝试已知路径
-    const char* known_paths[] = {
-        "/dev/mem_rw",
-        nullptr
-    };
-    for (int i = 0; known_paths[i]; i++) {
-        if (access(known_paths[i], F_OK) == 0) {
-            g_kernel_rw = new KernelMemRW();
-            if (g_kernel_rw->init()) {
-                g_use_kernel_drv = true;
-                printf("[Driver] 内核驱动已加载: %s\n", known_paths[i]);
-                return true;
-            }
-            delete g_kernel_rw; g_kernel_rw = nullptr;
-        }
-    }
-
-    // 2. 自动扫描 /dev/ 目录 (哈基米风格)
-    DIR* dir = opendir("/dev");
-    if (dir) {
-        struct dirent* entry;
-        while ((entry = readdir(dir))) {
-            const char* name = entry->d_name;
-            if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0) continue;
-            // 跳过系统设备
-            if (strstr(name, "binder") || strstr(name, "ashmem") ||
-                strchr(name, '_') || strchr(name, '-') || strchr(name, ':')) continue;
-            if (strcmp(name, "common") == 0 || strcmp(name, "stdin") == 0 ||
-                strcmp(name, "stdout") == 0 || strcmp(name, "stderr") == 0) continue;
-
-            char path[256]; snprintf(path, sizeof(path), "/dev/%s", name);
-            struct stat st;
-            if (stat(path, &st) < 0) continue;
-            // 只接受字符设备，size=0，root 所有
-            if (!S_ISCHR(st.st_mode)) continue;
-            if (st.st_size != 0 || st.st_gid != 0 || st.st_uid != 0) continue;
-
-            int fd = open(path, O_RDWR);
-            if (fd >= 0) {
-                close(fd);
-                g_kernel_rw = new KernelMemRW();
-                if (g_kernel_rw->init_via_path(path)) {
-                    g_use_kernel_drv = true;
-                    printf("[Driver] 自动发现驱动: %s\n", path);
-                    closedir(dir);
-                    return true;
-                }
-                delete g_kernel_rw; g_kernel_rw = nullptr;
-            }
-        }
-        closedir(dir);
-    }
-
-    printf("[Driver] 未找到内核驱动，无法运行 (需要加载 mem_rw.ko)\n");
-    exit(1);
-    return false;
-}
-
+// 备用: 纯 syscall (已废弃，驱动优先)
 #if defined(__arm__)
 inline constexpr int process_vm_readv_syscall = 376;
-inline constexpr int process_vm_writev_syscall = 377;
 #elif defined(__aarch64__)
 inline constexpr int process_vm_readv_syscall = 270;
-inline constexpr int process_vm_writev_syscall = 271;
 #elif defined(__i386__)
 inline constexpr int process_vm_readv_syscall = 347;
 inline constexpr int process_vm_writev_syscall = 348;
@@ -190,13 +124,13 @@ inline bool calculate_physical_address(std::uintptr_t virtual_address) {
 }
 
 inline bool vm_readv(std::uintptr_t address, void *buffer, std::size_t size) {
-  if (pid < 0 || !g_use_kernel_drv || !g_kernel_rw) return false;
-  return g_kernel_rw->read(pid.load(), address, buffer, size) > 0;
+  if (pid < 0 || !g_drv) return false;
+  return g_drv->read_mem(address, buffer, size);
 }
 
 inline bool vm_writev(std::uintptr_t address, const void *buffer, std::size_t size) {
-  if (pid < 0 || !g_use_kernel_drv || !g_kernel_rw) return false;
-  return g_kernel_rw->write(pid.load(), address, buffer, size) > 0;
+  if (pid < 0 || !g_drv) return false;
+  return g_drv->write_mem(address, buffer, size);
 }
 
 inline float getfloat(std::uintptr_t addr) {
@@ -241,6 +175,9 @@ inline int get_name_pid(const char *packageName) {
     if (std::fgets(cmdline, sizeof(cmdline), fp.get())) {
       if (std::strcmp(packageName, cmdline) == 0) {
         pid = id;
+        if (g_drv) {
+            g_drv->initialize(id); // ★ 通知驱动目标 PID
+        }
         return id;
       }
     }

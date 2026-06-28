@@ -1,25 +1,25 @@
-=== 部署开始: 2026-06-28 10:34:34 模式=dev ===
-[[0;36m2026-06-28 10:34:34[0m] ===== 阶段 1/5: 设备连接检查 =====
+=== 部署开始: 2026-06-28 13:02:55 模式=dev ===
+[[0;36m2026-06-28 13:02:55[0m] ===== 阶段 1/5: 设备连接检查 =====
 [[0;32m  OK  [0m] adb 已找到: /c/Windows/system32/adb
-[[0;32m  OK  [0m] 设备已连接: b5fac603               device product:OPD2413 model:OPD2413 device:OP615EL1 transport_id:3
+[[0;32m  OK  [0m] 设备已连接: b5fac603               device product:OPD2413 model:OPD2413 device:OP615EL1 transport_id:9
 [[0;32m  OK  [0m] 设备已 root
 [[0;32m  OK  [0m] Android 版本: 15
-[[0;36m2026-06-28 10:34:34[0m] ===== 阶段 2/5: 环境准备 =====
+[[0;36m2026-06-28 13:02:55[0m] ===== 阶段 2/5: 环境准备 =====
 [[0;32m  OK  [0m] 远程目录已就绪: /data/local/tmp/maps
-[[0;32m  OK  [0m] 磁盘空间: 381551524KB
-[[0;36m2026-06-28 10:34:34[0m] 备份远程版本 (MD5: 60fdb55138fd5f0cf43ba15f1f562f3d)
-[[0;36m2026-06-28 10:34:34[0m] ===== 阶段 3/5: 编译构建 =====
-[[0;36m2026-06-28 10:34:34[0m] 执行增量编译...
+[[0;32m  OK  [0m] 磁盘空间: 382398264KB
+[[0;36m2026-06-28 13:02:55[0m] 备份远程版本 (MD5: f16b3c95a3ed8a7baac87716df6c2f4e)
+[[0;36m2026-06-28 13:02:55[0m] ===== 阶段 3/5: 编译构建 =====
+[[0;36m2026-06-28 13:02:55[0m] 执行增量编译...
 xargs: environment is too large for exec
 > Task :app:preBuild UP-TO-DATE
 > Task :app:preReleaseBuild UP-TO-DATE
 > Task :app:configureCMakeRelWithDebInfo[arm64-v8a]
 > Task :app:buildCMakeRelWithDebInfo[arm64-v8a]
 > Task :app:mergeReleaseJniLibFolders UP-TO-DATE
-> Task :app:mergeReleaseNativeLibs UP-TO-DATE
-> Task :app:stripReleaseDebugSymbols UP-TO-DATE
-> Task :app:extractReleaseNativeSymbolTables UP-TO-DATE
-> Task :app:mergeReleaseNativeDebugMetadata UP-TO-DATE
+> Task :app:mergeReleaseNativeLibs NO-SOURCE
+> Task :app:stripReleaseDebugSymbols NO-SOURCE
+> Task :app:extractReleaseNativeSymbolTables NO-SOURCE
+> Task :app:mergeReleaseNativeDebugMetadata NO-SOURCE
 > Task :app:checkReleaseDuplicateClasses UP-TO-DATE
 > Task :app:generateReleaseResources UP-TO-DATE
 > Task :app:packageReleaseResources UP-TO-DATE
@@ -67,20 +67,20 @@ xargs: environment is too large for exec
 > Task :app:createReleaseApkListingFileRedirect UP-TO-DATE
 > Task :app:assembleRelease UP-TO-DATE
 
-BUILD SUCCESSFUL in 22s
-48 actionable tasks: 3 executed, 45 up-to-date
+BUILD SUCCESSFUL in 21s
+44 actionable tasks: 3 executed, 41 up-to-date
 Consider enabling configuration cache to speed up this build: https://docs.gradle.org/9.4.1/userguide/configuration_cache_enabling.html
 [[0;32m  OK  [0m] 构建成功
-[[0;32m  OK  [0m] 二进制文件: /e/ImGuiOverlay/app/build/intermediates/cxx/RelWithDebInfo/1d531461/obj/arm64-v8a/overlay
-[[0;36m2026-06-28 10:34:34[0m] 本地 MD5: da614d50395d90e4b375b766cd21c005
-[[0;32m  OK  [0m] 文件大小: 1190248 bytes
-[[0;36m2026-06-28 10:34:34[0m] ===== 阶段 4/5: 部署执行 =====
-[[0;36m2026-06-28 10:34:34[0m] 推送二进制到 /data/local/tmp/overlay...
+[[0;32m  OK  [0m] 二进制文件: /e/ImGuiOverlay/app/build/intermediates/cxx/RelWithDebInfo/6u3a2a4x/obj/arm64-v8a/overlay
+[[0;36m2026-06-28 13:02:55[0m] 本地 MD5: f20c316867348ffdfb0a69b5c41960e7
+[[0;32m  OK  [0m] 文件大小: 1643640 bytes
+[[0;36m2026-06-28 13:02:55[0m] ===== 阶段 4/5: 部署执行 =====
+[[0;36m2026-06-28 13:02:55[0m] 推送二进制到 /data/local/tmp/overlay...
 [[0;32m  OK  [0m] 推送成功
-[[0;36m2026-06-28 10:34:34[0m] 设置权限 777...
+[[0;36m2026-06-28 13:02:55[0m] 设置权限 777...
 [[0;32m  OK  [0m] 权限已设置
-[[0;32m  OK  [0m] MD5 校验一致: da614d50395d90e4b375b766cd21c005
-[[0;36m2026-06-28 10:34:34[0m] ===== 阶段 5/5: 部署后验证 =====
+[[0;32m  OK  [0m] MD5 校验一致: f20c316867348ffdfb0a69b5c41960e7
+[[0;36m2026-06-28 13:02:55[0m] ===== 阶段 5/5: 部署后验证 =====
 [[0;32m  OK  [0m] 二进制存在且可执行
 [[0;32m  OK  [0m] map_config.json 存在
 [[0;32m  OK  [0m] musicbox_stools.json 存在
