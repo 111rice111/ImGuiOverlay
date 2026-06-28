@@ -72,13 +72,45 @@ public:
         return -1;
     }
 
-    void initialize(pid_t p) override { pid_ = p; }
+    void initialize(pid_t p) override { 
+        pid_ = p; 
+        printf("[TWT] initialize pid=%d\n", (int)p);
+        // 验证读取: 尝试从 libbase 读 8 字节
+        uintptr_t test_addr = 0;
+        char mp[64]; snprintf(mp,64,"/proc/%d/maps",(int)p);
+        FILE* f = fopen(mp,"r"); char line[256];
+        if (f && fgets(line,sizeof(line),f)) test_addr = strtoull(line,NULL,16);
+        if (f) fclose(f);
+        if (test_addr) {
+            uint64_t val = 0;
+            bool ok = read_mem(test_addr, &val, 8);
+            printf("[TWT] 验证读 0x%lx → %s val=0x%llx\n", test_addr, ok?"OK":"FAIL", (unsigned long long)val);
+            if (!ok || val==0) {
+                // 尝试 V2
+                _request req = {pid_, test_addr & 0xFFFFFFFFFFFFULL, &val, 8};
+                int r = ioctl(fd_, TWT_READ_V2, &req);
+                printf("[TWT] V2 0x%lx → ret=%d val=0x%llx\n", test_addr, r, (unsigned long long)val);
+            }
+        }
+        fflush(stdout);
+    }
     void disconnect() override { if (fd_>0) { close(fd_); fd_=-1; } }
 
     bool read_mem(uintptr_t addr, void* buf, size_t size) override {
         if (fd_<0||pid_<=0) return false;
         _request req = {pid_, addr & 0xFFFFFFFFFFFFULL, buf, size};
-        return ioctl(fd_, TWT_READ, &req) == 0;
+        int r = ioctl(fd_, TWT_READ, &req);
+        static int cnt=0, errs=0; cnt++;
+        if (r != 0 && ++errs <= 3)
+            printf("[TWT] ioctl(READ) 失败 ret=%d errno=%d cnt=%d pid=%d addr=0x%lx size=%zu\n",
+                r, errno, cnt, (int)pid_, addr, size);
+        if (cnt == 1) {
+            // 调试: 打印第一页前 16 字节
+            uint8_t* b = (uint8_t*)buf;
+            printf("[TWT] 首读: 0x%lx → %02x%02x%02x%02x %02x%02x%02x%02x ...\n", addr,
+                b[0],b[1],b[2],b[3],b[4],b[5],b[6],b[7]);
+        }
+        return r == 0;
     }
 
     bool write_mem(uintptr_t addr, const void* buf, size_t size) override {

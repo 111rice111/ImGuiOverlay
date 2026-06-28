@@ -31,28 +31,14 @@ inline bool try_load(IDriver* d) {
     return true;
 }
 
-// ── 预检测: 列出当前系统可用的驱动 (不改变 g_drv) ──
+// ── 预检测: 列出编译时已适配的驱动 + 运行时状态 ──
 struct DriverInfo { std::string name; bool available; std::string path; };
 
 inline std::vector<DriverInfo> list_available_drivers() {
+    // 不实际探测 (避免与 g_drv 争用 fd), 只报告编译时适配了哪些
     std::vector<DriverInfo> result;
-
-    // 探测各驱动 (试探性, 用完即销毁)
-    auto probe_one = [&](IDriver* d) {
-        DriverInfo di;
-        di.name = d->name();
-        const char* p = d->probe();
-        di.available = (p != nullptr);
-        di.path = p ? p : "";
-        result.push_back(di);
-        delete d;
-    };
-
-    // RT 驱动: 扫描 /dev/ 找 6 位设备
-    probe_one(new RTDriver());
-    // TWT 驱动: MY_CALL 内联汇编
-    probe_one(new TWTDriver());
-
+    result.push_back({"TWT", g_drv && strcmp(g_drv->name(),"TWT")==0, g_drv ? "已加载" : "已适配"});
+    result.push_back({"RT",  g_drv && strcmp(g_drv->name(),"RT" )==0, g_drv ? "已加载" : "已适配"});
     return result;
 }
 
