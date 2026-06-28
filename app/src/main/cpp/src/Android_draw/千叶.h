@@ -80,7 +80,8 @@ inline bool kernel_driver_init() {
         closedir(dir);
     }
 
-    printf("[Driver] 未找到内核驱动，回退到 process_vm_readv\n");
+    printf("[Driver] 未找到内核驱动，无法运行 (需要加载 mem_rw.ko)\n");
+    exit(1);
     return false;
 }
 
@@ -189,32 +190,13 @@ inline bool calculate_physical_address(std::uintptr_t virtual_address) {
 }
 
 inline bool vm_readv(std::uintptr_t address, void *buffer, std::size_t size) {
-  if (pid < 0) return false;
-  // ★ 优先走内核驱动
-  if (g_use_kernel_drv && g_kernel_rw) {
-    return g_kernel_rw->read(pid.load(), address, buffer, size) > 0;
-  }
-  // 回退: process_vm_readv 系统调用
-  struct iovec local = {buffer, size};
-  struct iovec remote = {reinterpret_cast<void *>(address), size};
-  ssize_t bytes =
-      syscall(process_vm_readv_syscall, pid.load(), &local, 1, &remote, 1, 0);
-  return static_cast<std::size_t>(bytes) == size;
+  if (pid < 0 || !g_use_kernel_drv || !g_kernel_rw) return false;
+  return g_kernel_rw->read(pid.load(), address, buffer, size) > 0;
 }
 
-// ★ 内核级写入: 优先内核驱动, 回退 process_vm_writev
 inline bool vm_writev(std::uintptr_t address, const void *buffer, std::size_t size) {
-  if (pid < 0) return false;
-  // ★ 优先走内核驱动
-  if (g_use_kernel_drv && g_kernel_rw) {
-    return g_kernel_rw->write(pid.load(), address, buffer, size) > 0;
-  }
-  // 回退: process_vm_writev 系统调用
-  struct iovec local = {const_cast<void *>(buffer), size};
-  struct iovec remote = {reinterpret_cast<void *>(address), size};
-  ssize_t bytes =
-      syscall(process_vm_writev_syscall, pid.load(), &local, 1, &remote, 1, 0);
-  return static_cast<std::size_t>(bytes) == size;
+  if (pid < 0 || !g_use_kernel_drv || !g_kernel_rw) return false;
+  return g_kernel_rw->write(pid.load(), address, buffer, size) > 0;
 }
 
 inline float getfloat(std::uintptr_t addr) {

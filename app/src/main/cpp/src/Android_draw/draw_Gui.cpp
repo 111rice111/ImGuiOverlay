@@ -52,7 +52,6 @@ using json = nlohmann::json;
 #include <thread>
 #include <chrono>
 #include <GLES2/gl2.h>
-#include "net_client.h"
 #include "anti_debug.h"
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
@@ -6184,98 +6183,6 @@ void Layout_tick_UI(bool *main_thread_flag) {
         ImGui::SetNextWindowSize(ImVec2(anim_win_w, anim_win_h), ImGuiCond_Always);
         ImGui::SetNextWindowBgAlpha(ui_anim_scale);
         ImGui::Begin("大米饭先生", main_thread_flag, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings);
-
-        // ★ 卡密验证界面 (触屏键盘 + 自动文件检测)
-        static char g_key_input[32] = {};
-        static bool g_key_ok = false;
-        static std::string g_key_msg;
-        static bool g_key_checking = false;
-
-        // 先尝试从加密文件自动加载
-        if (!g_key_ok && !g_key_checking && strlen(g_key_input)==0) {
-            static bool tried_file = false;
-            if (!tried_file) {
-                tried_file = true;
-                std::string did = get_device_id();
-                FILE* f = fopen(MAPS_ROOT "license.key", "rb");
-                if (f) {
-                    fseek(f,0,SEEK_END); long sz=ftell(f); fseek(f,0,SEEK_SET);
-                    if(sz>0&&sz<256){std::vector<uint8_t> enc(sz);fread(enc.data(),1,sz,f);fclose(f);
-                    std::string key;key.resize(sz);
-                    for(size_t i=0;i<(size_t)sz;i++)key[i]=(char)(enc[i]^did[i%did.size()]);
-                    while(!key.empty()&&(key.back()=='\n'||key.back()=='\r'))key.pop_back();
-                    if(!key.empty()){
-                        g_key_checking=true;
-                        std::string k=key;
-                        std::thread([k](){if(api_verify_key(k)){g_key_ok=true;g_key_msg="文件卡密通过";}else g_key_msg="文件卡密无效";g_key_checking=false;}).detach();
-                    }} else fclose(f);
-                }
-            }
-        }
-
-        if (!g_key_ok) ImGui::OpenPopup("卡密验证");
-        if (ImGui::BeginPopupModal("卡密验证", NULL, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoMove)) {
-            ImGui::Text("请输入卡密");
-            ImGui::Spacing();
-            // 显示已输入字符
-            ImGui::PushItemWidth(220);
-            ImGui::InputText("##keydisp", g_key_input, sizeof(g_key_input), ImGuiInputTextFlags_ReadOnly);
-            ImGui::PopItemWidth();
-            ImGui::Spacing();
-
-            // 字母行 A-M
-            const char* rows[] = {"QWERTYUIOP","ASDFGHJKL","ZXCVBNM"};
-            for (int r = 0; r < 3; r++) {
-                for (int c = 0; rows[r][c]; c++) {
-                    if (c > 0) ImGui::SameLine();
-                    char bl[2] = {rows[r][c], 0};
-                    if (ImGui::Button(bl, ImVec2(22, 24))) {
-                        int len = strlen(g_key_input);
-                        if (len < 30) { g_key_input[len] = rows[r][c]; g_key_input[len+1] = 0; }
-                    }
-                }
-            }
-            // 数字行
-            for (int d = 0; d < 10; d++) {
-                if (d > 0) ImGui::SameLine();
-                char dl[2] = {(char)('0'+d), 0};
-                if (ImGui::Button(dl, ImVec2(22, 24))) {
-                    int len = strlen(g_key_input);
-                    if (len < 30) { g_key_input[len] = '0'+d; g_key_input[len+1] = 0; }
-                }
-            }
-            ImGui::Spacing();
-            // 操作按钮
-            if (ImGui::Button("退格", ImVec2(50, 28))) {
-                int len = strlen(g_key_input);
-                if (len > 0) g_key_input[len-1] = 0;
-            }
-            ImGui::SameLine();
-            if (ImGui::Button("清空", ImVec2(50, 28))) { g_key_input[0] = 0; }
-            ImGui::SameLine();
-            if (!g_key_checking && strlen(g_key_input) > 0) {
-                if (ImGui::Button("验证", ImVec2(60, 28))) {
-                    g_key_checking = true;
-                    std::string k = g_key_input;
-                    std::thread([k]() {
-                        if (api_verify_key(k)) { g_key_ok = true; g_key_msg = "通过"; }
-                        else { g_key_msg = "卡密无效"; g_key_input[0] = 0; }
-                        g_key_checking = false;
-                    }).detach();
-                }
-            }
-            ImGui::SameLine();
-            if (ImGui::Button("退出", ImVec2(60, 28))) exit(0);
-            if (g_key_checking) ImGui::TextColored(g_theme.warning, "验证中...");
-            if (!g_key_msg.empty()) ImGui::TextColored(g_key_ok ? g_theme.success : g_theme.danger, "%s", g_key_msg.c_str());
-            ImGui::EndPopup();
-        }
-
-        // 验证通过后显示状态 + 远程轮询
-        if (g_key_ok) {
-            ImGui::TextColored(g_theme.success, "[已授权]");
-            static int cf=0; if(++cf>=300){cf=0;auto c=api_poll_command();if(c.valid)printf("[Cmd]%s\n",c.cmd.c_str());}
-        } else if (!g_key_msg.empty()) ImGui::TextColored(g_theme.danger, "[未授权] %s", g_key_msg.c_str());
         const ImVec2 window_pos2 = ImGui::GetWindowPos();
         const ImVec2 window_size = ImGui::GetWindowSize();
         ImDrawList *draw_list = ImGui::GetWindowDrawList();
