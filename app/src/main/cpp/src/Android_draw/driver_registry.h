@@ -1,59 +1,25 @@
 /*
  * driver_registry.h — 驱动注册中心 + 自动检测加载
  *
- * 新增驱动只需两步:
+ * 新增驱动三步:
  *   Step 1: 创建类继承 IDriver, 实现所有纯虚方法
- *   Step 2: 在 detect_and_load() 里加一行注册
- *
- * 使用:
- *   driver_init();                          // 自动检测, 加载第一个可用的驱动
- *   vm_readv → g_drv->read_mem(addr,buf,sz);
+ *   Step 2: #include 对应的头文件
+ *   Step 3: 在 driver_init() 里加一行 try_load(new XxxDriver())
  */
 
 #pragma once
 #include "driver_interface.h"
 #include "driver_rt.h"
+#include "driver_twt.h"
 #include <cstdio>
 #include <cstdlib>
+#include <string>
+#include <vector>
 
 // 全局驱动指针
 inline IDriver* g_drv = nullptr;
 
-// 注册: 尝试探测 + 连接 + 握手
-static bool try_driver(IDriver* d) {
-    const char* path = d->probe();
-    if (!path) { delete d; return false; }
-    printf("[Registry] %s 驱动探测: %s\n", d->name(), path);
-    if (d->connect() <= 0) { printf("[-] %s: 连接失败\n", d->name()); delete d; return false; }
-    if (!d->handshake()) { printf("[-] %s: 握手失败\n", d->name()); d->disconnect(); delete d; return false; }
-    printf("[Registry] %s 驱动就绪 (fd=%d)\n", d->name(), d->get_fd());
-    return true;
-}
-
-// ── 在此添加新驱动 ──
-// 顺序 = 优先级; 越靠前越优先
-inline void detect_and_load() {
-    if (g_drv) return;
-
-    // 1. RT 内核驱动 (通用, ioctl 0x800-0x803)
-    if (try_driver(new RTDriver())) { g_drv = g_drv ? g_drv : (IDriver*)0; /* set below */ return; }
-    // g_drv 已在 try_driver 外部设置, 用下面的方式:
-    // 实际: try_driver 不设置 g_drv, 我们需要在成功时设置
-
-    // 2. QXQD 驱动 (1q2w3e4r5t 加密握手)
-    // if (try_driver(new QXQDDriver())) return;
-
-    // 3. MemRW 自有驱动
-    // if (try_driver(new MemRWDriver())) return;
-
-    // 4. ProcessVM 回退 (syscall, 无内核模块)
-    // if (try_driver(new ProcessVMDriver())) return;
-
-    printf("[Registry] !! 未找到任何可用驱动 !!\n");
-    exit(1);
-}
-
-// ── 修正: try_driver 成功时设置 g_drv ──
+// ── 尝试加载驱动 ──
 inline bool try_load(IDriver* d) {
     const char* path = d->probe();
     if (!path) { delete d; return false; }
@@ -65,15 +31,38 @@ inline bool try_load(IDriver* d) {
     return true;
 }
 
+// ── 预检测: 列出当前系统可用的驱动 (不改变 g_drv) ──
+struct DriverInfo { std::string name; bool available; std::string path; };
+
+inline std::vector<DriverInfo> list_available_drivers() {
+    std::vector<DriverInfo> result;
+
+    // 探测各驱动 (试探性, 用完即销毁)
+    auto probe_one = [&](IDriver* d) {
+        DriverInfo di;
+        di.name = d->name();
+        const char* p = d->probe();
+        di.available = (p != nullptr);
+        di.path = p ? p : "";
+        result.push_back(di);
+        delete d;
+    };
+
+    // RT 驱动: 扫描 /dev/ 找 6 位设备
+    probe_one(new RTDriver());
+    // TWT 驱动: MY_CALL 内联汇编
+    probe_one(new TWTDriver());
+
+    return result;
+}
+
 // ── 统一入口 ──
 inline void driver_init() {
     if (g_drv) return;
 
-    // 按优先级尝试各驱动 (在此添加新驱动)
-    if (try_load(new RTDriver())) return;
-    // if (try_load(new QXQDDriver())) return;
-    // if (try_load(new MemRWDriver())) return;
-    // if (try_load(new ProcessVMDriver())) return;
+    // 按优先级尝试各驱动 (在此添加新驱动 — 只需一行)
+    if (try_load(new TWTDriver())) return;  // TWT 优先级最高
+    if (try_load(new RTDriver())) return;   // RT 通用版
 
     printf("[Registry] !! 未找到任何可用驱动 !!\n");
     exit(1);

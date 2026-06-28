@@ -6185,9 +6185,23 @@ void Layout_tick_UI(bool *main_thread_flag) {
         ImGui::SetNextWindowBgAlpha(ui_anim_scale);
         ImGui::Begin("大米饭先生", main_thread_flag, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings);
 
-        // ★ 驱动状态
-        if (g_drv) ImGui::TextColored(g_theme.success, "[内核驱动就绪]");
-        else ImGui::TextColored(g_theme.danger, "[!] 驱动未加载");
+        // ★ 驱动状态: 显示当前驱动 + 已适配驱动列表
+        if (g_drv) {
+            ImGui::TextColored(g_theme.success, "[%s 驱动] fd=%d", g_drv->name(), g_drv->get_fd());
+        } else {
+            ImGui::TextColored(g_theme.danger, "[!] 驱动未加载");
+        }
+        ImGui::SameLine();
+        ImGui::TextDisabled("|");
+        ImGui::SameLine();
+        auto drv_list = list_available_drivers();
+        for (size_t i = 0; i < drv_list.size(); i++) {
+            if (i > 0) { ImGui::SameLine(); ImGui::TextDisabled(","); ImGui::SameLine(); }
+            ImVec4 dim = {0.5f, 0.5f, 0.5f, 0.5f};
+            ImGui::TextColored(drv_list[i].available ? g_theme.success : dim,
+                "%s", drv_list[i].name.c_str());
+        }
+        ImGui::TextDisabled("(已适配驱动)");
         const ImVec2 window_pos2 = ImGui::GetWindowPos();
         const ImVec2 window_size = ImGui::GetWindowSize();
         ImDrawList *draw_list = ImGui::GetWindowDrawList();
