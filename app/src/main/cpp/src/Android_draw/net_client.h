@@ -26,7 +26,7 @@
 using json = nlohmann::json;
 
 // ========== 配置 ==========
-#define NET_SERVER_HOST "192.168.1.3"
+#define NET_SERVER_HOST "127.0.0.1"
 #define NET_SERVER_PORT 8080
 #define NET_TIMEOUT_SEC 10
 
