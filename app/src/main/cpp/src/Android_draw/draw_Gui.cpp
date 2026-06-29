@@ -5006,7 +5006,10 @@ void Draw_Main_Optimized(ImDrawList *Draw) {
                 g_floor_debounce = 0;
             }
         }
-        Draw_MapOverlay(Draw, current_data);
+        // ★ 未识别地图时不显示小地图
+        if (g_current_map_index >= 0 && g_current_map_index < (int)g_all_maps.size() && !g_all_maps[g_current_map_index].empty()) {
+            Draw_MapOverlay(Draw, current_data);
+        }
     }
 
     // ========== 3D立体路径渲染 ==========
