@@ -7389,25 +7389,60 @@ void Layout_tick_UI(bool *main_thread_flag) {
             case 7:  // 路径导入
             {
                 StyledSectionHeader("从攻略图导入路径", g_theme.text_title, g_density);
-                ImGui::TextColored(g_theme.text_muted, "将 extract_paths.py 生成的像素坐标 txt 导入为世界坐标导航线");
+                ImGui::TextColored(g_theme.text_muted, "将 extract_paths.py 生成的像素坐标自动导入为导航线");
                 ImGui::Spacing();
                 
                 // ── 当前地图信息 ──
-                if (g_current_map_index >= 0 && g_current_map_index < (int)g_all_maps.size()) {
+                bool map_ready = (g_current_map_index >= 0 && g_current_map_index < (int)g_all_maps.size());
+                if (map_ready) {
                     const auto& cfg = g_all_maps[g_current_map_index][SafeClampFloorIdx(g_current_map_index, g_current_floor_index)];
                     ImGui::TextColored(g_theme.info, "当前地图: %s (楼层 %d)", cfg.name, cfg.floorIndex + 1);
                     
-                    // 纹理尺寸
-                    int tex_w = g_map_texture_w[g_current_map_index][g_current_floor_index];
-                    int tex_h = g_map_texture_h[g_current_map_index][g_current_floor_index];
-                    if (tex_w > 0 && tex_h > 0) {
+                    // 读取攻略图 PNG 的尺寸（从纹理文件头解析）
+                    int png_w = 0, png_h = 0;
+                    {
+                        FILE* f = fopen(cfg.texturePath, "rb");
+                        if (f) {
+                            unsigned char hdr[24];
+                            if (fread(hdr, 1, 24, f) == 24 && hdr[0]==0x89 && hdr[1]=='P' && hdr[2]=='N' && hdr[3]=='G') {
+                                png_w = (hdr[16]<<24)|(hdr[17]<<16)|(hdr[18]<<8)|hdr[19];
+                                png_h = (hdr[20]<<24)|(hdr[21]<<16)|(hdr[22]<<8)|hdr[23];
+                            }
+                            fclose(f);
+                        }
+                    }
+                    if (png_w > 0) {
                         ImGui::TextColored(ImVec4(0.3f, 0.9f, 0.3f, 1.0f),
-                            "纹理尺寸: %d x %d [已加载]", tex_w, tex_h);
+                            "攻略图尺寸: %d x %d (自动检测)", png_w, png_h);
+                        g_import_tex_w = png_w;
+                        g_import_tex_h = png_h;
                     } else {
                         ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.2f, 1.0f),
-                            "纹理尺寸: 未加载 (请先在地图管理中打开地图)");
+                            "攻略图尺寸: 无法检测 (需 PNG 文件)");
                     }
                     ImGui::TextColored(g_theme.text_muted, "校准状态: %s", cfg.calibrated ? "已校准" : "未校准(!)");
+                    
+                    // 自动构造 txt 路径
+                    // texturePath 如: /data/local/bin/maps/map2_floor1.png
+                    // → txt 路径:    /data/local/bin/maps/map2_floor1_main.txt
+                    std::string tex_path(cfg.texturePath);
+                    size_t dot = tex_path.rfind('.');
+                    std::string base = (dot != std::string::npos) ? tex_path.substr(0, dot) : tex_path;
+                    std::string main_txt = base + "_main.txt";
+                    std::string sub_txt  = base + "_sub.txt";
+                    
+                    bool main_exists = (access(main_txt.c_str(), F_OK) == 0);
+                    bool sub_exists  = (access(sub_txt.c_str(), F_OK) == 0);
+                    
+                    ImGui::Spacing();
+                    ImGui::Text("主路文件: %s", main_txt.c_str());
+                    ImGui::SameLine();
+                    ImGui::TextColored(main_exists ? ImVec4(0.3f,1.0f,0.3f,1.0f) : ImVec4(1.0f,0.3f,0.3f,1.0f),
+                        main_exists ? "[存在]" : "[不存在]");
+                    ImGui::Text("辅路文件: %s", sub_txt.c_str());
+                    ImGui::SameLine();
+                    ImGui::TextColored(sub_exists ? ImVec4(0.3f,1.0f,0.3f,1.0f) : ImVec4(1.0f,0.3f,0.3f,1.0f),
+                        sub_exists ? "[存在]" : "[不存在]");
                 } else {
                     ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "请先识别地图");
                 }
@@ -7415,136 +7450,104 @@ void Layout_tick_UI(bool *main_thread_flag) {
                 ImGui::Separator();
                 ImGui::Spacing();
                 
-                // ── 纹理尺寸手动输入 ──
-                StyledSectionHeader("导入参数", g_theme.text_title, g_density);
-                ImGui::Text("纹理尺寸 (像素):");
-                ImGui::SameLine();
-                if (StyledButton("自动填充", ButtonVariant::Secondary, ImVec2(0,0), g_density)) {
-                    if (g_current_map_index >= 0) {
-                        g_import_tex_w = g_map_texture_w[g_current_map_index][g_current_floor_index];
-                        g_import_tex_h = g_map_texture_h[g_current_map_index][g_current_floor_index];
-                        if (g_import_tex_w > 0) g_import_status = "纹理尺寸已自动填充";
-                    }
-                }
-                ImGui::PushItemWidth(100.0f * g_density);
-                ImGui::InputInt("宽度", &g_import_tex_w); ImGui::SameLine();
-                ImGui::InputInt("高度", &g_import_tex_h);
-                ImGui::PopItemWidth();
-                
-                ImGui::Spacing();
-                ImGui::Text("坐标文件路径 (txt):");
-                ImGui::PushItemWidth(-1);
-                ImGui::InputText("##txtpath", g_import_txt_path, sizeof(g_import_txt_path));
-                ImGui::PopItemWidth();
-                ImGui::TextColored(g_theme.text_muted, "例: /data/local/bin/maps/map2_floor1_main.txt");
-                
-                ImGui::Spacing();
-                
-                // ── 操作按钮 ──
-                if (StyledButton("加载预览", ButtonVariant::Primary, ImVec2(0,0), g_density)) {
+                // ── 内部函数：加载指定 txt → 预览 ──
+                auto load_preview = [&](const std::string& txt_path) {
                     g_import_preview_paths.clear();
                     g_has_import_preview = false;
                     g_import_status.clear();
-                    g_import_success_count = 0;
                     
-                    if (g_import_tex_w <= 0 || g_import_tex_h <= 0) {
-                        g_import_status = "错误: 请先设置纹理尺寸";
-                    } else if (strlen(g_import_txt_path) == 0) {
-                        g_import_status = "错误: 请指定 txt 文件路径";
-                    } else if (g_current_map_index < 0) {
-                        g_import_status = "错误: 请先识别地图";
+                    if (!map_ready) { g_import_status = "错误: 请先识别地图"; return; }
+                    if (g_import_tex_w <= 0) { g_import_status = "错误: 无法检测攻略图尺寸"; return; }
+                    
+                    std::ifstream ifs(txt_path);
+                    if (!ifs) { g_import_status = "错误: 文件不存在 — " + txt_path; return; }
+                    
+                    const auto& cfg = g_all_maps[g_current_map_index][SafeClampFloorIdx(g_current_map_index, g_current_floor_index)];
+                    float floorZ = (g_current_floor_index == 1) ? 200.0f : 0.0f;
+                    
+                    std::vector<Vector3A> current_path;
+                    std::string line;
+                    int total_points = 0;
+                    
+                    while (std::getline(ifs, line)) {
+                        if (line.empty() || line[0] == '#') {
+                            if (!current_path.empty()) { g_import_preview_paths.push_back(current_path); current_path.clear(); }
+                            continue;
+                        }
+                        size_t comma = line.find(',');
+                        if (comma == std::string::npos) continue;
+                        try {
+                            int px = std::stoi(line.substr(0, comma));
+                            int py = std::stoi(line.substr(comma + 1));
+                            float u = (float)px / (float)g_import_tex_w;
+                            float v = (float)py / (float)g_import_tex_h;
+                            current_path.push_back(CoordTransform::UVToWorld(u, v, floorZ, cfg));
+                            total_points++;
+                        } catch (...) { continue; }
+                    }
+                    if (!current_path.empty()) { g_import_preview_paths.push_back(current_path); }
+                    
+                    if (g_import_preview_paths.empty()) {
+                        g_import_status = "警告: 未解析到有效坐标";
                     } else {
-                        std::ifstream ifs(g_import_txt_path);
-                        if (!ifs) {
-                            g_import_status = std::string("错误: 无法打开文件 ") + g_import_txt_path;
+                        g_has_import_preview = true;
+                        g_import_preview_map_idx = g_current_map_index;
+                        g_import_preview_floor_idx = g_current_floor_index;
+                        char buf[128];
+                        snprintf(buf, sizeof(buf), "预览: %zu条路径/%d点 [黄色虚线]",
+                                 g_import_preview_paths.size(), total_points);
+                        g_import_status = buf;
+                        AddNotification(buf, 3.0f, ImVec4(1.0f, 1.0f, 0.0f, 1.0f));
+                    }
+                };
+                
+                // ── 操作按钮 (全部大按钮，适合手机触屏) ──
+                ImVec2 btn_size(ImGui::GetContentRegionAvail().x * 0.48f, 48.0f * g_density);
+                
+                if (map_ready) {
+                    const auto& cfg = g_all_maps[g_current_map_index][SafeClampFloorIdx(g_current_map_index, g_current_floor_index)];
+                    std::string tex_path(cfg.texturePath);
+                    size_t dot = tex_path.rfind('.');
+                    std::string base = (dot != std::string::npos) ? tex_path.substr(0, dot) : tex_path;
+                    std::string main_txt = base + "_main.txt";
+                    std::string sub_txt  = base + "_sub.txt";
+                    
+                    if (StyledButton("加载主路 [红色路径]", ButtonVariant::Primary, btn_size, g_density)) {
+                        load_preview(main_txt);
+                    }
+                    ImGui::SameLine();
+                    if (StyledButton("加载辅路 [蓝色路径]", ButtonVariant::Primary, btn_size, g_density)) {
+                        load_preview(sub_txt);
+                    }
+                    
+                    ImGui::Spacing();
+                    
+                    if (StyledButton("确认导入", ButtonVariant::Success, ImVec2(btn_size.x, btn_size.y), g_density)) {
+                        if (!g_has_import_preview || g_import_preview_paths.empty()) {
+                            g_import_status = "错误: 没有可导入的预览数据";
+                        } else if (g_current_map_index < 0) {
+                            g_import_status = "错误: 无效地图";
                         } else {
-                            const auto& cfg = g_all_maps[g_current_map_index][SafeClampFloorIdx(g_current_map_index, g_current_floor_index)];
-                            float floorZ = (g_current_floor_index == 1) ? 200.0f : 0.0f;
-                            
-                            std::vector<Vector3A> current_path;
-                            std::string line;
-                            int total_points = 0;
-                            
-                            while (std::getline(ifs, line)) {
-                                // 跳过空行和注释
-                                if (line.empty() || line[0] == '#') {
-                                    if (!current_path.empty()) {
-                                        g_import_preview_paths.push_back(current_path);
-                                        current_path.clear();
-                                    }
-                                    continue;
-                                }
-                                // 解析 "x,y" 格式
-                                size_t comma = line.find(',');
-                                if (comma == std::string::npos) continue;
-                                try {
-                                    int px = std::stoi(line.substr(0, comma));
-                                    int py = std::stoi(line.substr(comma + 1));
-                                    
-                                    // 像素坐标 → UV → 世界坐标
-                                    float u = (float)px / (float)g_import_tex_w;
-                                    float v = (float)py / (float)g_import_tex_h;
-                                    Vector3A world = CoordTransform::UVToWorld(u, v, floorZ, cfg);
-                                    current_path.push_back(world);
-                                    total_points++;
-                                } catch (...) { continue; }
+                            int cnt = 0;
+                            for (auto& path : g_import_preview_paths) {
+                                if (path.size() >= 2) { g_saved_paths.push_back(path); cnt++; }
                             }
-                            if (!current_path.empty()) {
-                                g_import_preview_paths.push_back(current_path);
-                            }
-                            
-                            if (g_import_preview_paths.empty()) {
-                                g_import_status = "警告: 未解析到有效坐标";
-                            } else {
-                                g_has_import_preview = true;
-                                g_import_preview_map_idx = g_current_map_index;
-                                g_import_preview_floor_idx = g_current_floor_index;
-                                char buf[128];
-                                snprintf(buf, sizeof(buf), "预览已加载: %zu 条路径, %d 个坐标点",
-                                         g_import_preview_paths.size(), total_points);
-                                g_import_status = buf;
-                                AddNotification("预览已加载，请在地图上查看黄色虚线", 3.0f, ImVec4(1.0f, 1.0f, 0.0f, 1.0f));
-                            }
+                            MarkPathsDirty();
+                            g_pathGraph.dirty = true;
+                            char buf[128];
+                            snprintf(buf, sizeof(buf), "已导入 %d 条路径!", cnt);
+                            g_import_status = buf;
+                            AddNotification(buf, 3.0f, ImVec4(0.3f, 1.0f, 0.3f, 1.0f));
+                            g_import_preview_paths.clear();
+                            g_has_import_preview = false;
                         }
                     }
-                }
-                
-                ImGui::SameLine();
-                if (StyledButton("确认导入", ButtonVariant::Success, ImVec2(0,0), g_density)) {
-                    if (!g_has_import_preview || g_import_preview_paths.empty()) {
-                        g_import_status = "错误: 没有可导入的预览数据";
-                    } else if (g_current_map_index < 0) {
-                        g_import_status = "错误: 无效地图";
-                    } else {
-                        // 将预览路径追加到 g_saved_paths
-                        for (auto& path : g_import_preview_paths) {
-                            if (path.size() >= 2) {
-                                g_saved_paths.push_back(path);
-                                g_import_success_count++;
-                            }
-                        }
-                        MarkPathsDirty();
-                        g_pathGraph.dirty = true;
-                        
-                        char buf[128];
-                        snprintf(buf, sizeof(buf), "已导入 %d 条路径 (共 %d 段, 黄色虚线预览)",
-                                 g_import_success_count, (int)g_import_preview_paths.size());
-                        g_import_status = buf;
-                        AddNotification(buf, 3.0f, ImVec4(0.3f, 1.0f, 0.3f, 1.0f));
-                        
-                        // 清除预览
+                    ImGui::SameLine();
+                    if (StyledButton("清除预览", ButtonVariant::Danger, ImVec2(btn_size.x, btn_size.y), g_density)) {
                         g_import_preview_paths.clear();
                         g_has_import_preview = false;
-                        g_import_success_count = 0;
+                        g_import_status = "预览已清除";
                     }
-                }
-                
-                ImGui::SameLine();
-                if (StyledButton("清除预览", ButtonVariant::Danger, ImVec2(0,0), g_density)) {
-                    g_import_preview_paths.clear();
-                    g_has_import_preview = false;
-                    g_import_success_count = 0;
-                    g_import_status = "预览已清除";
                 }
                 
                 ImGui::Spacing();
@@ -7552,25 +7555,23 @@ void Layout_tick_UI(bool *main_thread_flag) {
                 
                 // ── 状态信息 ──
                 if (!g_import_status.empty()) {
-                    ImColor sc = IM_COL32(255, 255, 0, 255);
+                    ImVec4 sc = ImVec4(1.0f, 1.0f, 0.0f, 1.0f);
                     if (g_import_status.find("错误") != std::string::npos)
-                        sc = IM_COL32(255, 80, 80, 255);
-                    else if (g_import_status.find("成功") != std::string::npos || g_import_status.find("已导入") != std::string::npos)
-                        sc = IM_COL32(80, 255, 80, 255);
-                    ImGui::TextColored(sc, "状态: %s", g_import_status.c_str());
+                        sc = ImVec4(1.0f, 0.3f, 0.3f, 1.0f);
+                    else if (g_import_status.find("已导入") != std::string::npos || g_import_status.find("预览:") != std::string::npos)
+                        sc = ImVec4(0.3f, 1.0f, 0.3f, 1.0f);
+                    ImGui::TextColored(sc, "%s", g_import_status.c_str());
                 }
                 
                 ImGui::Spacing();
                 ImGui::Separator();
                 StyledSectionHeader("使用说明", g_theme.text_title, g_density);
                 ImGui::TextWrapped(
-                    "1. 用 extract_paths.py 从攻略图提取像素坐标 → 生成 *_main.txt / *_sub.txt\n"
-                    "2. 将 txt 文件 push 到手机 /data/local/bin/maps/ 目录\n"
-                    "3. 打开对应地图, 确保纹理已加载且已校准\n"
-                    "4. 设置纹理尺寸 (或点「自动填充」)\n"
-                    "5. 输入 txt 文件路径 → 点「加载预览」\n"
-                    "6. 确认小地图上黄色虚线正确 → 点「确认导入」\n"
-                    "7. 导入的路径将持久化到 map_config.json, 参与导航寻路"
+                    "1. 电脑: python extract_paths.py 攻略图文件夹\n"
+                    "2. 手机: 将生成的 *_main.txt / *_sub.txt 放到 /data/local/bin/maps/\n"
+                    "3. 打开地图 → 切到本标签页 → 点「加载主路」或「加载辅路」\n"
+                    "4. 小地图出现黄色虚线预览 → 确认正确后点「确认导入」\n"
+                    "5. 导入的路径立即参与导航寻路 + 持久化保存"
                 );
             }
                 break;
