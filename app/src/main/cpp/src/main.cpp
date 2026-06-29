@@ -40,10 +40,14 @@ int main(int argc, char *argv[]) {
     
     std::cout << "\033[2J\033[H";
     std::cout << "\033[35m";
+    std::cout << "================================================" << std::endl;
+    std::cout << "  大米饭先生" << std::endl;
+    std::cout << "  https://t.me/+67uRf9NT_04xMGM1" << std::endl;
+    std::cout << "================================================" << std::endl;
+    std::cout << "\033[0m" << std::endl;
     k_print(">>> 系统初始化中...", 10);
     k_print(">>> 核心载入中...", 30);
     k_print(">>> 运行状态: 正常", 10);
-    std::cout << "\033[0m" << std::endl;
 
     ::graphics = GraphicsManager::getGraphicsInterface(GraphicsManager::OPENGL);
     ::screen_config();
