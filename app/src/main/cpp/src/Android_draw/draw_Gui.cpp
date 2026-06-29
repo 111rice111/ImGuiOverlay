@@ -2117,6 +2117,8 @@ static void LoadMapConfigFromJSON() {
         MapConfig cfg;
         std::string map_name = m.value("name", "未知地图");
         std::string map_tex = m.value("texture", "");
+        if (map_tex.empty()) map_tex = m.value("texturePath", ""); // 兼容旧 key
+        if (!map_tex.empty() && map_tex[0] != '/') map_tex = MAPS_ROOT + map_tex; // 相对路径 → 绝对路径
         dynamic_names.push_back(map_name);
         dynamic_paths.push_back(map_tex);
         cfg.name = dynamic_names.back().c_str();
@@ -7401,7 +7403,16 @@ void Layout_tick_UI(bool *main_thread_flag) {
                     // 读取攻略图尺寸（从纹理文件头解析，支持PNG+JPEG）
                     int img_w = 0, img_h = 0;
                     {
-                        FILE* f = fopen(cfg.texturePath, "rb");
+                        // texturePath 可能为空 — 用 name 推断路径
+                        const char* tex_path = cfg.texturePath;
+                        std::string fallback_path;
+                        if (!tex_path || !tex_path[0]) {
+                            fallback_path = std::string(MAPS_ROOT) + cfg.name;
+                            for (auto& c : fallback_path) if (c == ' ') c = '_'; // "地图1 一楼" → "地图1_一楼"
+                            fallback_path += ".png";
+                            tex_path = fallback_path.c_str();
+                        }
+                        FILE* f = fopen(tex_path, "rb");
                         if (f) {
                             unsigned char hdr[24];
                             if (fread(hdr, 1, 24, f) == 24) {
@@ -7455,9 +7466,13 @@ void Layout_tick_UI(bool *main_thread_flag) {
                     ImGui::TextColored(g_theme.text_muted, "校准状态: %s", cfg.calibrated ? "已校准" : "未校准(!)");
                     
                     // 自动构造 txt 路径
-                    // texturePath 如: /data/local/bin/maps/map2_floor1.png
-                    // → txt 路径:    /data/local/bin/maps/map2_floor1_main.txt
-                    std::string tex_path(cfg.texturePath);
+                    // 优先用 texturePath, 为空时用 MAPS_ROOT + name 推断
+                    std::string tex_path(cfg.texturePath && cfg.texturePath[0] ? cfg.texturePath : "");
+                    if (tex_path.empty()) {
+                        tex_path = std::string(MAPS_ROOT) + cfg.name;
+                        for (auto& c : tex_path) if (c == ' ') c = '_';
+                        tex_path += ".png";
+                    }
                     size_t dot = tex_path.rfind('.');
                     std::string base = (dot != std::string::npos) ? tex_path.substr(0, dot) : tex_path;
                     std::string main_txt = base + "_main.txt";
@@ -7538,7 +7553,12 @@ void Layout_tick_UI(bool *main_thread_flag) {
                 
                 if (map_ready) {
                     const auto& cfg = g_all_maps[g_current_map_index][SafeClampFloorIdx(g_current_map_index, g_current_floor_index)];
-                    std::string tex_path(cfg.texturePath);
+                    std::string tex_path(cfg.texturePath && cfg.texturePath[0] ? cfg.texturePath : "");
+                    if (tex_path.empty()) {
+                        tex_path = std::string(MAPS_ROOT) + cfg.name;
+                        for (auto& c : tex_path) if (c == ' ') c = '_';
+                        tex_path += ".png";
+                    }
                     size_t dot = tex_path.rfind('.');
                     std::string base = (dot != std::string::npos) ? tex_path.substr(0, dot) : tex_path;
                     std::string main_txt = base + "_main.txt";
