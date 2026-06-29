@@ -1,6 +1,25 @@
 ========================================
   ImGuiOverlay - 构建交付记录
 ========================================
+
+--- v2.13-stable (2026-06-29 21:36) ---
+MD5: 356479c671652fa56d290228d00ea2fd
+新增: Tab 7「路径导入」— 从攻略图像素坐标 txt 导入世界坐标导航线
+  - 像素→世界坐标转换 (CoordTransform::UVToWorld)
+  - 黄色虚线预览 (确认无误后再导入)
+  - 导入后持久化到 map_config.json + 参与寻路
+基础设施: g_map_texture_w/h[][] 纹理尺寸存储
+Tab 编号变更: 7→路径导入, 8→调试信息, 9→关于
+
+--- v2.12-stable (2026-06-29 20:22) ---
+MD5: 09d19bd6b23fff7f58437a9fad0e8853
+变更: 启动画面品牌重命名 → "大米饭先生" + Telegram 链接
+文件: main.cpp (启动画面), deploy.sh, README
+
+--- v2.11-stable (2026-06-29) ---
+新增: 交互式启动流程 (TTY检测 → 驱动选择 → 后台模式选择)
+文件: main.cpp, driver_registry.h
+
 构建日期: 2026-06-27 17:20
 编译方式: gradlew assembleRelease（增量编译）
 编译结果: BUILD SUCCESSFUL（0 error）

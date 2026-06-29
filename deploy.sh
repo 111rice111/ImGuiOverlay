@@ -14,8 +14,8 @@ set -euo pipefail
 # ========== 配置 ==========
 PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
 BINARY_NAME="overlay"
-REMOTE_PATH="/data/local/tmp/${BINARY_NAME}"
-DATA_DIR="/data/local/tmp/maps"
+REMOTE_PATH="/data/local/bin/${BINARY_NAME}"
+DATA_DIR="/data/local/bin/maps"
 ASSETS_DIR="${PROJECT_DIR}/app/src/main/assets"
 BUILD_DIR="${PROJECT_DIR}/app/build/intermediates/cxx/RelWithDebInfo"
 LOG_FILE="${PROJECT_DIR}/deploy.log"
