@@ -141,4 +141,17 @@
 - origin/main..main 无待推送 commit
 - 备注：静默退出（本地有 5 个文件已修改但未提交：draw_Gui.cpp, driver_interface.h, driver_registry.h, driver_rt.h, driver_twt.h）
 
+## 2026-06-29 17:35
+- 状态：推送失败（网络不可用）
+- 待推送 commit：1 个
+  - ff6784e v2.10: 添加多链动作ID扫描调试面板
+- 原因：Recv failure: Connection was reset（git push 失败）
+- 备注：按规则静默退出，等待下一轮自动重推
+
+## 2026-06-29 19:27
+- 状态：推送失败（网络不可用）
+- 待推送 commit：1 个
+  - 76762d1 v2.11: 扩展动作ID多链扫描到50+条（0x2C8/组件入口/交叉组合）
+- 原因：Recv failure: Connection was reset（git push 失败）
+- 备注：按规则静默退出，等待下一轮自动重推
 

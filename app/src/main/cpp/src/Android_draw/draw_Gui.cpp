@@ -113,7 +113,7 @@ static char g_map_scores_buf[2048] = "";          // 最近评分信息的字符
 static std::vector<std::vector<std::vector<Vector3A>>> g_exits;             // 出口世界坐标（用于路径规划）
 static std::vector<std::vector<std::vector<ImVec2>>>      g_exit_uvs;         // 出口屏幕UV坐标（用于渲染，0~1，与点击同空间）
 
-static float g_map_opacity = 1.0f;
+static float g_map_opacity = 0.55f;
 static float g_label_opacity = 1.0f;
 static float g_self_opacity = 1.0f;
 static float g_route_opacity = 1.0f;
@@ -121,12 +121,22 @@ static float g_saved_path_opacity = 0.6f;
 
 static bool g_draw_path_mode = false;
 static std::vector<Vector3A> g_current_drawing_path;
-static int  g_selected_path_index = -1;          // 当前选中的路径索引 (-1=未选中)
-static std::vector<std::vector<Vector3A>> g_saved_paths;  // 当前地图/楼层的路径（便捷视图）
-static std::vector<std::vector<std::vector<std::vector<Vector3A>>>> g_saved_paths_by_map; // 全量存储 [mapIdx][floorIdx][pathIdx][ptIdx]
-static int g_last_paths_map_idx = -1;   // 上次同步路径的地图索引
-static int g_last_paths_floor_idx = -1; // 上次同步路径的楼层索引
+static int  g_selected_path_index = -1;
+static std::vector<std::vector<Vector3A>> g_saved_paths;
+static std::vector<char> g_path_visible;              // 每条路径显隐
+static std::vector<ImU32> g_path_colors;              // 每条路径颜色
+static std::vector<std::vector<std::vector<std::vector<Vector3A>>>> g_saved_paths_by_map;
+static int g_last_paths_map_idx = -1;
+static int g_last_paths_floor_idx = -1;
 static int g_path_edit_mode = 0;
+// 手动确认保存
+static std::vector<Vector3A> g_pending_path;
+static bool g_pending_save_confirm = false;
+static float g_pending_save_timeout = 0.0f;
+// 绘制模式地图放大
+static float g_draw_map_size_bak = 800.0f;
+static float g_draw_map_posx_bak = 700.0f;
+static float g_draw_map_posy_bak = 200.0f;
 
 // === 路径导入预览 ===
 static std::vector<std::vector<Vector3A>> g_import_preview_paths;   // 预览路径（像素→世界坐标转换后）
@@ -204,6 +214,14 @@ static float g_grid_spacing = 100.0f;
 static float g_snap_distance = 30.0f;
 static bool  g_show_grid = false;
 static float g_grid_alpha = 0.3f;
+
+static bool  g_show_3d_paths = false;
+static float g_3d_path_height = 10.0f;
+static int   g_3d_path_style = 0;    // 0=线条,1=圆点,2=箭头
+static float g_3d_path_fade_dist = 30.0f;
+static float g_3d_line_width = 3.0f;
+static float g_3d_dot_radius = 15.0f;
+static float g_3d_flow_speed = 20.0f;
 static bool  g_show_saved_paths = true;
 
 // === 正交绘制模式（强制水平/垂直 + 直角转角） ===
@@ -840,6 +858,12 @@ static void LoadConfig() {
     getBool("g_map_auto_detect", g_map_auto_detect);
     // 不恢复 g_current_map_index — 每次启动强制重检测，避免残留旧地图索引导致显示错乱
     getFloat("g_map_display_size", g_map_display_size);
+    getFloat("g_3d_path_height", g_3d_path_height);
+    getInt("g_3d_path_style", g_3d_path_style);
+    getFloat("g_3d_path_fade_dist", g_3d_path_fade_dist);
+    getFloat("g_3d_line_width", g_3d_line_width);
+    getFloat("g_3d_dot_radius", g_3d_dot_radius);
+    getFloat("g_3d_flow_speed", g_3d_flow_speed);
     getFloat("g_map_pos_x", g_map_pos_x);
     getFloat("g_map_pos_y", g_map_pos_y);
     getFloat("g_treasure_threshold", g_treasure_threshold);
@@ -990,6 +1014,12 @@ static void SaveConfig() {
     file << "g_map_auto_detect=" << g_map_auto_detect << "\n";
     file << "g_current_map_index=" << g_current_map_index << "\n";
     file << "g_map_display_size=" << g_map_display_size << "\n";
+    file << "g_3d_path_height=" << g_3d_path_height << "\n";
+    file << "g_3d_path_style=" << g_3d_path_style << "\n";
+    file << "g_3d_path_fade_dist=" << g_3d_path_fade_dist << "\n";
+    file << "g_3d_line_width=" << g_3d_line_width << "\n";
+    file << "g_3d_dot_radius=" << g_3d_dot_radius << "\n";
+    file << "g_3d_flow_speed=" << g_3d_flow_speed << "\n";
     file << "g_map_pos_x=" << g_map_pos_x << "\n";
     file << "g_map_pos_y=" << g_map_pos_y << "\n";
     file << "g_treasure_threshold=" << g_treasure_threshold << "\n";
@@ -2942,6 +2972,9 @@ void Draw_MapOverlay(ImDrawList* Draw, const std::vector<DataStruct>& data) {
         if (g_current_map_index >= 0 && g_current_map_index < (int)g_saved_paths_by_map.size() &&
             g_current_floor_index >= 0 && g_current_floor_index < (int)g_saved_paths_by_map[g_current_map_index].size()) {
             g_saved_paths = g_saved_paths_by_map[g_current_map_index][g_current_floor_index];
+            g_path_visible.clear();
+            g_path_colors.clear();
+            for (size_t v = 0; v < g_saved_paths.size(); v++) { g_path_visible.push_back(true); g_path_colors.push_back(0); }
         }
         g_last_paths_map_idx = g_current_map_index;
         g_last_paths_floor_idx = g_current_floor_index;
@@ -3307,7 +3340,7 @@ void Draw_MapOverlay(ImDrawList* Draw, const std::vector<DataStruct>& data) {
                                             IM_COL32(255, 220, 50, 220), 3.0f);
                         Draw->AddText(ImGui::GetFont(), 14.0f,
                                       ImVec2(exitScreen.x + 10, exitScreen.y - 8),
-                                      IM_COL32(255, 220, 50, 220), "[出口]");
+                                      IM_COL32(255, 220, 50, 220), "[目的地]");
                     }
                 }
 
@@ -3488,7 +3521,7 @@ void Draw_MapOverlay(ImDrawList* Draw, const std::vector<DataStruct>& data) {
                                         IM_COL32(255, 220, 50, 220), 3.0f);
                     Draw->AddText(ImGui::GetFont(), 14.0f,
                                   ImVec2(exitScr.x+12, exitScr.y-8),
-                                  IM_COL32(255, 220, 50, 220), "[出口终点]");
+                                  IM_COL32(255, 220, 50, 220), "[目的地终点]");
                 }
             }
         }
@@ -3511,6 +3544,7 @@ void Draw_MapOverlay(ImDrawList* Draw, const std::vector<DataStruct>& data) {
     // ========== 已保存路径绘制（带开关控制 + 选中高亮） ==========
     if (g_show_saved_paths) {
         for (size_t pi = 0; pi < g_saved_paths.size(); pi++) {
+            if (pi < g_path_visible.size() && !g_path_visible[pi]) continue;
             auto& path = g_saved_paths[pi];
             if (path.size() < 2) continue;
 
@@ -3676,7 +3710,7 @@ void Draw_MapOverlay(ImDrawList* Draw, const std::vector<DataStruct>& data) {
             // 出口方块加编号
             Draw->AddRectFilled(ImVec2(p.x-6, p.y-6), ImVec2(p.x+6, p.y+6), IM_COL32(0, 255, 80, (int)(220 * g_label_opacity)), 2.0f);
             char eLabel[16];
-            snprintf(eLabel, sizeof(eLabel), "出口%zu", ei+1);
+            snprintf(eLabel, sizeof(eLabel), "目的地%zu", ei+1);
             Draw->AddText(ImGui::GetFont(), 12.0f, ImVec2(p.x + 8, p.y - 8), IM_COL32(0, 255, 80, (int)(200 * g_label_opacity)), eLabel);
 
             // 点击出口开始拖动
@@ -3708,14 +3742,14 @@ void Draw_MapOverlay(ImDrawList* Draw, const std::vector<DataStruct>& data) {
                 g_drag_exit_idx = -1;
                 MarkExitsDirty();
                 g_pathGraph.dirty = true;
-                AddNotification("出口位置已更新", 1.5f, ImVec4(0.3f, 1.0f, 0.3f, 1.0f));
+                AddNotification("目的地位置已更新", 1.5f, ImVec4(0.3f, 1.0f, 0.3f, 1.0f));
             }
         }
     }
 
     // 出口删除确认弹窗
     if (ImGui::BeginPopup("ExitDeletePopup")) {
-        ImGui::Text("删除此出口?");
+        ImGui::Text("删除此目的地?");
         if (ImGui::Button("确定删除")) {
             g_exits[g_current_map_index][g_current_floor_index].erase(
                 g_exits[g_current_map_index][g_current_floor_index].begin() + g_del_exit_idx);
@@ -3725,7 +3759,7 @@ void Draw_MapOverlay(ImDrawList* Draw, const std::vector<DataStruct>& data) {
             }
             SaveExitsToJSON(g_current_map_index, g_current_floor_index);
             g_pathGraph.dirty = true;
-            AddNotification("出口已删除", 2.0f, ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
+            AddNotification("目的地已删除", 2.0f, ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
             ImGui::CloseCurrentPopup();
         }
         ImGui::SameLine();
@@ -3817,7 +3851,7 @@ void Draw_MapOverlay(ImDrawList* Draw, const std::vector<DataStruct>& data) {
         ImGui::Text("选择操作:");
         ImGui::Separator();
 
-        if (ImGui::Button("标记为出口")) {
+        if (ImGui::Button("标记为目的地")) {
             // 使用长按起始位置(g_press_pos)而非当前mouse位置，
             // 避免手指抬起或点击弹窗按钮时的坐标偏移
             float u_click = (g_press_pos.x - map_pos.x) / map_w;
@@ -3839,7 +3873,7 @@ void Draw_MapOverlay(ImDrawList* Draw, const std::vector<DataStruct>& data) {
             g_show_exit_debug = true;
             SaveExitsToJSON(g_current_map_index, g_current_floor_index);
             g_pathGraph.dirty = true;
-            AddNotification("出口已标记", 2.0f, ImVec4(0.3f, 1.0f, 0.3f, 1.0f));
+            AddNotification("目的地已标记", 2.0f, ImVec4(0.3f, 1.0f, 0.3f, 1.0f));
             ImGui::CloseCurrentPopup();
         }
 
@@ -3876,12 +3910,12 @@ void Draw_MapOverlay(ImDrawList* Draw, const std::vector<DataStruct>& data) {
         }
         if (nearby_exit >= 0) {
             ImGui::Separator();
-            if (ImGui::Button("删除此出口")) {
+            if (ImGui::Button("删除此目的地")) {
                 g_exits[g_current_map_index][g_current_floor_index].erase(
                         g_exits[g_current_map_index][g_current_floor_index].begin() + nearby_exit);
                 MarkExitsDirty();
                 g_pathGraph.dirty = true;
-                AddNotification("出口已删除", 2.0f, ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
+                AddNotification("目的地已删除", 2.0f, ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
                 ImGui::CloseCurrentPopup();
             }
         }
@@ -4042,15 +4076,10 @@ void Draw_MapOverlay(ImDrawList* Draw, const std::vector<DataStruct>& data) {
                 g_current_drawing_path = simplifiedWorld;
 
                 if (g_current_drawing_path.size() >= 2) {
-                    g_saved_paths.push_back(g_current_drawing_path);
-                    // 同步到按地图/楼层的存储
-                    while (g_saved_paths_by_map.size() <= g_current_map_index) g_saved_paths_by_map.push_back({});
-                    while (g_saved_paths_by_map[g_current_map_index].size() <= g_current_floor_index)
-                        g_saved_paths_by_map[g_current_map_index].push_back({});
-                    g_saved_paths_by_map[g_current_map_index][g_current_floor_index].push_back(g_current_drawing_path);
-                    MarkPathsDirty();
-                    g_pathGraph.dirty = true;
-                    AddNotification("路径已保存 [OK]", 2.0f, ImVec4(0.3f, 1.0f, 0.3f, 1.0f));
+                    g_pending_path = g_current_drawing_path;
+                    g_pending_save_confirm = true;
+                    g_pending_save_timeout = 30.0f;
+                    AddNotification("路径绘制完成，请确认保存", 3.0f, ImVec4(1.0f, 1.0f, 0.3f, 1.0f));
                 } else {
                     AddNotification("路径太短，已丢弃", 2.0f, ImVec4(1.0f, 0.5f, 0.3f, 1.0f));
                 }
@@ -4978,6 +5007,123 @@ void Draw_Main_Optimized(ImDrawList *Draw) {
             }
         }
         Draw_MapOverlay(Draw, current_data);
+    }
+
+    // ========== 3D立体路径渲染 ==========
+    if (g_show_3d_paths && !g_saved_paths.empty()) {
+        const float fade_cm = g_3d_path_fade_dist * 100.0f;
+        static float g_foot_anim_t = 0; g_foot_anim_t += ImGui::GetIO().DeltaTime * 3.0f;
+        const float flow_speed = g_3d_flow_speed;
+
+        const float sw = (float)displayInfo.width, sh = (float)displayInfo.height;
+        const float safe_l = -sw * 0.5f, safe_r = sw * 1.5f, safe_t = -sh * 0.5f, safe_b = sh * 1.5f;
+        
+        const ImU32 default_colors[] = {
+            IM_COL32(0, 255, 255, 255), IM_COL32(255, 100, 255, 255),
+            IM_COL32(255, 255, 0, 255), IM_COL32(100, 255, 100, 255),
+            IM_COL32(255, 150, 50, 255), IM_COL32(100, 150, 255, 255),
+            IM_COL32(255, 255, 255, 255),
+        };
+        
+        for (size_t pi = 0; pi < g_saved_paths.size(); pi++) {
+            if (pi < g_path_visible.size() && !g_path_visible[pi]) continue;
+            auto& path = g_saved_paths[pi];
+            if (path.size() < 2) continue;
+            
+            ImU32 base;
+            if (pi < g_path_colors.size() && g_path_colors[pi] != 0)
+                base = g_path_colors[pi];
+            else
+                base = default_colors[pi % 7];
+            
+            if (g_3d_path_style == 0) {
+                // === 线条模式 (带流光脉冲) ===
+                for (size_t i = 1; i < path.size(); i++) {
+                    Vector3A p1 = path[i-1]; p1.Z += g_3d_path_height;
+                    Vector3A p2 = path[i];   p2.Z += g_3d_path_height;
+                    float mx=(p1.X+p2.X)*0.5f,my=(p1.Y+p2.Y)*0.5f,mz=(p1.Z+p2.Z)*0.5f;
+                    float dist=sqrtf((mx-Z.X)*(mx-Z.X)+(my-Z.Y)*(my-Z.Y)+(mz-Z.Z)*(mz-Z.Z));
+                    if(dist>fade_cm*1.5f)continue;
+                    float ft=std::clamp(dist/fade_cm,0.0f,1.0f);
+                    int alpha=(int)(255.0f*(1.0f-ft*ft)); if(alpha<6)continue;
+                    float s1x,s1y,s1w,s2x,s2y,s2w;
+                    if(!optimizedWorldToScreen(p1,matrix,px,py,s1x,s1y,s1w)||!optimizedWorldToScreen(p2,matrix,px,py,s2x,s2y,s2w))continue;
+                    if(s1x<safe_l||s1x>safe_r||s1y<safe_t||s1y>safe_b||s2x<safe_l||s2x>safe_r||s2y<safe_t||s2y>safe_b)continue;
+                    Draw->AddLine(ImVec2(s1x,s1y),ImVec2(s2x,s2y),IM_COL32((base>>0)&0xFF,(base>>8)&0xFF,(base>>16)&0xFF,alpha),g_3d_line_width);
+                    // 流光脉冲
+                    float seg_dx=s2x-s1x,seg_dy=s2y-s1y,seg_len=sqrtf(seg_dx*seg_dx+seg_dy*seg_dy);
+                    float pulse_len=std::min(seg_len*0.25f,100.0f);
+                    float phase=g_foot_anim_t*flow_speed;
+                    for(int k=0;k<3;k++){
+                        float c=fmodf(phase-k*(pulse_len+80.0f),seg_len+pulse_len);
+                        float t1=std::clamp((c-pulse_len*0.5f)/seg_len,0.0f,1.0f);
+                        float t2=std::clamp((c+pulse_len*0.5f)/seg_len,0.0f,1.0f);
+                        if(t1>=t2)continue;
+                        int ga=(int)(alpha*(1.0f-(float)k*0.35f));if(ga<10)continue;
+                        Draw->AddLine(ImVec2(s1x+seg_dx*t1,s1y+seg_dy*t1),ImVec2(s1x+seg_dx*t2,s1y+seg_dy*t2),IM_COL32((base>>0)&0xFF,(base>>8)&0xFF,(base>>16)&0xFF,ga),g_3d_line_width+4.0f);
+                    }
+                }
+            } else if (g_3d_path_style == 1) {
+                // === 圆点模式 ===
+                const float sp=60.0f;
+                for (size_t i=1;i<path.size();i++){
+                    Vector3A p1=path[i-1];p1.Z+=g_3d_path_height; Vector3A p2=path[i];p2.Z+=g_3d_path_height;
+                    float mx=(p1.X+p2.X)*0.5f,my=(p1.Y+p2.Y)*0.5f,mz=(p1.Z+p2.Z)*0.5f;
+                    float dist=sqrtf((mx-Z.X)*(mx-Z.X)+(my-Z.Y)*(my-Z.Y)+(mz-Z.Z)*(mz-Z.Z));
+                    if(dist>fade_cm*1.5f)continue;
+                    float ft=std::clamp(dist/fade_cm,0.0f,1.0f);
+                    int ba=(int)(255.0f*(1.0f-ft*ft));if(ba<8)continue;
+                    float s1x,s1y,s1w,s2x,s2y,s2w;
+                    if(!optimizedWorldToScreen(p1,matrix,px,py,s1x,s1y,s1w)||!optimizedWorldToScreen(p2,matrix,px,py,s2x,s2y,s2w))continue;
+                    if(s1x<safe_l||s1x>safe_r||s1y<safe_t||s1y>safe_b||s2x<safe_l||s2x>safe_r||s2y<safe_t||s2y>safe_b)continue;
+                    float seg_sx=s2x-s1x,seg_sy=s2y-s1y,seg_len=sqrtf(seg_sx*seg_sx+seg_sy*seg_sy);
+                    if(seg_len<sp*0.5f)continue;
+                    float phase=g_foot_anim_t*flow_speed;
+                    int first=(int)ceilf(-phase/sp);
+                    for(int j=first;;j++){
+                        float pos=phase+(float)j*sp;
+                        if(pos<0)continue;if(pos>seg_len)break;
+                        float t=pos/seg_len;
+                        ImVec2 c(s1x+seg_sx*t,s1y+seg_sy*t);
+                        int da=ba;if(pos>seg_len*0.7f)da=(int)(ba*1.3f);
+                        float outer_r=g_3d_dot_radius,inner_r=outer_r*0.47f;
+                        Draw->AddCircle(c,outer_r,IM_COL32((base>>0)&0xFF,(base>>8)&0xFF,(base>>16)&0xFF,da/4),0,outer_r*0.2f);
+                        Draw->AddCircleFilled(c,inner_r,IM_COL32((base>>0)&0xFF,(base>>8)&0xFF,(base>>16)&0xFF,da));
+                    }
+                }
+            } else {
+                // === 箭头模式 ===
+                const float asp=80.0f;
+                for (size_t i=1;i<path.size();i++){
+                    Vector3A p1=path[i-1];p1.Z+=g_3d_path_height; Vector3A p2=path[i];p2.Z+=g_3d_path_height;
+                    float mx=(p1.X+p2.X)*0.5f,my=(p1.Y+p2.Y)*0.5f,mz=(p1.Z+p2.Z)*0.5f;
+                    float dist=sqrtf((mx-Z.X)*(mx-Z.X)+(my-Z.Y)*(my-Z.Y)+(mz-Z.Z)*(mz-Z.Z));
+                    if(dist>fade_cm*1.5f)continue;
+                    float ft=std::clamp(dist/fade_cm,0.0f,1.0f);
+                    int ba=(int)(255.0f*(1.0f-ft*ft));if(ba<8)continue;
+                    float s1x,s1y,s1w,s2x,s2y,s2w;
+                    if(!optimizedWorldToScreen(p1,matrix,px,py,s1x,s1y,s1w)||!optimizedWorldToScreen(p2,matrix,px,py,s2x,s2y,s2w))continue;
+                    if(s1x<safe_l||s1x>safe_r||s1y<safe_t||s1y>safe_b||s2x<safe_l||s2x>safe_r||s2y<safe_t||s2y>safe_b)continue;
+                    float seg_sx=s2x-s1x,seg_sy=s2y-s1y,seg_len=sqrtf(seg_sx*seg_sx+seg_sy*seg_sy);
+                    if(seg_len<asp*0.5f)continue;
+                    float nx=seg_sx/seg_len,ny=seg_sy/seg_len,pxp=-ny,pyp=nx;
+                    float phase=g_foot_anim_t*flow_speed;
+                    int first=(int)ceilf(-phase/asp);
+                    for(int j=first;;j++){
+                        float pos=phase+(float)j*asp;
+                        if(pos<0)continue;if(pos>seg_len)break;
+                        float t=pos/seg_len;
+                        float ax=s1x+seg_sx*t,ay=s1y+seg_sy*t;
+                        int da=ba;if(pos>seg_len*0.7f)da=(int)(ba*1.3f);
+                        float as=g_3d_dot_radius;
+                        ImVec2 tip(ax+nx*as,ay+ny*as);
+                        ImVec2 lw(ax-nx*as*0.5f+pxp*as*0.55f,ay-ny*as*0.5f+pyp*as*0.55f);
+                        ImVec2 rw(ax-nx*as*0.5f-pxp*as*0.55f,ay-ny*as*0.5f-pyp*as*0.55f);
+                        Draw->AddTriangleFilled(tip,lw,rw,IM_COL32((base>>0)&0xFF,(base>>8)&0xFF,(base>>16)&0xFF,da));
+                    }
+                }
+            }
+        }
     }
 
     // ========== 地图识别状态 & 新地图提示 ==========
@@ -6211,6 +6357,7 @@ void Layout_tick_UI(bool *main_thread_flag) {
     }
 
     static char new_name[64] = "";
+    static int new_map_number = 0;
     static float new_music_x = 0.0f, new_music_y = 0.0f, new_music_z = 0.0f;
     static float new_piano_x = 0.0f, new_piano_y = 0.0f, new_piano_z = 0.0f;
     static char new_texture[128] = MAPS_ROOT "";
@@ -6642,6 +6789,7 @@ void Layout_tick_UI(bool *main_thread_flag) {
                     int next_id = (int)g_all_maps.size() + 1;
                     snprintf(new_name, sizeof(new_name), "地图%d 一楼", next_id);
                     snprintf(new_texture, sizeof(new_texture), MAPS_ROOT "map%d_floor1.png", next_id);
+                    new_map_number = 0;
                     ImGui::OpenPopup("添加新地图##detected");
                 }
                 ImGui::PopStyleVar(2);
@@ -6717,6 +6865,7 @@ void Layout_tick_UI(bool *main_thread_flag) {
                                 int next_id = (int)g_all_maps.size() + 1;
                                 snprintf(new_name, sizeof(new_name), "地图%d 一楼", next_id);
                                 snprintf(new_texture, sizeof(new_texture), MAPS_ROOT "map%d_floor1.png", next_id);
+                                new_map_number = 0;
                                 ImGui::OpenPopup("添加新地图##detected");
                             }
                         }
@@ -6774,6 +6923,7 @@ void Layout_tick_UI(bool *main_thread_flag) {
                                         g_all_maps[g_current_map_index][g_current_floor_index].name);
                                     snprintf(new_texture, sizeof(new_texture), "%s",
                                         g_all_maps[g_current_map_index][g_current_floor_index].texturePath);
+                                    new_map_number = 0;
                                     ImGui::OpenPopup("添加新地图##detected");
                                 }
                             }
@@ -6841,8 +6991,8 @@ void Layout_tick_UI(bool *main_thread_flag) {
                 if (!map_invalid) {
                     ImGui::Separator();
 
-                    StyledSectionHeader("出口管理", g_theme.text_title, g_density);
-                    if (StyledButton("标记当前点为出口", ButtonVariant::Success, ImVec2(0,0), g_density)) {
+                    StyledSectionHeader("目的地管理", g_theme.text_title, g_density);
+                    if (StyledButton("标记当前点为目的地", ButtonVariant::Success, ImVec2(0,0), g_density)) {
                         if (g_current_map_index >= 0 && g_current_floor_index >= 0 && Z.X != 0) {
                             while (g_exits.size() <= g_current_map_index) { g_exits.push_back({}); g_exit_uvs.push_back({}); }
                             while (g_exits[g_current_map_index].size() <= g_current_floor_index) {
@@ -6856,22 +7006,22 @@ void Layout_tick_UI(bool *main_thread_flag) {
                             g_exit_uvs[g_current_map_index][g_current_floor_index].push_back(uv);
                             MarkExitsDirty();
                             g_pathGraph.dirty = true;
-                            AddNotification("出口已标记", 2.0f, ImVec4(0.3f, 1.0f, 0.3f, 1.0f));
+                            AddNotification("目的地已标记", 2.0f, ImVec4(0.3f, 1.0f, 0.3f, 1.0f));
                         }
                     }
                     ImGui::SameLine();
-                    if (StyledButton("清除本层出口", ButtonVariant::Danger, ImVec2(0,0), g_density)) {
-                        ImGui::OpenPopup("确认清除出口");
+                    if (StyledButton("清除本层目的地", ButtonVariant::Danger, ImVec2(0,0), g_density)) {
+                        ImGui::OpenPopup("确认清除目的地");
                     }
-                    if (ImGui::BeginPopupModal("确认清除出口", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
-                        ImGui::Text("确定要清除本层所有出口标记吗？此操作不可撤销。");
+                    if (ImGui::BeginPopupModal("确认清除目的地", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
+                        ImGui::Text("确定要清除本层所有目的地标记吗？此操作不可撤销。");
                         if (ImGui::Button("确定")) {
                             if (g_current_map_index < g_exits.size() &&
                                 g_current_floor_index < g_exits[g_current_map_index].size()) {
                                 g_exits[g_current_map_index][g_current_floor_index].clear();
                                 MarkExitsDirty();
                                 g_pathGraph.dirty = true;
-                                AddNotification("出口已清除", 2.0f, ImVec4(1.0f, 0.5f, 0.0f, 1.0f));
+                                AddNotification("目的地已清除", 2.0f, ImVec4(1.0f, 0.5f, 0.0f, 1.0f));
                             }
                             ImGui::CloseCurrentPopup();
                         }
@@ -6879,7 +7029,7 @@ void Layout_tick_UI(bool *main_thread_flag) {
                         if (ImGui::Button("取消")) ImGui::CloseCurrentPopup();
                         ImGui::EndPopup();
                     }
-                    ImGui::TextColored(g_theme.text_muted, "提示：已校准地图可在小地图上长按标记出口");
+                    ImGui::TextColored(g_theme.text_muted, "提示：已校准地图可在小地图上长按标记目的地");
 
                     ImGui::Separator();
 
@@ -6895,11 +7045,20 @@ void Layout_tick_UI(bool *main_thread_flag) {
                         }
                         ImGui::Separator();
                         if (StyledButton("开始绘制路径", ButtonVariant::Primary, ImVec2(0,0), g_density)) {
+                            g_draw_map_size_bak = g_map_display_size;
+                            g_draw_map_posx_bak = g_map_pos_x;
+                            g_draw_map_posy_bak = g_map_pos_y;
+                            g_map_display_size = std::min(displayInfo.height * 0.75f, 1600.0f);
+                            g_map_pos_x = (displayInfo.width - g_map_display_size) * 0.5f;
+                            g_map_pos_y = (displayInfo.height - g_map_display_size) * 0.5f;
                             g_path_edit_mode = 1;
                             g_current_drawing_path.clear();
                         }
                         ImGui::SameLine();
                         if (StyledButton("取消绘制", ButtonVariant::Secondary, ImVec2(0,0), g_density)) {
+                            g_map_display_size = g_draw_map_size_bak;
+                            g_map_pos_x = g_draw_map_posx_bak;
+                            g_map_pos_y = g_draw_map_posy_bak;
                             g_path_edit_mode = 0;
                             g_current_drawing_path.clear();
                         }
@@ -6933,52 +7092,111 @@ void Layout_tick_UI(bool *main_thread_flag) {
                             }
                         }
                     }
+                    if (g_pending_save_confirm) {
+                        g_pending_save_timeout -= ImGui::GetIO().DeltaTime;
+                        ImGui::Separator();
+                        ImGui::TextColored(g_theme.warning, "路径绘制完成 (%d点), 请确认:  %.0f秒后自动丢弃", (int)g_pending_path.size(), std::max(0.0f, g_pending_save_timeout));
+                        if (StyledButton("保存路径", ButtonVariant::Primary, ImVec2(0,0), g_density)) {
+                            g_saved_paths.push_back(g_pending_path); g_path_visible.push_back(true); g_path_colors.push_back(0);
+                            while (g_saved_paths_by_map.size() <= g_current_map_index) g_saved_paths_by_map.push_back({});
+                            while (g_saved_paths_by_map[g_current_map_index].size() <= g_current_floor_index) g_saved_paths_by_map[g_current_map_index].push_back({});
+                            g_saved_paths_by_map[g_current_map_index][g_current_floor_index].push_back(g_pending_path);
+                            MarkPathsDirty(); g_pathGraph.dirty = true;
+                            AddNotification("路径已保存 [OK]", 2.0f, ImVec4(0.3f, 1.0f, 0.3f, 1.0f));
+                            g_pending_path.clear(); g_pending_save_confirm = false;
+                            g_map_display_size = g_draw_map_size_bak; g_map_pos_x = g_draw_map_posx_bak; g_map_pos_y = g_draw_map_posy_bak;
+                        }
+                        ImGui::SameLine();
+                        if (StyledButton("丢弃", ButtonVariant::Danger, ImVec2(0,0), g_density)) {
+                            g_pending_path.clear(); g_pending_save_confirm = false;
+                            AddNotification("路径已丢弃", 1.5f, ImVec4(0.8f, 0.5f, 0.3f, 1.0f));
+                            g_map_display_size = g_draw_map_size_bak; g_map_pos_x = g_draw_map_posx_bak; g_map_pos_y = g_draw_map_posy_bak;
+                        }
+                        if (g_pending_save_timeout <= 0.0f) {
+                            g_pending_path.clear(); g_pending_save_confirm = false;
+                            AddNotification("路径已自动丢弃(超时)", 1.5f, ImVec4(0.8f, 0.5f, 0.3f, 1.0f));
+                            g_map_display_size = g_draw_map_size_bak; g_map_pos_x = g_draw_map_posx_bak; g_map_pos_y = g_draw_map_posy_bak;
+                        }
+                    }
                     // 路径列表（触屏设备用）
                     if (!g_saved_paths.empty()) {
+                        while (g_path_visible.size() < g_saved_paths.size()) g_path_visible.push_back(true);
+                        while (g_path_colors.size() < g_saved_paths.size()) g_path_colors.push_back(0);
                         ImGui::TextColored(g_theme.text_title, "已保存路径列表:");
                         int deleteTarget = -1;
+                        int reverseTarget = -1;
+                        static bool show_all = true;
+                        if (ImGui::SmallButton(show_all ? "全部隐藏" : "全部显示")) {
+                            show_all = !show_all;
+                            for (size_t v = 0; v < g_path_visible.size(); v++) g_path_visible[v] = show_all;
+                        }
                         for (size_t pi = 0; pi < g_saved_paths.size(); pi++) {
                             char label[64];
                             bool isSelected = ((int)pi == g_selected_path_index);
-                            snprintf(label, sizeof(label), "路径 #%zu [%zu点]%s",
-                                     pi, g_saved_paths[pi].size(), isSelected ? " ★" : "");
+                            ImGui::PushID((int)pi + 10000);
+                            bool vis_tmp = (bool)g_path_visible[pi];
+                            ImGui::Checkbox("##vis", &vis_tmp);
+                            g_path_visible[pi] = (char)vis_tmp;
+                            ImGui::PopID();
+                            ImGui::SameLine(0, 6.0f * g_density);
+                            {
+                                const ImU32 palette[] = {
+                                    IM_COL32(0,255,255,255), IM_COL32(255,100,255,255),
+                                    IM_COL32(255,255,0,255), IM_COL32(100,255,100,255),
+                                    IM_COL32(255,150,50,255), IM_COL32(100,150,255,255),
+                                    IM_COL32(255,100,100,255), IM_COL32(200,200,200,255),
+                                };
+                                ImU32 cur = (pi < g_path_colors.size() && g_path_colors[pi] != 0) ? g_path_colors[pi] : palette[pi % 8];
+                                ImGui::PushID((int)pi + 20000);
+                                if (ImGui::ColorButton("##clr", ImVec4(((cur>>0)&0xFF)/255.0f, ((cur>>8)&0xFF)/255.0f, ((cur>>16)&0xFF)/255.0f, 1.0f), ImGuiColorEditFlags_NoTooltip | ImGuiColorEditFlags_NoDragDrop, ImVec2(34, 24))) {
+                                    int ci = 0;
+                                    for (int pidx = 0; pidx < 8; pidx++) if (palette[pidx] == cur) { ci = pidx; break; }
+                                    if (g_path_colors.size() <= pi) g_path_colors.resize(pi+1, 0);
+                                    g_path_colors[pi] = palette[(ci + 1) % 8];
+                                }
+                                ImGui::PopID();
+                            }
+                            ImGui::SameLine();
+                            snprintf(label, sizeof(label), "路径 #%zu [%zu点]%s", pi, g_saved_paths[pi].size(), isSelected ? " ★" : "");
                             ImGui::PushID((int)pi);
                             if (isSelected) ImGui::PushStyleColor(ImGuiCol_Button, g_theme.success);
-                            if (ImGui::SmallButton(label)) {
-                                g_selected_path_index = (int)pi;
-                            }
+                            if (ImGui::SmallButton(label)) { g_selected_path_index = isSelected ? -1 : (int)pi; }
                             if (isSelected) ImGui::PopStyleColor();
                             ImGui::SameLine();
-                            if (ImGui::SmallButton("删除")) {
-                                deleteTarget = (int)pi;
-                            }
+                            if (ImGui::SmallButton("删除")) { deleteTarget = (int)pi; }
+                            ImGui::SameLine();
+                            if (ImGui::SmallButton("反向")) { reverseTarget = (int)pi; }
                             ImGui::PopID();
                         }
                         if (deleteTarget >= 0) {
                             g_saved_paths.erase(g_saved_paths.begin() + deleteTarget);
+                            if (deleteTarget < (int)g_path_visible.size()) g_path_visible.erase(g_path_visible.begin() + deleteTarget);
+                            if (deleteTarget < (int)g_path_colors.size()) g_path_colors.erase(g_path_colors.begin() + deleteTarget);
                             if (g_selected_path_index == deleteTarget) g_selected_path_index = -1;
                             else if (g_selected_path_index > deleteTarget) g_selected_path_index--;
-                            MarkPathsDirty();
-                            g_pathGraph.dirty = true;
+                            MarkPathsDirty(); g_pathGraph.dirty = true;
                             AddNotification("路径已删除", 2.0f, ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
                         }
-                    }
-                    // 选中路径操作
-                    if (g_selected_path_index >= 0 && g_selected_path_index < (int)g_saved_paths.size()) {
-                        if (StyledButton("删除选中路径", ButtonVariant::Danger, ImVec2(0,0), g_density)) {
-                            g_saved_paths.erase(g_saved_paths.begin() + g_selected_path_index);
-                            g_selected_path_index = -1;
-                            MarkPathsDirty();
-                            g_pathGraph.dirty = true;
-                            AddNotification("选中路径已删除", 2.0f, ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
+                        if (reverseTarget >= 0 && reverseTarget < (int)g_saved_paths.size()) {
+                            std::reverse(g_saved_paths[reverseTarget].begin(), g_saved_paths[reverseTarget].end());
+                            MarkPathsDirty(); g_pathGraph.dirty = true;
+                            AddNotification("路径已反向", 1.5f, ImVec4(0.5f, 0.8f, 1.0f, 1.0f));
                         }
-                        ImGui::SameLine();
-                        ImGui::TextColored(g_theme.warning, "路径 #%d 已选中 (Delete键删除)", g_selected_path_index);
                     }
                     ImGui::TextColored(g_theme.text_muted, "长按地图拖动绘制路径，松开保存（自由模式：任意方向平滑弯曲）");
                     if (g_path_edit_mode == 1) {
                         ImGui::TextColored(g_theme.info,
                             g_ortho_draw ? "[OK] 正交模式：强制水平/垂直线段" : "[*] 自由模式：任意方向平滑曲线");
+                        if (g_current_drawing_path.size() >= 2) {
+                            float total_len = 0.0f;
+                            for (size_t k = 1; k < g_current_drawing_path.size(); k++) {
+                                float ddx = g_current_drawing_path[k].X - g_current_drawing_path[k-1].X;
+                                float ddy = g_current_drawing_path[k].Y - g_current_drawing_path[k-1].Y;
+                                total_len += sqrtf(ddx*ddx + ddy*ddy);
+                            }
+                            ImGui::SameLine();
+                            ImGui::TextColored(g_theme.success, "| 长度: %.1f米 (%zu点)", total_len / 100.0f, g_current_drawing_path.size());
+                        }
                     }
 
                     ImGui::Separator();
@@ -6995,6 +7213,30 @@ void Layout_tick_UI(bool *main_thread_flag) {
                     }
                     if (g_show_saved_paths) {
                         ImGui::SliderFloat("路径透明度", &g_saved_path_opacity, 0.1f, 1.0f, "%.2f");
+                    }
+                    ImGui::Checkbox("3D立体路径", &g_show_3d_paths);
+                    if (g_show_3d_paths) {
+                        ImGui::SameLine();
+                        ImGui::SetNextItemWidth(100.0f * g_density);
+                        ImGui::SliderFloat("高度(cm)", &g_3d_path_height, 0.0f, 200.0f, "%.0f");
+                        ImGui::SameLine();
+                        ImGui::SetNextItemWidth(100.0f * g_density);
+                        ImGui::SliderFloat("渐变(m)", &g_3d_path_fade_dist, 5.0f, 100.0f, "%.0f");
+                        ImGui::SameLine();
+                        ImGui::SetNextItemWidth(70.0f * g_density);
+                        const char* style_items[] = {"线条", "圆点", "箭头"};
+                        ImGui::Combo("##style", &g_3d_path_style, style_items, 3);
+                        ImGui::SameLine();
+                        ImGui::SetNextItemWidth(80.0f * g_density);
+                        ImGui::SliderFloat("速度", &g_3d_flow_speed, 0.0f, 60.0f, "%.0f");
+                        ImGui::SameLine();
+                        if (g_3d_path_style == 0) {
+                            ImGui::SetNextItemWidth(100.0f * g_density);
+                            ImGui::SliderFloat("线宽(px)", &g_3d_line_width, 1.0f, 10.0f, "%.1f");
+                        } else {
+                            ImGui::SetNextItemWidth(100.0f * g_density);
+                            ImGui::SliderFloat("大小(px)", &g_3d_dot_radius, 5.0f, 40.0f, "%.0f");
+                        }
                     }
 
                     ImGui::Checkbox("显示通行网络 (调试)", &g_show_graph_debug);
@@ -7259,13 +7501,13 @@ void Layout_tick_UI(bool *main_thread_flag) {
                     ImGui::Separator();
 
                     // 预览功能已整合到小地图中，请调整小地图尺寸和位置查看
-                    ImGui::TextColored(g_theme.text_muted, "出口/校准功能已整合到小地图中");
+                    ImGui::TextColored(g_theme.text_muted, "目的地/校准功能已整合到小地图中");
 
                     ImGui::Separator();
                 }
 
                 if (ImGui::CollapsingHeader("配置管理")) {
-                    if (StyledButton("添加新地图", ButtonVariant::Primary, ImVec2(0,0), g_density)) { ImGui::OpenPopup("添加新地图##detected"); }
+                    if (StyledButton("添加新地图", ButtonVariant::Primary, ImVec2(0,0), g_density)) { new_map_number = 0; ImGui::OpenPopup("添加新地图##detected"); }
                     ImGui::SameLine();
                     if (StyledButton("清理绘制缓存", ButtonVariant::Secondary, ImVec2(0,0), g_density)) { skipClassCache.clear(); fakeHunterCache.clear(); }
 
@@ -7642,7 +7884,7 @@ void Layout_tick_UI(bool *main_thread_flag) {
                 ImGui::Text("识别状态: %s", g_detect_status_text);
                 ImGui::Text("评分调试: %s", g_score_debug_buf);
                 ImGui::TextColored(g_theme.text_muted, "%s", g_map_detect_debug);
-                ImGui::Text("出口列表: %zu", 
+                ImGui::Text("目的地列表: %zu", 
                     g_current_map_index < g_exits.size() && g_current_floor_index < g_exits[g_current_map_index].size()
                     ? g_exits[g_current_map_index][g_current_floor_index].size() : 0);
                 ImGui::Text("路径数: %zu", g_saved_paths.size());
@@ -7716,75 +7958,62 @@ void Layout_tick_UI(bool *main_thread_flag) {
 
     // ========== 添加新地图弹窗 ==========
     if (ImGui::BeginPopupModal("添加新地图##detected", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::InputText("名称", new_name, 64);
-        ImGui::Separator();
-        ImGui::TextColored(g_theme.text_muted, "音乐盒坐标（主信号源）");
-        ImGui::InputFloat("音乐盒 X", &new_music_x);
-        ImGui::InputFloat("音乐盒 Y", &new_music_y);
-        ImGui::InputFloat("音乐盒 Z", &new_music_z);
-        ImGui::Separator();
-        ImGui::TextColored(g_theme.text_muted, "钢琴坐标（辅助信号源，自动检测）");
-        ImGui::InputFloat("钢琴 X", &new_piano_x);
-        ImGui::InputFloat("钢琴 Y", &new_piano_y);
-        ImGui::InputFloat("钢琴 Z", &new_piano_z);
-        ImGui::Separator();
-        ImGui::InputText("纹理路径", new_texture, 128);
-        if (StyledButton("确定", ButtonVariant::Success, ImVec2(0,0), g_density)) {
-            json j;
-            std::ifstream ifs(MAPS_ROOT "map_config.json");
-            if (ifs) ifs >> j; else j["maps"] = json::array();
-
-            // 检查是否已存在同名地图——存在则更新，不存在则新增
-            bool updated = false;
-            if (j.contains("maps") && j["maps"].is_array()) {
-                for (auto& existing : j["maps"]) {
-                    if (existing.value("name", "") == std::string(new_name) &&
-                        existing.value("floor", -1) == 0) {
-                        // 更新已有地图的音乐盒 + 钢琴坐标
-                        existing["music_x"] = new_music_x;
-                        existing["music_y"] = new_music_y;
-                        existing["music_z"] = new_music_z;
-                        existing["piano_x"] = new_piano_x;
-                        existing["piano_y"] = new_piano_y;
-                        existing["piano_z"] = new_piano_z;
-                        if (strlen(new_texture) > 0) existing["texture"] = new_texture;
-                        existing["floor_z_threshold"] = 250.0f;
-                        updated = true;
-                        break;
+        snprintf(new_name, sizeof(new_name), "地图%d 一楼", std::max(1, new_map_number));
+        snprintf(new_texture, sizeof(new_texture), MAPS_ROOT "map%d_floor1.png", std::max(1, new_map_number));
+        ImGui::TextColored(g_theme.text_title, "请输入地图编号");
+        ImGui::Spacing();
+        char num_buf[16]; snprintf(num_buf, sizeof(num_buf), "地图 [%d]", std::max(0, new_map_number));
+        ImGui::TextColored(new_map_number > 0 ? g_theme.success : g_theme.warning, "%s", num_buf);
+        ImGui::TextColored(g_theme.text_muted, "一楼  %s", new_map_number > 0 ? new_texture : "");
+        ImGui::Spacing();
+        auto numBtn = [&](int digit) {
+            char lbl[4]; snprintf(lbl, sizeof(lbl), "%d", digit);
+            if (ImGui::Button(lbl, ImVec2(44 * g_density, 40 * g_density))) {
+                if (new_map_number < 999) new_map_number = new_map_number * 10 + digit;
+            }
+        };
+        for (int row = 1; row <= 3; row++) {
+            for (int col = 0; col < 3; col++) { int d = row * 3 + col - 2; numBtn(d); if (col < 2) ImGui::SameLine(); }
+        }
+        if (ImGui::Button("←", ImVec2(44 * g_density, 40 * g_density))) { new_map_number /= 10; }
+        ImGui::SameLine(); numBtn(0); ImGui::SameLine();
+        if (ImGui::Button("确定", ImVec2(88 * g_density, 40 * g_density))) {
+            if (new_map_number > 0) {
+                json j; std::ifstream ifs(MAPS_ROOT "map_config.json");
+                if (ifs) ifs >> j; else j["maps"] = json::array();
+                bool updated = false;
+                if (j.contains("maps") && j["maps"].is_array()) {
+                    for (auto& existing : j["maps"]) {
+                        if (existing.value("name", "") == std::string(new_name) && existing.value("floor", -1) == 0) {
+                            existing["music_x"]=new_music_x;existing["music_y"]=new_music_y;existing["music_z"]=new_music_z;
+                            existing["piano_x"]=new_piano_x;existing["piano_y"]=new_piano_y;existing["piano_z"]=new_piano_z;
+                            if(strlen(new_texture)>0)existing["texture"]=new_texture;
+                            existing["floor_z_threshold"]=250.0f;updated=true;break;
+                        }
                     }
                 }
+                if(!updated){
+                    json m; m["name"]=new_name;m["floor"]=0;m["texture"]=new_texture;
+                    m["minX"]=-500.0f;m["maxX"]=5000.0f;m["minY"]=-3000.0f;m["maxY"]=1500.0f;
+                    m["floor_z_threshold"]=250.0f;
+                    m["music_x"]=new_music_x;m["music_y"]=new_music_y;m["music_z"]=new_music_z;
+                    m["piano_x"]=new_piano_x;m["piano_y"]=new_piano_y;m["piano_z"]=new_piano_z;
+                    m["music_texU"]=0.5;m["music_texV"]=0.5;j["maps"].push_back(m);
+                }
+                try{std::filesystem::copy(MAPS_ROOT"map_config.json",MAPS_ROOT"map_config.json.bak",std::filesystem::copy_options::overwrite_existing);}catch(...){}
+                std::ofstream ofs(MAPS_ROOT"map_config.json");ofs<<j.dump(4);
+                LoadMapConfigFromJSON();LoadFingerprintDB();RebuildFingerprintMapping();SaveConfig();
+                AddNotification(updated?("已更新地图:"+std::string(new_name)):("已添加新地图:"+std::string(new_name)),3.0f,ImVec4(0.3f,1.0f,0.3f,1.0f));
+                new_map_number=0;ImGui::CloseCurrentPopup();
             }
-
-            if (!updated) {
-                json m;
-                m["name"] = new_name; m["floor"] = 0; m["texture"] = new_texture;
-                m["minX"] = -500.0f; m["maxX"] = 5000.0f; m["minY"] = -3000.0f; m["maxY"] = 1500.0f;
-                m["floor_z_threshold"] = 250.0f;
-                m["music_x"] = new_music_x; m["music_y"] = new_music_y; m["music_z"] = new_music_z;
-                m["piano_x"] = new_piano_x; m["piano_y"] = new_piano_y; m["piano_z"] = new_piano_z;
-                m["music_texU"] = 0.5; m["music_texV"] = 0.5;
-                j["maps"].push_back(m);
-            }
-
-            // 写入前备份
-            try {
-                std::filesystem::copy(MAPS_ROOT "map_config.json",
-                    MAPS_ROOT "map_config.json.bak",
-                    std::filesystem::copy_options::overwrite_existing);
-            } catch (...) {}
-            std::ofstream ofs(MAPS_ROOT "map_config.json"); ofs << j.dump(4);
-            LoadMapConfigFromJSON();
-            LoadFingerprintDB();  // 重新加载指纹，确保新地图关联
-            RebuildFingerprintMapping();
-            SaveConfig();
-            AddNotification(updated
-                ? "已更新地图: " + std::string(new_name) + " (音乐盒+钢琴)"
-                : "已添加新地图: " + std::string(new_name),
-                3.0f, ImVec4(0.3f, 1.0f, 0.3f, 1.0f));
-            ImGui::CloseCurrentPopup();
         }
         ImGui::SameLine();
-        if (StyledButton("取消", ButtonVariant::Secondary, ImVec2(0,0), g_density)) ImGui::CloseCurrentPopup();
+        if(ImGui::Button("取消",ImVec2(0,40*g_density))){new_map_number=0;ImGui::CloseCurrentPopup();}
+        ImGui::Separator();
+        ImGui::TextColored(g_theme.text_muted,"音乐盒坐标 (主信号源)");
+        ImGui::InputFloat("音乐盒 X",&new_music_x);ImGui::InputFloat("音乐盒 Y",&new_music_y);ImGui::InputFloat("音乐盒 Z",&new_music_z);
+        ImGui::TextColored(g_theme.text_muted,"钢琴坐标 (辅助信号源)");
+        ImGui::InputFloat("钢琴 X",&new_piano_x);ImGui::InputFloat("钢琴 Y",&new_piano_y);ImGui::InputFloat("钢琴 Z",&new_piano_z);
         ImGui::EndPopup();
     }
 

@@ -1,5 +1,50 @@
 # ImGuiOverlay 项目记忆
 
+## ★ 部署路径约定 (2026-06-29)
+- **二进制**: `/data/local/bin/overlay`（chmod 777）
+- **编译产物路径**: `E:\ImGuiOverlay\app\build\intermediates\cxx\RelWithDebInfo\6u3a2a4x\obj\arm64-v8a\overlay`（native ELF，不是 APK！）
+- **数据目录**: `/data/local/bin/maps/`
+- **配置**: `/data/local/bin/overlay_config.txt`
+- **推送方式**: `adb push → /sdcard/overlay_tmp → su cp → /data/local/bin/`（/data/local/bin/ 不能直接 adb push）
+- **禁令**: 禁止使用 `/data/local/tmp/`（SELinux tmpfs:s0 阻止执行，且反作弊高频命中）
+- **⚠️ 禁止推送 APK**: `app-release-unsigned.apk` 是 ZIP 包不能执行，必须推送 `cxx/.../obj/arm64-v8a/overlay`
+
+## ★ v2.13-stable — 路径导入功能 (2026-06-29 21:36)
+
+二进制: `E:\ImGuiOverlay\overlay-v2.13-stable` (MD5: 356479c671652fa56d290228d00ea2fd)
+
+### v2.13 新增
+- **Tab 7「路径导入」**: 从 extract_paths.py 生成的像素坐标 txt 导入世界坐标导航线
+  - 像素→世界转换: `UV = (px/texW, py/texH)` → `CoordTransform::UVToWorld(u, v, z, cfg)`
+  - 黄色虚线预览 (在小地图确认)
+  - 确认导入后持久化到 map_config.json + 参与 PathGraph 寻路
+- **纹理尺寸存储**: `g_map_texture_w/h[MAX_MAP_COUNT][MAX_FLOOR_COUNT]`
+  - 在 FlushTextures() 上传纹理时记录
+  - ResetMapState() / InvalidateMapTextures() 时重置
+- **Tab 编号变更**: 7→路径导入, 8→调试信息, 9→关于
+- **完整工作流**: extract_paths.py → txt → adb push → Tab 7 加载预览 → 确认导入
+
+## ★ v2.12-stable — 启动画面品牌重命名 (2026-06-29 20:22)
+Git commit: dee1c56
+
+二进制: `E:\ImGuiOverlay\overlay-v2.12-stable` (MD5: 09d19bd6b23fff7f58437a9fad0e8853)
+
+### v2.12 变更
+- main.cpp 启动画面从简单的 "系统初始化中..." 改为品牌横幅：
+  - 标题：**大米饭先生**
+  - Telegram 链接：https://t.me/+67uRf9NT_04xMGM1
+- 系统状态提示保留在横幅下方
+
+## ★ v2.10 动作ID多链扫描 (2026-06-29)
+Git commit: ff6784e
+
+- draw_Gui.cpp case 7 调试标签页新增"动作ID多链扫描"面板
+- 20条待测指针链，从 GlobalMemory::自身 扫描
+- 绿色高亮与当前链匹配的链，灰色显示断链
+- 需与哈基米 v2.3 对比验证找到正确链
+
+---
+
 ## ★ v2.9-stable — 当前稳定版 (2026-06-27 18:47)
 
 二进制: `E:\ImGuiOverlay\overlay-v2.9-stable` (MD5: 6425eaa414dc76d6fad72c662d599400)
@@ -54,7 +99,7 @@ Git commit: 4130378, tag: v2.9-stable
 ## 交付流程（必须遵守）
 1. **修改代码前**：先参考 `.agents/skills/` 中 mattpocock-skills 的工作流（diagnose → plan → implement）
 2. 修改代码 → 编译（`./gradlew clean assembleRelease`）
-3. adb push 二进制到 `/data/local/tmp/overlay`（**chmod 777**）
+3. adb push 编译产物的 **native ELF** 到手机（`cxx/.../obj/arm64-v8a/overlay`，不是 APK！），推至 `/data/local/bin/overlay`（**chmod 777**）
 4. 推送 CHANGELOG.txt + version-latest.txt + `[更新日志]` 到手机
 5. 更新 CHANGELOG.md
 6. git commit + git push
