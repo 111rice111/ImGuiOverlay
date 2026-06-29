@@ -47,8 +47,8 @@ inline void driver_init() {
     if (g_drv) return;
 
     // 按优先级尝试各驱动 (在此添加新驱动 — 只需一行)
-    if (try_load(new TWTDriver())) return;  // TWT 优先级最高
-    if (try_load(new RTDriver())) return;   // RT 通用版
+    if (try_load(new RTDriver())) return;   // RT 优先 (已验证可用 /dev/ssZDdB)
+    if (try_load(new TWTDriver())) return;  // TWT 备选
 
     printf("[Registry] !! 未找到任何可用驱动 !!\n");
     exit(1);

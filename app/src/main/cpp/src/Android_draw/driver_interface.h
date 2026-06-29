@@ -42,6 +42,13 @@ public:
     /** 断开连接 */
     virtual void disconnect() = 0;
 
+    /** 触摸初始化 (可选) */
+    virtual bool touch_init(int mode = 0) { return false; }
+    /** 触摸按下 */
+    virtual bool touch_down(int x, int y) { return false; }
+    /** 触摸释放 */
+    virtual bool touch_up() { return false; }
+
     // ── 内存操作 ──
 
     /** 读取目标进程内存 */

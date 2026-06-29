@@ -17,6 +17,7 @@
 #include <sys/ioctl.h>
 #include <sys/stat.h>
 #include <linux/input.h>
+#include <linux/uinput.h>
 #include <cstring>
 #include <linux/input.h>
 #include <mutex>
@@ -639,16 +640,35 @@ void AutoWoodCheck();
 static bool wood_enabled = false;
 static float wood_touch_x = 2450.0f;
 static float wood_touch_y = 1050.0f;
+static float wood_offset_x = 0.0f;
+static float wood_offset_y = 0.0f;
 static float wood_length = 18.0f;
 static float wood_width  = 12.0f;
+static bool  wood_show_params = false;  // 判定参数显示开关
+static bool  show_wood_rect = false;    // 判定范围可视化
+static Vector3A g_wood_viz_pos;         // 最近板子世界坐标
+static float g_wood_viz_angle = 0;      // 板子朝向
+static bool  g_wood_viz_valid = false;  // 是否有有效板子
 static float wood_trigger_dist = 25.0f;
+static float wood_cooldown_dur = 1.0f;   // 砸板冷却时间(秒)
+static bool  g_was_hunter_inside = false; // 上一帧监管者是否在判定内
+static float g_wood_cooldown = 0.0f;      // 当前冷却剩余(秒)
 static bool show_touch_point = false;
+static float g_last_touch_x = 0, g_last_touch_y = 0;
+static float g_last_touch_time = 0;
 static bool g_MimicModeEnabled = false;
 
 static int   g_touch_max_x = 23999;
 static int   g_touch_max_y = 33919;
-static char  g_touch_path[128] = {0};
 static bool  g_touch_ready = false;
+
+// ★ 四点校准: 在屏幕四角注入触摸, 用户读取指针位置坐标输入
+static int   g_calib_step = 0;           // 0=idle, 1-4=输入阶段
+static float g_calib_inj[4][2];          // 注入的屏幕坐标
+static float g_calib_obs_buf[4][2];      // 用户输入的观察坐标 buf[0]=x, buf[1]=y
+static bool  g_calib_done = true;  // ★ 硬编码校准值, 重置后仍是此值
+static float g_calib_A=1.00334f,g_calib_B=0,g_calib_C=-1.67224f;
+static float g_calib_D=0,g_calib_E=-1,g_calib_F=2400;  // final = A*sx+B*sy+C, D*sx+E*sy+F
 
 static ImColor g_BoxColor_Survivor = ImColor(50, 255, 50, 255);
 static ImColor g_BoxColor_Hunter   = ImColor(255, 50, 50, 255);
@@ -878,8 +898,15 @@ static void LoadConfig() {
     getFloat("wood_touch_x", wood_touch_x);
     getFloat("wood_touch_y", wood_touch_y);
     getFloat("wood_trigger_dist", wood_trigger_dist);
+    getFloat("wood_cooldown_dur", wood_cooldown_dur);
     getFloat("wood_length", wood_length);
     getFloat("wood_width", wood_width);
+    getBool("wood_show_params", wood_show_params);
+    getBool("show_wood_rect", show_wood_rect);
+    getFloat("wood_offset_x", wood_offset_x); getFloat("wood_offset_y", wood_offset_y);
+    getFloat("calib_A", g_calib_A); getFloat("calib_B", g_calib_B); getFloat("calib_C", g_calib_C);
+    getFloat("calib_D", g_calib_D); getFloat("calib_E", g_calib_E); getFloat("calib_F", g_calib_F);
+    getBool("calib_done", g_calib_done);
 
     // Tab 3: 模仿者
     getBool("show_mimic_overlay", show_mimic_overlay);
@@ -1006,8 +1033,17 @@ static void SaveConfig() {
     file << "wood_touch_x=" << wood_touch_x << "\n";
     file << "wood_touch_y=" << wood_touch_y << "\n";
     file << "wood_trigger_dist=" << wood_trigger_dist << "\n";
+    file << "wood_cooldown_dur=" << wood_cooldown_dur << "\n";
     file << "wood_length=" << wood_length << "\n";
     file << "wood_width=" << wood_width << "\n";
+    file << "wood_show_params=" << wood_show_params << "\n";
+    file << "show_wood_rect=" << show_wood_rect << "\n";
+    file << "wood_offset_x=" << wood_offset_x << "\n";
+    file << "wood_offset_y=" << wood_offset_y << "\n";
+    file << "calib_A=" << g_calib_A << "\n"; file << "calib_B=" << g_calib_B << "\n";
+    file << "calib_C=" << g_calib_C << "\n"; file << "calib_D=" << g_calib_D << "\n";
+    file << "calib_E=" << g_calib_E << "\n"; file << "calib_F=" << g_calib_F << "\n";
+    file << "calib_done=" << g_calib_done << "\n";
 
     // Tab 3: 模仿者
     file << "show_mimic_overlay=" << show_mimic_overlay << "\n";
@@ -2037,7 +2073,7 @@ static void LoadMapConfigFromJSON() {
         for (auto& m : j["maps"]) {
             if (m.value("floor", 0) == 0) {
                 std::string name = m.value("name", "");
-                std::string tex = m.value("texture", "");
+                std::string tex = m.value("texturePath", "");
                 if (name == expected_name || tex == expected_path) {
                     found = true;
                     break;
@@ -2049,7 +2085,7 @@ static void LoadMapConfigFromJSON() {
             json new_map;
             new_map["name"] = expected_name;
             new_map["floor"] = 0;
-            new_map["texture"] = expected_path;
+            new_map["texturePath"] = expected_path;
             new_map["minX"] = -500.0;
             new_map["maxX"] = 5000.0;
             new_map["minY"] = -3000.0;
@@ -2097,10 +2133,15 @@ static void LoadMapConfigFromJSON() {
 
         MapConfig cfg;
         std::string map_name = m.value("name", "未知地图");
-        std::string map_tex = m.value("texture", "");
+        std::string map_tex = m.value("texturePath", "");
         dynamic_names.push_back(map_name);
         dynamic_paths.push_back(map_tex);
         cfg.name = dynamic_names.back().c_str();
+        // ★ 相对路径补全 MAPS_ROOT 前缀
+        if (!map_tex.empty() && map_tex[0] != '/') {
+            std::string full = MAPS_ROOT + map_tex;
+            dynamic_paths.back() = full;
+        }
         cfg.texturePath = dynamic_paths.back().c_str();
 
         cfg.floorIndex = m.value("floor", 0);
@@ -4873,15 +4914,57 @@ void Draw_Main_Optimized(ImDrawList *Draw) {
     }
 
     if (show_touch_point) {
-        ImVec2 touch_center = ImVec2(wood_touch_x, wood_touch_y);
-        Draw->AddCircleFilled(touch_center, 15.0f, ImColor(0, 255, 0, 100));
-        Draw->AddCircle(touch_center, 18.0f, ImColor(0, 255, 0, 200), 0, 3.0f);
-        Draw->AddLine(ImVec2(touch_center.x - 25, touch_center.y),
-                      ImVec2(touch_center.x + 25, touch_center.y),
-                      ImColor(255, 255, 0, 180), 2.0f);
-        Draw->AddLine(ImVec2(touch_center.x, touch_center.y - 25),
-                      ImVec2(touch_center.x, touch_center.y + 25),
-                      ImColor(255, 255, 0, 180), 2.0f);
+        // ★ 绿色圆点 = 滑块位置, 实时跟随拖动
+        ImVec2 p(wood_touch_x, wood_touch_y);
+        ImDrawList* fg = ImGui::GetForegroundDrawList();
+        fg->AddCircleFilled(p, 16.0f, ImColor(0.0f, 1.0f, 0.0f, 0.5f));
+        fg->AddCircle(p, 20.0f, ImColor(0.0f, 1.0f, 0.0f, 0.8f), 0, 3.0f);
+        // 点击瞬间闪烁效果
+        float dt = ImGui::GetTime() - g_last_touch_time;
+        if (dt < 0.5f) {
+            float a = 1.0f - dt / 0.5f;
+            fg->AddCircleFilled(p, 20.0f, ImColor(1.0f, 1.0f, 0.0f, a * 0.6f));
+            fg->AddCircle(p, 28.0f, ImColor(1.0f, 1.0f, 0.0f, a), 0, 4.0f);
+        }
+    }
+
+    // ★ 判定范围可视化矩形 (高级暗色风格 + 微弱发光)
+    if (show_wood_rect && g_wood_viz_valid && wood_enabled) {
+        float ca = cosf(g_wood_viz_angle), sa = sinf(g_wood_viz_angle);
+        float hw = wood_width * 0.5f, hl = wood_length * 0.5f;
+        Vector3A wc[4];
+        wc[0] = {g_wood_viz_pos.X + hl*ca + hw*(-sa), g_wood_viz_pos.Y + hl*sa + hw*ca, g_wood_viz_pos.Z};
+        wc[1] = {g_wood_viz_pos.X + hl*ca - hw*(-sa), g_wood_viz_pos.Y + hl*sa - hw*ca, g_wood_viz_pos.Z};
+        wc[2] = {g_wood_viz_pos.X - hl*ca - hw*(-sa), g_wood_viz_pos.Y - hl*sa - hw*ca, g_wood_viz_pos.Z};
+        wc[3] = {g_wood_viz_pos.X - hl*ca + hw*(-sa), g_wood_viz_pos.Y - hl*sa + hw*ca, g_wood_viz_pos.Z};
+        ImVec2 sc[4]; int valid = 0;
+        for (int k = 0; k < 4; k++) {
+            float sx, sy, sw;
+            if (optimizedWorldToScreen(wc[k], matrix, px, py, sx, sy, sw)) {
+                sc[k] = ImVec2(sx, sy); valid++;
+            }
+        }
+        if (valid >= 3) {
+            ImDrawList* fg = ImGui::GetForegroundDrawList();
+            // 外层发光 (4px 外扩, 极低透明度)
+            ImVec2 center = {(sc[0].x+sc[1].x+sc[2].x+sc[3].x)*0.25f,
+                             (sc[0].y+sc[1].y+sc[2].y+sc[3].y)*0.25f};
+            ImVec2 glow[4];
+            float glow_r = 1.06f;  // 6% 外扩
+            for (int k = 0; k < 4; k++) {
+                glow[k].x = center.x + (sc[k].x - center.x) * glow_r;
+                glow[k].y = center.y + (sc[k].y - center.y) * glow_r;
+            }
+            fg->AddQuadFilled(glow[0], glow[1], glow[2], glow[3],
+                IM_COL32(255, 255, 255, 8));  // 极淡白色光晕
+            // 主体填充 (深色半透明, 磨砂感)
+            fg->AddQuadFilled(sc[0], sc[1], sc[2], sc[3],
+                IM_COL32(0, 0, 0, 30));
+            // 内边框 (浅灰, 1.5px)
+            for (int k = 0; k < 4; k++)
+                fg->AddLine(sc[k], sc[(k+1)%4],
+                    IM_COL32(180, 180, 180, 120), 1.5f);
+        }
     }
 
     // ========== 摸金导航地图 ==========
@@ -5236,13 +5319,29 @@ void read_thread(long int 状态数值, long int PD2, long int PD3) {
                 if (!coorBase) continue;
                 uintptr_t namezfcz = getPtr64(getPtr64(getPtr64(getPtr64(getPtr64(对象 + 0xF8) + 0x0) + 0x8) + 0x20) + 0x20);
                 if (namezfcz == 0) {
-                    if (Debugging) {
-                        DataStruct item{};
-                        item.obj = 对象;
-                        item.阵营 = 6;
-                        item.sub_type = ObjSubClass::Prop;
-                        snprintf(item.类名, sizeof(item.类名), "[未知:0x%lx]", 对象);
-                        local_data.push_back(item);
+                    // 调试: 统计跳过次数
+                    static int skip_cnt = 0, total = 0; total++;
+                    if (++skip_cnt <= 5) {
+                        uintptr_t step1 = getPtr64(对象 + 0xF8);
+                        printf("[Data] namezfcz链断: obj=0x%lx step1=0x%lx(v=%d) errors: ", 对象, step1,
+                            (step1 != 0) ? 1 : 0);
+                        if (step1) {
+                            uintptr_t s2=getPtr64(step1+0x0);
+                            printf("s2=0x%lx(v=%d) ", s2, s2?1:0);
+                            if (s2) {
+                                uintptr_t s3=getPtr64(s2+0x8);
+                                printf("s3=0x%lx(v=%d) ", s3, s3?1:0);
+                                if (s3) {
+                                    uintptr_t s4=getPtr64(s3+0x20);
+                                    printf("s4=0x%lx(v=%d) ", s4, s4?1:0);
+                                    if (s4) {
+                                        uintptr_t s5=getPtr64(s4+0x20);
+                                        printf("s5=0x%lx(v=%d)", s5, s5?1:0);
+                                    }
+                                }
+                            }
+                        }
+                        printf(" total=%d skip=%d\n", total, skip_cnt);
                     }
                     continue;
                 }
@@ -5292,13 +5391,17 @@ void read_thread(long int 状态数值, long int PD2, long int PD3) {
                 if (std::strstr(cls, "player") || std::strstr(cls, "boss") ||
                     状态数值 == 450.0f || std::strstr(cls, "scene") ||
                     std::strstr(cls, "prop") || std::strstr(cls, "mirror") || Debugging ||
+                    is_woodplane ||  // ★ 板子: woodplane01/woodplane001
                     disable_skip_filter ||
                     MjSubsystem::IsMjSpecialClass(cls) ||
                     MjSubsystem::IsMjPropClass(cls) || std::strstr(cls, "monster")) {
 
                     int actionId = 0;
-                    uintptr_t actionPtr = getPtr64(对象 + 0x730);
-                    if (actionPtr != 0) actionId = getDword(actionPtr + 0x30);
+                    uintptr_t p1 = getPtr64(对象 + 0x10);
+                    if (p1 != 0) {
+                        uintptr_t p2 = getPtr64(p1 + 0x150);
+                        if (p2 != 0) actionId = getDword(p2 + 0x2D0);
+                    }
 
                     DataStruct item{};
                     item.obj = 对象;
@@ -5342,6 +5445,10 @@ void read_thread(long int 状态数值, long int PD2, long int PD3) {
                         std::strcpy(item.str, getplayer(cls));
                         item.阵营 = 2;
                         item.sub_type = ObjSubClass::Player;
+                    } else if (std::strstr(cls, "woodplane001") || std::strstr(cls, "woodplane01")) {
+                        // ★ 木板独立分支 (不含 "scene", 不能放在 scene 分支内)
+                        item.阵营 = 3;
+                        item.sub_type = ObjSubClass::Pallet;
                     } else if (std::strstr(cls, "scene") && !std::strstr(cls, "prop") && !std::strstr(cls, "rd") && !MjSubsystem::IsMjSpecialClass(cls) && !std::strstr(cls, "monster")) {
                         std::strcpy(item.str, getscene(cls));
                         item.阵营 = 3;
@@ -5353,7 +5460,6 @@ void read_thread(long int 状态数值, long int PD2, long int PD3) {
                         else if (std::strstr(cls, "dm65_scene_prop_76")) item.sub_type = ObjSubClass::Cellar;
                         else if (std::strstr(cls, "dm65_scene_prop_01") || std::strstr(cls, "christmasbox01") || std::strstr(cls, "halloweenbox01")) item.sub_type = ObjSubClass::Box;
                         else if (std::strstr(cls, "dm65_scene_gallows") || std::strstr(cls, "dm65_scene_gallows_hx_low")) item.sub_type = ObjSubClass::Chair;
-                        else if (std::strstr(cls, "woodplane001") || std::strstr(cls, "woodplane01")) item.sub_type = ObjSubClass::Pallet;
                     } else if (std::strstr(cls, "prop") || std::strstr(cls, "mj_") || std::strstr(cls, "rd")) {
                         std::strcpy(item.str, getprop(cls));
                         if (std::strstr(cls, "prop_musicbox") || MjSubsystem::IsMjPropClass(cls) || MjSubsystem::IsMjSpecialClass(cls)) {
@@ -5474,32 +5580,12 @@ void read_thread(long int 状态数值, long int PD2, long int PD3) {
 
 bool InitTouch() {
     if (g_touch_ready) return true;
-    for (int i = 0; i < 16; i++) {
-        char path[64];
-        snprintf(path, sizeof(path), "/dev/input/event%d", i);
-        int fd = open(path, O_RDWR);
-        if (fd < 0) continue;
-        unsigned long abs_bits[ABS_MAX / (sizeof(unsigned long) * 8) + 1] = {0};
-        if (ioctl(fd, EVIOCGBIT(EV_ABS, sizeof(abs_bits)), abs_bits) < 0) {
-            close(fd);
-            continue;
-        }
-        auto check_bit = [&](int code) -> bool {
-            return (abs_bits[code / (sizeof(unsigned long) * 8)] >> (code % (sizeof(unsigned long) * 8))) & 1;
-        };
-        if (!check_bit(ABS_MT_SLOT) || !check_bit(ABS_MT_TRACKING_ID) ||
-            !check_bit(ABS_MT_POSITION_X) || !check_bit(ABS_MT_POSITION_Y)) {
-            close(fd);
-            continue;
-        }
-        struct input_absinfo abs_info;
-        if (ioctl(fd, EVIOCGABS(ABS_MT_POSITION_X), &abs_info) == 0) g_touch_max_x = abs_info.maximum;
-        if (ioctl(fd, EVIOCGABS(ABS_MT_POSITION_Y), &abs_info) == 0) g_touch_max_y = abs_info.maximum;
-        strncpy(g_touch_path, path, sizeof(g_touch_path));
+    if (g_drv && g_drv->touch_init(0)) {
         g_touch_ready = true;
-        close(fd);
+        printf("[Touch] 驱动触摸就绪\n");
         return true;
     }
+    printf("[Touch] 触摸初始化失败\n");
     return false;
 }
 
@@ -5507,28 +5593,30 @@ void SimulateClick(int x, int y) {
     if (!g_touch_ready) {
         if (!InitTouch()) return;
     }
-    int raw_x = (int)((float)x / displayInfo.width * g_touch_max_x);
-    int raw_y = (int)((float)y / displayInfo.height * g_touch_max_y);
-    int fd = open(g_touch_path, O_RDWR);
-    if (fd < 0) return;
-    struct input_event ev;
-    memset(&ev, 0, sizeof(ev));
-    ev.type = EV_ABS; ev.code = ABS_MT_SLOT; ev.value = 0; write(fd, &ev, sizeof(ev));
-    ev.code = ABS_MT_TRACKING_ID; ev.value = 0; write(fd, &ev, sizeof(ev));
-    ev.type = EV_KEY; ev.code = BTN_TOOL_FINGER; ev.value = 1; write(fd, &ev, sizeof(ev));
-    ev.code = BTN_TOUCH; ev.value = 1; write(fd, &ev, sizeof(ev));
-    ev.type = EV_ABS; ev.code = ABS_MT_POSITION_X; ev.value = raw_x; write(fd, &ev, sizeof(ev));
-    ev.code = ABS_MT_POSITION_Y; ev.value = raw_y; write(fd, &ev, sizeof(ev));
-    ev.code = ABS_MT_TOUCH_MAJOR; ev.value = 10; write(fd, &ev, sizeof(ev));
-    ev.code = ABS_MT_PRESSURE; ev.value = 50; write(fd, &ev, sizeof(ev));
-    ev.type = EV_SYN; ev.code = SYN_REPORT; ev.value = 0; write(fd, &ev, sizeof(ev));
-    usleep(50000);
-    ev.type = EV_ABS; ev.code = ABS_MT_SLOT; ev.value = 0; write(fd, &ev, sizeof(ev));
-    ev.code = ABS_MT_TRACKING_ID; ev.value = -1; write(fd, &ev, sizeof(ev));
-    ev.type = EV_KEY; ev.code = BTN_TOOL_FINGER; ev.value = 0; write(fd, &ev, sizeof(ev));
-    ev.code = BTN_TOUCH; ev.value = 0; write(fd, &ev, sizeof(ev));
-    ev.type = EV_SYN; ev.code = SYN_REPORT; ev.value = 0; write(fd, &ev, sizeof(ev));
-    close(fd);
+    if (g_drv) {
+        float sx = x + wood_offset_x;
+        float sy = y + wood_offset_y;
+        int tx, ty;
+        if (g_calib_done) {
+            // ★ 校准矩阵逆变换: target=A*inj+C → inj=A^{-1}*(target-C)
+            float dx = sx - g_calib_C;
+            float dy = sy - g_calib_F;
+            float det = g_calib_A * g_calib_E - g_calib_B * g_calib_D;
+            if (fabsf(det) < 0.01f) { tx = (int)sx; ty = (int)sy; }
+            else {
+                tx = (int)(( g_calib_E * dx - g_calib_B * dy) / det);
+                ty = (int)((-g_calib_D * dx + g_calib_A * dy) / det);
+            }
+        } else {
+            tx = (int)sx; ty = (int)sy;
+        }
+        g_last_touch_x = sx;
+        g_last_touch_y = sy;
+        g_last_touch_time = ImGui::GetTime();
+        g_drv->touch_down(tx, ty);
+        usleep(50000);
+        g_drv->touch_up();
+    }
 }
 
 void AutoWoodCheck() {
@@ -5547,8 +5635,10 @@ void AutoWoodCheck() {
     float minHunterDist = 9999.0f;
     const DataStruct* nearest_hunter = nullptr;
     Vector3A hunterPos;
+    int hunter_cnt = 0;
     for (const auto& item : current_data) {
         if (item.阵营 != 1 || item.is_ghost) continue;
+        hunter_cnt++;
         Vector3A pos = getObjectCoordinates(item.objcoor, false);
         if (!isValidCoordinate(pos)) continue;
         float dist = FastMath::fastDistanceSquared(Z, pos);
@@ -5558,14 +5648,17 @@ void AutoWoodCheck() {
             hunterPos = pos;
         }
     }
-    if (!nearest_hunter) return;
+
+    if (!nearest_hunter) return;  // 无有效监管者坐标
 
     float minWoodDist = 9999.0f;
     const DataStruct* nearest_wood = nullptr;
     Vector3A woodPos;
+    int wood_cnt = 0, wood_skip = 0;
     for (const auto& item : current_data) {
         if (item.sub_type != ObjSubClass::Pallet) continue;
-        if (item.action == 131088 || item.action == 196624) continue;
+        wood_cnt++;
+        if (item.action == 131088 || item.action == 196624) { wood_skip++; continue; }
         Vector3A pos = getObjectCoordinates(item.objcoor, false);
         if (!isValidCoordinate(pos)) continue;
         float dist = FastMath::fastDistanceSquared(Z, pos);
@@ -5575,11 +5668,18 @@ void AutoWoodCheck() {
             woodPos = pos;
         }
     }
-    if (!nearest_wood) return;
+
+
+    if (!nearest_wood) { g_wood_viz_valid = false; return; }
 
     float dx = getFloat(nearest_wood->objcoor + 0xB8);
     float dy = getFloat(nearest_wood->objcoor + 0xC0);
     float angle = atan2f(dy, dx);
+
+    // ★ 存储可视化数据
+    g_wood_viz_pos = woodPos;
+    g_wood_viz_angle = angle;
+    g_wood_viz_valid = true;
 
     float x[4], y[4];
     x[0] = woodPos.X + (wood_length / 2) * cosf(angle) + (wood_width / 2) * cosf(angle + M_PI_2);
@@ -5603,12 +5703,22 @@ void AutoWoodCheck() {
                          hunterPos.Y <= ymax && hunterPos.Y >= ymin);
     float distToWood = sqrtf(FastMath::fastDistanceSquared(Z, woodPos)) / 11.886f;
 
-    if (hunterInside && distToWood <= wood_trigger_dist) {
+    // ★ 冷却递减 (deltaTime 约 1/60 秒)
+    if (g_wood_cooldown > 0.0f) g_wood_cooldown -= 0.016f;
+
+    // ★ 边沿触发: 监管者 刚进入 + 不在冷却 + 距离达标
+    if (hunterInside && !g_was_hunter_inside &&
+        g_wood_cooldown <= 0.0f &&
+        distToWood <= wood_trigger_dist) {
         int tx = wood_touch_x + (rand() % 100 - 50);
         int ty = wood_touch_y + (rand() % 100 - 50);
         SimulateClick(tx, ty);
+        g_wood_cooldown = wood_cooldown_dur;  // 进入冷却
         usleep(50000);
     }
+
+    // ★ 记录本帧状态供下一帧边沿检测
+    g_was_hunter_inside = hunterInside;
 }
 
 // ===================== g_talent_view功能 =====================
@@ -6448,10 +6558,83 @@ void Layout_tick_UI(bool *main_thread_flag) {
                 ImGui::SliderFloat("X 坐标", &wood_touch_x, 0.0f, (float)displayInfo.width);
                 ImGui::SliderFloat("Y 坐标", &wood_touch_y, 0.0f, (float)displayInfo.height);
                 ImGui::Spacing();
+                ImGui::TextColored(g_theme.text_muted, "微调偏移 (粗定后精调)");
+                ImGui::InputFloat("X 偏移", &wood_offset_x, 1.0f, 10.0f, "%.0f");
+                ImGui::InputFloat("Y 偏移", &wood_offset_y, 1.0f, 10.0f, "%.0f");
+                if (StyledButton("归零偏移", ButtonVariant::Secondary, ImVec2(0,0), g_density)) {
+                    wood_offset_x = 0.0f; wood_offset_y = 0.0f;
+                }
+                ImGui::SameLine();
+                if (g_calib_done) ImGui::TextColored(g_theme.success, "已校准");
+                ImGui::Spacing();
+                // ★ 四点校准
+                if (g_calib_step == 0) {
+                    if (StyledButton("四点校准(重置)", ButtonVariant::Primary, ImVec2(0,0), g_density)) {
+                        g_calib_done = false;
+                        float w = displayInfo.width, h = displayInfo.height;
+                        g_calib_inj[0][0]=500;     g_calib_inj[0][1]=500;
+                        g_calib_inj[1][0]=w-500;   g_calib_inj[1][1]=500;
+                        g_calib_inj[2][0]=w-500;   g_calib_inj[2][1]=h-500;
+                        g_calib_inj[3][0]=500;     g_calib_inj[3][1]=h-500;
+                        g_calib_step = 1;
+                        // 自动注入第一个点
+                        SimulateClick((int)g_calib_inj[0][0], (int)g_calib_inj[0][1]);
+                    }
+                    ImGui::TextColored(g_theme.text_muted, "开启指针位置→四点校准→输入观察坐标");
+                } else {
+                    int s = g_calib_step - 1;
+                    const char* cn[4]={"左上","右上","右下","左下"};
+                    ImGui::TextColored(g_theme.warning, "校准 %d/4: %s 注入(%.0f,%.0f)",
+                        g_calib_step, cn[s], g_calib_inj[s][0], g_calib_inj[s][1]);
+                    ImGui::TextColored(g_theme.text_muted, "查看指针位置坐标, 输入观察到的X/Y:");
+                    ImGui::InputFloat("观察X", &g_calib_obs_buf[s][0], 100.0f, 1000.0f, "%.0f");
+                    ImGui::InputFloat("观察Y", &g_calib_obs_buf[s][1], 100.0f, 1000.0f, "%.0f");
+                    if (StyledButton("重新注入此点", ButtonVariant::Secondary, ImVec2(0,0), g_density)) {
+                        SimulateClick((int)g_calib_inj[s][0], (int)g_calib_inj[s][1]);
+                    }
+                    ImGui::SameLine();
+                    if (StyledButton("确认此点", ButtonVariant::Secondary, ImVec2(0,0), g_density)) {
+                        if (g_calib_step >= 4) {
+                            // 用前3个点解6元方程 (第4个点备用验证)
+                            float x1=g_calib_inj[0][0],y1=g_calib_inj[0][1];
+                            float X1=g_calib_obs_buf[0][0],Y1=g_calib_obs_buf[0][1];
+                            float x2=g_calib_inj[1][0],y2=g_calib_inj[1][1];
+                            float X2=g_calib_obs_buf[1][0],Y2=g_calib_obs_buf[1][1];
+                            float x3=g_calib_inj[2][0],y3=g_calib_inj[2][1];
+                            float X3=g_calib_obs_buf[2][0],Y3=g_calib_obs_buf[2][1];
+                            float det3 = x1*(y2-y3) + x2*(y3-y1) + x3*(y1-y2);
+                            if (fabsf(det3) > 0.01f) {
+                                g_calib_A = (X1*(y2-y3) + X2*(y3-y1) + X3*(y1-y2)) / det3;
+                                g_calib_B = (x1*(X2-X3) + x2*(X3-X1) + x3*(X1-X2)) / det3;
+                                g_calib_C = (x1*(y2*X3-y3*X2)+x2*(y3*X1-y1*X3)+x3*(y1*X2-y2*X1)) / det3;
+                                g_calib_D = (Y1*(y2-y3) + Y2*(y3-y1) + Y3*(y1-y2)) / det3;
+                                g_calib_E = (x1*(Y2-Y3) + x2*(Y3-Y1) + x3*(Y1-Y2)) / det3;
+                                g_calib_F = (x1*(y2*Y3-y3*Y2)+x2*(y3*Y1-y1*Y3)+x3*(y1*Y2-y2*Y1)) / det3;
+                                g_calib_done = true;
+                            }
+                            g_calib_step = 0;
+                        } else {
+                            g_calib_step++;
+                            // 自动注入下一个点
+                            SimulateClick((int)g_calib_inj[g_calib_step-1][0],
+                                          (int)g_calib_inj[g_calib_step-1][1]);
+                        }
+                    }
+                    ImGui::SameLine();
+                    if (StyledButton("取消", ButtonVariant::Danger, ImVec2(0,0), g_density)) {
+                        g_calib_step = 0;
+                    }
+                }
+                ImGui::Spacing();
                 ImGui::TextColored(g_theme.text_muted, "判定参数");
                 ImGui::SliderFloat("触发距离(米)", &wood_trigger_dist, 5.0f, 40.0f);
-                ImGui::SliderFloat("判定长度", &wood_length, 5.0f, 30.0f);
-                ImGui::SliderFloat("判定宽度", &wood_width, 3.0f, 20.0f);
+                ImGui::SliderFloat("冷却时间(秒)", &wood_cooldown_dur, 0.5f, 5.0f);
+                ImGui::Checkbox("显示判定尺寸", &wood_show_params);
+                if (wood_show_params) {
+                    ImGui::SliderFloat("判定长度", &wood_length, 5.0f, 30.0f);
+                    ImGui::SliderFloat("判定宽度", &wood_width, 3.0f, 20.0f);
+                }
+                ImGui::Checkbox("显示判定范围", &show_wood_rect);
                 ImGui::Spacing();
                 ImGui::TextColored(g_theme.warning, "提示：先测试触摸，确认交互键有反应后再开启");
                 break;
@@ -7390,6 +7573,123 @@ void Layout_tick_UI(bool *main_thread_flag) {
                 if (StyledButton("清除出口调试十字", ButtonVariant::Secondary, ImVec2(0,0), g_density)) {
                     g_show_exit_debug = false;
                 }
+                
+                ImGui::Spacing();
+                ImGui::Separator();
+                ImGui::Spacing();
+                
+                // === 动作ID多链扫描 ===
+                ImGui::TextColored(g_theme.info, "=== 动作ID多链扫描 (对比哈基米) ===");
+                ImGui::TextColored(g_theme.text_muted, "同时运行哈基米 v2.3 对比数值，匹配的链即为正确链");
+                
+                uintptr_t self_obj = GlobalMemory::自身;
+                if (self_obj == 0) {
+                    ImGui::TextColored(g_theme.warning, "玩家对象未识别，无法扫描");
+                } else {
+                    // 定义待测指针链: {描述, {{第一级偏移, 第二级偏移, 第三级偏移, 是读DWORD(1)还是读指针(0)?}}}
+                    struct ChainDef {
+                        const char* name;
+                        int depth;  // 链深度: 2=dw at level2, 3=ptr->ptr->dw, 4=ptr->ptr->ptr->dw
+                        uintptr_t off1;  // 从obj的偏移
+                        uintptr_t off2;  // 从p1的偏移 (depth>=2)
+                        uintptr_t off3;  // 从p2的偏移 (depth>=3)
+                        uintptr_t off4;  // 从p3的偏移 (depth>=4)
+                    };
+                    
+                    static ChainDef chains[] = {
+                        // === 3级链 (obj -> ptr -> ptr -> dword) ===
+                        {"0x10->0x150->dw 0x2D0 [当前]", 3, 0x10, 0x150, 0x2D0, 0},
+                        {"0x10->0x148->dw 0x2D0",          3, 0x10, 0x148, 0x2D0, 0},
+                        {"0x10->0x150->dw 0x2D4",          3, 0x10, 0x150, 0x2D4, 0},
+                        {"0x10->0x150->dw 0x2D8",          3, 0x10, 0x150, 0x2D8, 0},
+                        {"0x10->0x150->dw 0x2E0",          3, 0x10, 0x150, 0x2E0, 0},
+                        {"0x10->0x158->dw 0x2D0",          3, 0x10, 0x158, 0x2D0, 0},
+                        {"0x138->0x150->dw 0x2D0",         3, 0x138, 0x150, 0x2D0, 0},
+                        {"0x8->0x150->dw 0x2D0",           3, 0x8, 0x150, 0x2D0, 0},
+                        
+                        // === 2级链 (obj -> ptr -> dword) ===
+                        {"0x10->dw 0x2D0",                 2, 0x10, 0x2D0, 0, 0},
+                        {"0x10->dw 0x150",                 2, 0x10, 0x150, 0, 0},
+                        {"0x138->dw 0x2D0",                2, 0x138, 0x2D0, 0, 0},
+                        {"0x138->dw 0x150",                2, 0x138, 0x150, 0, 0},
+                        {"0x730->dw 0x30",                 2, 0x730, 0x30, 0, 0},
+                        {"0x730->dw 0x28",                 2, 0x730, 0x28, 0, 0},
+                        {"0x730->dw 0x20",                 2, 0x730, 0x20, 0, 0},
+                        
+                        // === 直接读 obj + offset ===
+                        {"dw 0x2D0 (obj直接)",             1, 0x2D0, 0, 0, 0},
+                        {"dw 0x150 (obj直接)",             1, 0x150, 0, 0, 0},
+                        
+                        // === 4级链 (obj -> ptr -> ptr -> ptr -> dword) ===
+                        {"0x10->0x150->0x0->dw 0x2D0",     4, 0x10, 0x150, 0x0, 0x2D0},
+                        {"0x10->0x150->0x8->dw 0x2D0",     4, 0x10, 0x150, 0x8, 0x2D0},
+                        {"0x10->0x150->0x10->dw 0x2D0",    4, 0x10, 0x150, 0x10, 0x2D0},
+                    };
+                    const int chain_count = sizeof(chains) / sizeof(chains[0]);
+                    
+                    // 当前链的值（高亮参考）
+                    int current_chain_val = 0;
+                    {
+                        uintptr_t p1 = getPtr64(self_obj + 0x10);
+                        if (p1 != 0) {
+                            uintptr_t p2 = getPtr64(p1 + 0x150);
+                            if (p2 != 0) current_chain_val = getDword(p2 + 0x2D0);
+                        }
+                    }
+                    ImGui::Text("参考值 [0x10->0x150->dw0x2D0]: %d", current_chain_val);
+                    
+                    // 扫描所有链
+                    ImGui::BeginChild("ActionChainScan", ImVec2(0, 280 * g_density), true);
+                    for (int ci = 0; ci < chain_count; ci++) {
+                        const auto& c = chains[ci];
+                        int val = 0;
+                        bool valid = false;
+                        uintptr_t p1 = 0, p2 = 0, p3 = 0;
+                        
+                        switch (c.depth) {
+                            case 1:  // obj直接读
+                                val = getDword(self_obj + c.off1);
+                                valid = true;
+                                break;
+                            case 2:  // obj -> ptr -> dword
+                                p1 = getPtr64(self_obj + c.off1);
+                                if (p1 != 0) { val = getDword(p1 + c.off2); valid = true; }
+                                break;
+                            case 3:  // obj -> ptr -> ptr -> dword
+                                p1 = getPtr64(self_obj + c.off1);
+                                if (p1 != 0) {
+                                    p2 = getPtr64(p1 + c.off2);
+                                    if (p2 != 0) { val = getDword(p2 + c.off3); valid = true; }
+                                }
+                                break;
+                            case 4:  // obj -> ptr -> ptr -> ptr -> dword
+                                p1 = getPtr64(self_obj + c.off1);
+                                if (p1 != 0) {
+                                    p2 = getPtr64(p1 + c.off2);
+                                    if (p2 != 0) {
+                                        p3 = getPtr64(p2 + c.off3);
+                                        if (p3 != 0) { val = getDword(p3 + c.off4); valid = true; }
+                                    }
+                                }
+                                break;
+                        }
+                        
+                        // 高亮与当前链值相同的行
+                        bool match_current = (valid && val == current_chain_val && ci != 0);
+                        ImVec4 row_color = match_current ? g_theme.success : g_theme.text;
+                        if (!valid) row_color = g_theme.text_muted;
+                        
+                        ImGui::TextColored(row_color, "[%02d] %-36s = %d%s%s",
+                            ci, c.name, val,
+                            valid ? "" : " (断链)",
+                            match_current ? " ★匹配当前链" : "");
+                    }
+                    ImGui::EndChild();
+                    
+                    ImGui::Spacing();
+                    ImGui::TextColored(g_theme.text_muted, "提示: ★匹配当前链 = 该链结果与当前链相同，可能是同一条或相关链");
+                    ImGui::TextColored(g_theme.text_muted, "运行哈基米时找到数值匹配的链即正确链，非0值更有参考价值");
+                }
             }
                 break;
             case 8:  // 关于
@@ -7442,7 +7742,7 @@ void Layout_tick_UI(bool *main_thread_flag) {
                         existing["piano_x"] = new_piano_x;
                         existing["piano_y"] = new_piano_y;
                         existing["piano_z"] = new_piano_z;
-                        if (strlen(new_texture) > 0) existing["texture"] = new_texture;
+                        if (strlen(new_texture) > 0) existing["texturePath"] = new_texture;
                         existing["floor_z_threshold"] = 250.0f;
                         updated = true;
                         break;
@@ -7452,7 +7752,7 @@ void Layout_tick_UI(bool *main_thread_flag) {
 
             if (!updated) {
                 json m;
-                m["name"] = new_name; m["floor"] = 0; m["texture"] = new_texture;
+                m["name"] = new_name; m["floor"] = 0; m["texturePath"] = new_texture;
                 m["minX"] = -500.0f; m["maxX"] = 5000.0f; m["minY"] = -3000.0f; m["maxY"] = 1500.0f;
                 m["floor_z_threshold"] = 250.0f;
                 m["music_x"] = new_music_x; m["music_y"] = new_music_y; m["music_z"] = new_music_z;

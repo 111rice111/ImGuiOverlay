@@ -16,6 +16,7 @@
 #include <sys/stat.h>
 #include <sys/fcntl.h>
 #include <sys/ioctl.h>
+#include <linux/input.h>
 #include <vector>
 
 class RTDriver : public IDriver {
@@ -89,5 +90,58 @@ public:
         strcpy(kb, name); mb.pid=pid_; mb.name=kb;
         if (ioctl(fd_, OP_MOD, &mb)!=0) return 0;
         return mb.base;
+    }
+
+    // ── 触摸 (evdev 注入, 跟哈基米一样) ──
+    int touch_fd_ = -1;
+    int touch_max_x_ = 23999, touch_max_y_ = 33919;
+    int scr_w_ = 3392, scr_h_ = 2400;
+
+    bool touch_init(int = 0) override {
+        if (touch_fd_ > 0) return true;
+        for (int i = 0; i < 16; i++) {
+            char p[64]; snprintf(p, sizeof(p), "/dev/input/event%d", i);
+            int fd = open(p, O_RDWR);
+            if (fd < 0) continue;
+            unsigned long bits[(ABS_MAX/64)+1] = {};
+            if (ioctl(fd, EVIOCGBIT(EV_ABS, sizeof(bits)), bits) < 0) { close(fd); continue; }
+            auto chk = [&](int c) { return (bits[c/64] >> (c%64)) & 1; };
+            if (!chk(ABS_MT_SLOT) || !chk(ABS_MT_TRACKING_ID) ||
+                !chk(ABS_MT_POSITION_X) || !chk(ABS_MT_POSITION_Y)) { close(fd); continue; }
+            struct input_absinfo ai;
+            if (ioctl(fd, EVIOCGABS(ABS_MT_POSITION_X), &ai) == 0) touch_max_x_ = ai.maximum;
+            if (ioctl(fd, EVIOCGABS(ABS_MT_POSITION_Y), &ai) == 0) touch_max_y_ = ai.maximum;
+            touch_fd_ = fd;
+            printf("[RT] 触摸: %s (max %d,%d)\n", p, touch_max_x_, touch_max_y_);
+            return true;
+        }
+        return false;
+    }
+    bool touch_down(int x, int y) override {
+        if (touch_fd_ < 0) return false;
+        // ★ XY交换: 触摸控制器轴跟屏幕轴反了
+        int rx = (scr_h_ > 0) ? (y * touch_max_x_ / scr_h_) : y;
+        int ry = (scr_w_ > 0) ? (x * touch_max_y_ / scr_w_) : x;
+        struct input_event ev;
+        memset(&ev, 0, sizeof(ev));
+        ev.type = EV_ABS; ev.code = ABS_MT_SLOT; ev.value = 0; write(touch_fd_, &ev, sizeof(ev));
+        ev.code = ABS_MT_TRACKING_ID; ev.value = 0; write(touch_fd_, &ev, sizeof(ev));
+        ev.type = EV_KEY; ev.code = BTN_TOUCH; ev.value = 1; write(touch_fd_, &ev, sizeof(ev));
+        ev.code = BTN_TOOL_FINGER; ev.value = 1; write(touch_fd_, &ev, sizeof(ev));
+        ev.type = EV_ABS; ev.code = ABS_MT_POSITION_X; ev.value = rx; write(touch_fd_, &ev, sizeof(ev));
+        ev.code = ABS_MT_POSITION_Y; ev.value = ry; write(touch_fd_, &ev, sizeof(ev));
+        ev.type = EV_SYN; ev.code = SYN_REPORT; ev.value = 0; write(touch_fd_, &ev, sizeof(ev));
+        return true;
+    }
+    bool touch_up() override {
+        if (touch_fd_ < 0) return false;
+        struct input_event ev;
+        memset(&ev, 0, sizeof(ev));
+        ev.type = EV_ABS; ev.code = ABS_MT_SLOT; ev.value = 0; write(touch_fd_, &ev, sizeof(ev));
+        ev.code = ABS_MT_TRACKING_ID; ev.value = -1; write(touch_fd_, &ev, sizeof(ev));
+        ev.type = EV_KEY; ev.code = BTN_TOUCH; ev.value = 0; write(touch_fd_, &ev, sizeof(ev));
+        ev.code = BTN_TOOL_FINGER; ev.value = 0; write(touch_fd_, &ev, sizeof(ev));
+        ev.type = EV_SYN; ev.code = SYN_REPORT; ev.value = 0; write(touch_fd_, &ev, sizeof(ev));
+        return true;
     }
 };

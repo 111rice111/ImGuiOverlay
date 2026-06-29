@@ -21,7 +21,15 @@ class TWTDriver : public IDriver {
     pid_t pid_ = -1;
 
     struct _request { pid_t pid; uintptr_t addr; void* buf; size_t size; };
-    enum { TWT_READ=4, TWT_READ_V2=11, TWT_WRITE=5, TWT_MOD_BASE=1, TWT_MOD_BSS=3, TWT_GET_PID=0 };
+    // ★ ioctl 命令必须用 _IOW 宏编码, 不是裸数字!
+    enum {
+        TWT_GET_PID   = _IOW('T', 0, _request),
+        TWT_MOD_BASE  = _IOW('T', 1, _request),
+        TWT_MOD_BSS   = _IOW('T', 3, _request),
+        TWT_READ      = _IOW('T', 4, _request),
+        TWT_WRITE     = _IOW('T', 5, _request),
+        TWT_READ_V2   = _IOW('T', 11, _request),
+    };
 
     // TWT 内联汇编 — 获取驱动 fd
     static int twt_call() {
@@ -60,11 +68,21 @@ public:
     bool is_connected() const override { return fd_ > 0; }
 
     const char* probe() override {
-        if (fd_ > 0) return "TwT";  // already connected
+        if (fd_ > 0) return "TwT";
         int fd = twt_call();
-        if (fd < 0) fd = twt_scan_fd();
-        if (fd > 0) { fd_ = fd; return "TwT (syscall)"; }
+        printf("[TWT] MY_CALL → fd=%d\n", fd);
+        if (fd < 0) {
+            fd = twt_scan_fd();
+            printf("[TWT] scan_fd → fd=%d\n", fd);
+        }
+        if (fd > 0) { fd_ = fd; return "TwT"; }
         return nullptr;
+    }
+
+    bool handshake() override {
+        if (fd_ <= 0) return false;
+        ioctl(fd_, _IO('T', 19), 0);  // BP_INIT_CMD
+        return true;
     }
 
     int connect() override {
@@ -72,43 +90,16 @@ public:
         return -1;
     }
 
-    void initialize(pid_t p) override { 
-        pid_ = p; 
-        printf("[TWT] initialize pid=%d\n", (int)p);
-        // 验证读取: 尝试从 libbase 读 8 字节
-        uintptr_t test_addr = 0;
-        char mp[64]; snprintf(mp,64,"/proc/%d/maps",(int)p);
-        FILE* f = fopen(mp,"r"); char line[256];
-        if (f && fgets(line,sizeof(line),f)) test_addr = strtoull(line,NULL,16);
-        if (f) fclose(f);
-        if (test_addr) {
-            uint64_t val = 0;
-            bool ok = read_mem(test_addr, &val, 8);
-            printf("[TWT] 验证读 0x%lx → %s val=0x%llx\n", test_addr, ok?"OK":"FAIL", (unsigned long long)val);
-            if (!ok || val==0) {
-                // 尝试 V2
-                _request req = {pid_, test_addr & 0xFFFFFFFFFFFFULL, &val, 8};
-                int r = ioctl(fd_, TWT_READ_V2, &req);
-                printf("[TWT] V2 0x%lx → ret=%d val=0x%llx\n", test_addr, r, (unsigned long long)val);
-            }
-        }
-        fflush(stdout);
-    }
+    void initialize(pid_t p) override { pid_ = p; }
     void disconnect() override { if (fd_>0) { close(fd_); fd_=-1; } }
 
     bool read_mem(uintptr_t addr, void* buf, size_t size) override {
         if (fd_<0||pid_<=0) return false;
         _request req = {pid_, addr & 0xFFFFFFFFFFFFULL, buf, size};
         int r = ioctl(fd_, TWT_READ, &req);
-        static int cnt=0, errs=0; cnt++;
-        if (r != 0 && ++errs <= 3)
-            printf("[TWT] ioctl(READ) 失败 ret=%d errno=%d cnt=%d pid=%d addr=0x%lx size=%zu\n",
-                r, errno, cnt, (int)pid_, addr, size);
-        if (cnt == 1) {
-            // 调试: 打印第一页前 16 字节
-            uint8_t* b = (uint8_t*)buf;
-            printf("[TWT] 首读: 0x%lx → %02x%02x%02x%02x %02x%02x%02x%02x ...\n", addr,
-                b[0],b[1],b[2],b[3],b[4],b[5],b[6],b[7]);
+        if (r != 0 && errno == EPERM) {
+            // 未映射页, 用 V2 重试
+            r = ioctl(fd_, TWT_READ_V2, &req);
         }
         return r == 0;
     }
@@ -125,5 +116,28 @@ public:
         char nb[256]; snprintf(nb,sizeof(nb),"%s",name); req.buf=nb;
         if (ioctl(fd_, TWT_MOD_BASE, &req)!=0) return 0;
         return req.addr;
+    }
+
+    // ── 触摸 (通过 TWT 内核驱动, 绕过 /dev/input/event* 封锁) ──
+    struct touch_ev { int slot, x, y; };
+
+    bool touch_init(int mode = 0) override {
+        touch_ev t = {mode, 0, 0};
+        int r = ioctl(fd_, _IOW('T', 6, touch_ev), &t);
+        if (r != 0) {
+            printf("[TWT] touch_init(%d) failed ret=%d errno=%d\n", mode, r, errno);
+            if (errno == EALREADY) { printf("[TWT] touch already inited\n"); return true; }
+            return false;
+        }
+        printf("[TWT] touch_init ok mode=%d\n", mode);
+        return true;
+    }
+    bool touch_down(int x, int y) override {
+        touch_ev t = {0, x, y};
+        return ioctl(fd_, _IOW('T', 7, touch_ev), &t) == 0;
+    }
+    bool touch_up() override {
+        touch_ev t = {0, 0, 0};
+        return ioctl(fd_, _IOW('T', 8, touch_ev), &t) == 0;
     }
 };
