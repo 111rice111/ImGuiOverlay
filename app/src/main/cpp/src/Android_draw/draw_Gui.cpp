@@ -6470,7 +6470,6 @@ void Layout_tick_UI(bool *main_thread_flag) {
                 {"摸金模式", "\xee\xa8\x84"},
                 {"地图管理", "\xee\xa9\x85"},
                 {"数据管理", "\xee\xa3\x91"},  // 新增：数据导入/导出/查看
-                {"路径导入", "\xee\xa9\x87"},
                 {"调试信息", "\xee\xa7\x81"},
                 {"关于",     "\xee\xa7\x81"},
         };
@@ -6799,18 +6798,7 @@ void Layout_tick_UI(bool *main_thread_flag) {
                                     g_all_maps[g_current_map_index].empty());
 
                 if (map_invalid) {
-                    ImGui::TextColored(g_theme.warning, "尚未识别地图，部分功能不可用");
-                    ImGui::TextColored(g_theme.text_muted, "%s", g_map_scores_buf);
-                }
-
-                ImGui::Checkbox("启用导航地图", &g_map_enabled);
-                ImGui::SameLine();
-                ImGui::Checkbox("自动识别", &g_map_auto_detect);
-                ImGui::SameLine();
-                ImGui::Checkbox("路线规划", &g_show_nav_line);
-
-                // ★ 手动选择地图（始终可用，无需等待自动识别）
-                {
+                    // ★ 未识别时: 大号手动选择器独占一行
                     std::vector<const char*> manual_names;
                     std::vector<int> manual_indices;
                     for (int i = 0; i < (int)g_all_maps.size(); i++) {
@@ -6820,33 +6808,34 @@ void Layout_tick_UI(bool *main_thread_flag) {
                         }
                     }
                     if (!manual_names.empty()) {
+                        ImGui::TextColored(g_theme.warning, "尚未识别地图，请手动选择:");
+                        ImGui::SetNextItemWidth(-1); // 占满整行
                         int combo_idx = 0;
-                        for (int i = 0; i < (int)manual_indices.size(); i++) {
-                            if (manual_indices[i] == g_current_map_index) { combo_idx = i; break; }
-                        }
-                        ImGui::SameLine();
-                        ImGui::SetNextItemWidth(140);
-                        if (ImGui::Combo("切换地图", &combo_idx, manual_names.data(), manual_names.size())) {
+                        if (ImGui::Combo("##big_map_sel", &combo_idx, manual_names.data(), manual_names.size())) {
                             if (combo_idx >= 0 && combo_idx < (int)manual_indices.size()) {
                                 int new_idx = manual_indices[combo_idx];
                                 g_current_map_index = new_idx;
                                 g_current_floor_index = SafeClampFloorIdx(new_idx, 0);
                                 g_detect_phase = MapDetectPhase::LOCKED;
-                                g_detect_debounce_frames = 0;
-                                g_detect_best_fp_id = -1;
-                                g_locked_stable_frames = 0;
+                                g_detect_debounce_frames = 0; g_detect_best_fp_id = -1; g_locked_stable_frames = 0;
                                 g_map_auto_detect = false;
-                                snprintf(g_detect_status_text, sizeof(g_detect_status_text), "手动: map[%d]", new_idx);
                                 LoadMapTexture(new_idx, g_current_floor_index);
                                 AddNotification("已切换到手动地图", 2.0f, ImVec4(0.3f, 1.0f, 0.3f, 1.0f));
                             }
                         }
+                    } else {
+                        ImGui::TextColored(g_theme.warning, "尚未识别地图，部分功能不可用");
                     }
+                    ImGui::TextColored(g_theme.text_muted, "%s", g_map_scores_buf);
                 }
 
-                // ★ 手动选择后重新评估地图有效性
-                map_invalid = (g_current_map_index < 0 || g_current_map_index >= (int)g_all_maps.size() ||
-                               g_all_maps[g_current_map_index].empty());
+                ImGui::Checkbox("启用导航地图", &g_map_enabled);
+                ImGui::SameLine();
+                ImGui::Checkbox("自动识别", &g_map_auto_detect);
+                ImGui::SameLine();
+                ImGui::Checkbox("路线规划", &g_show_nav_line);
+
+                ImGui::Checkbox("3D立体路径", &g_show_3d_paths);
 
                 if (!map_invalid) {
                     bool unknown_map = false;
@@ -7641,246 +7630,7 @@ void Layout_tick_UI(bool *main_thread_flag) {
                 ImGui::TextColored(g_theme.text_muted, "备份文件: map_config.json.bak (自动创建)");
             }
                 break;
-            case 7:  // 路径导入
-            {
-                StyledSectionHeader("从攻略图导入路径", g_theme.text_title, g_density);
-                ImGui::TextColored(g_theme.text_muted, "将 extract_paths.py 生成的像素坐标自动导入为导航线");
-                ImGui::Spacing();
-                
-                // ── 当前地图信息 ──
-                bool map_ready = (g_current_map_index >= 0 && g_current_map_index < (int)g_all_maps.size());
-                if (map_ready) {
-                    const auto& cfg = g_all_maps[g_current_map_index][SafeClampFloorIdx(g_current_map_index, g_current_floor_index)];
-                    ImGui::TextColored(g_theme.info, "当前地图: %s (楼层 %d)", cfg.name, cfg.floorIndex + 1);
-                    
-                    // 读取攻略图尺寸（从纹理文件头解析，支持PNG+JPEG）
-                    int img_w = 0, img_h = 0;
-                    {
-                        // texturePath 可能为空 — 用 name 推断路径
-                        const char* tex_path = cfg.texturePath;
-                        std::string fallback_path;
-                        if (!tex_path || !tex_path[0]) {
-                            fallback_path = std::string(MAPS_ROOT) + cfg.name;
-                            for (auto& c : fallback_path) if (c == ' ') c = '_'; // "地图1 一楼" → "地图1_一楼"
-                            fallback_path += ".png";
-                            tex_path = fallback_path.c_str();
-                        }
-                        FILE* f = fopen(tex_path, "rb");
-                        if (f) {
-                            unsigned char hdr[24];
-                            if (fread(hdr, 1, 24, f) == 24) {
-                                if (hdr[0]==0x89 && hdr[1]=='P' && hdr[2]=='N' && hdr[3]=='G') {
-                                    // PNG: IHDR 头在偏移16处
-                                    img_w = (hdr[16]<<24)|(hdr[17]<<16)|(hdr[18]<<8)|hdr[19];
-                                    img_h = (hdr[20]<<24)|(hdr[21]<<16)|(hdr[22]<<8)|hdr[23];
-                                } else if (hdr[0]==0xFF && hdr[1]==0xD8) {
-                                    // JPEG: 扫描 SOF0 (0xFF 0xC0) 标记获取尺寸
-                                    unsigned char buf[2];
-                                    while (fread(buf, 1, 2, f) == 2) {
-                                        if (buf[0] != 0xFF) break;
-                                        if (buf[1] == 0xC0 || buf[1] == 0xC2) {
-                                            // SOF0/SOF2: 跳过长度(2)+精度(1) = 3字节
-                                            fseek(f, 3, SEEK_CUR);
-                                            unsigned char sof[7];
-                                            if (fread(sof, 1, 7, f) == 7) {
-                                                img_h = (sof[1]<<8)|sof[2];
-                                                img_w = (sof[3]<<8)|sof[4];
-                                            }
-                                            break;
-                                        } else if (buf[1] >= 0xC0 && buf[1] <= 0xCF) {
-                                            break; // 其他 SOF，不处理
-                                        } else {
-                                            // 跳过此标记段
-                                            unsigned char len[2];
-                                            if (fread(len, 1, 2, f) != 2) break;
-                                            int skip = ((len[0]<<8)|len[1]) - 2;
-                                            fseek(f, skip, SEEK_CUR);
-                                        }
-                                    }
-                                }
-                            }
-                            fclose(f);
-                        }
-                    }
-                    // 文件头解析失败 → 回退到 OpenGL 纹理尺寸
-                    if (img_w <= 0) {
-                        img_w = g_map_texture_w[g_current_map_index][g_current_floor_index];
-                        img_h = g_map_texture_h[g_current_map_index][g_current_floor_index];
-                    }
-                    if (img_w > 0) {
-                        ImGui::TextColored(ImVec4(0.3f, 0.9f, 0.3f, 1.0f),
-                            "攻略图尺寸: %d x %d (自动检测)", img_w, img_h);
-                        g_import_tex_w = img_w;
-                        g_import_tex_h = img_h;
-                    } else {
-                        ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.2f, 1.0f),
-                            "攻略图尺寸: 无法检测 (需 PNG 文件)");
-                    }
-                    ImGui::TextColored(g_theme.text_muted, "校准状态: %s", cfg.calibrated ? "已校准" : "未校准(!)");
-                    
-                    // 自动构造 txt 路径
-                    // 优先用 texturePath, 为空时用 MAPS_ROOT + name 推断
-                    std::string tex_path(cfg.texturePath && cfg.texturePath[0] ? cfg.texturePath : "");
-                    if (tex_path.empty()) {
-                        tex_path = std::string(MAPS_ROOT) + cfg.name;
-                        for (auto& c : tex_path) if (c == ' ') c = '_';
-                        tex_path += ".png";
-                    }
-                    size_t dot = tex_path.rfind('.');
-                    std::string base = (dot != std::string::npos) ? tex_path.substr(0, dot) : tex_path;
-                    std::string main_txt = base + "_main.txt";
-                    std::string sub_txt  = base + "_sub.txt";
-                    
-                    bool main_exists = (access(main_txt.c_str(), F_OK) == 0);
-                    bool sub_exists  = (access(sub_txt.c_str(), F_OK) == 0);
-                    
-                    ImGui::Spacing();
-                    ImGui::Text("主路文件: %s", main_txt.c_str());
-                    ImGui::SameLine();
-                    ImGui::TextColored(main_exists ? ImVec4(0.3f,1.0f,0.3f,1.0f) : ImVec4(1.0f,0.3f,0.3f,1.0f),
-                        main_exists ? "[存在]" : "[不存在]");
-                    ImGui::Text("辅路文件: %s", sub_txt.c_str());
-                    ImGui::SameLine();
-                    ImGui::TextColored(sub_exists ? ImVec4(0.3f,1.0f,0.3f,1.0f) : ImVec4(1.0f,0.3f,0.3f,1.0f),
-                        sub_exists ? "[存在]" : "[不存在]");
-                } else {
-                    ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "请先识别地图");
-                }
-                
-                ImGui::Separator();
-                ImGui::Spacing();
-                
-                // ── 内部函数：加载指定 txt → 预览 ──
-                auto load_preview = [&](const std::string& txt_path) {
-                    g_import_preview_paths.clear();
-                    g_has_import_preview = false;
-                    g_import_status.clear();
-                    
-                    if (!map_ready) { g_import_status = "错误: 请先识别地图"; return; }
-                    if (g_import_tex_w <= 0) { g_import_status = "错误: 无法检测攻略图尺寸"; return; }
-                    
-                    std::ifstream ifs(txt_path);
-                    if (!ifs) { g_import_status = "错误: 文件不存在 — " + txt_path; return; }
-                    
-                    const auto& cfg = g_all_maps[g_current_map_index][SafeClampFloorIdx(g_current_map_index, g_current_floor_index)];
-                    float floorZ = (g_current_floor_index == 1) ? 200.0f : 0.0f;
-                    
-                    std::vector<Vector3A> current_path;
-                    std::string line;
-                    int total_points = 0;
-                    
-                    while (std::getline(ifs, line)) {
-                        if (line.empty() || line[0] == '#') {
-                            if (!current_path.empty()) { g_import_preview_paths.push_back(current_path); current_path.clear(); }
-                            continue;
-                        }
-                        size_t comma = line.find(',');
-                        if (comma == std::string::npos) continue;
-                        try {
-                            int px = std::stoi(line.substr(0, comma));
-                            int py = std::stoi(line.substr(comma + 1));
-                            float u = (float)px / (float)g_import_tex_w;
-                            float v = (float)py / (float)g_import_tex_h;
-                            current_path.push_back(CoordTransform::UVToWorld(u, v, floorZ, cfg));
-                            total_points++;
-                        } catch (...) { continue; }
-                    }
-                    if (!current_path.empty()) { g_import_preview_paths.push_back(current_path); }
-                    
-                    if (g_import_preview_paths.empty()) {
-                        g_import_status = "警告: 未解析到有效坐标";
-                    } else {
-                        g_has_import_preview = true;
-                        g_import_preview_map_idx = g_current_map_index;
-                        g_import_preview_floor_idx = g_current_floor_index;
-                        char buf[128];
-                        snprintf(buf, sizeof(buf), "预览: %zu条路径/%d点 [黄色虚线]",
-                                 g_import_preview_paths.size(), total_points);
-                        g_import_status = buf;
-                        AddNotification(buf, 3.0f, ImVec4(1.0f, 1.0f, 0.0f, 1.0f));
-                    }
-                };
-                
-                // ── 操作按钮 (全部大按钮，适合手机触屏) ──
-                ImVec2 btn_size(ImGui::GetContentRegionAvail().x * 0.48f, 48.0f * g_density);
-                
-                if (map_ready) {
-                    const auto& cfg = g_all_maps[g_current_map_index][SafeClampFloorIdx(g_current_map_index, g_current_floor_index)];
-                    std::string tex_path(cfg.texturePath && cfg.texturePath[0] ? cfg.texturePath : "");
-                    if (tex_path.empty()) {
-                        tex_path = std::string(MAPS_ROOT) + cfg.name;
-                        for (auto& c : tex_path) if (c == ' ') c = '_';
-                        tex_path += ".png";
-                    }
-                    size_t dot = tex_path.rfind('.');
-                    std::string base = (dot != std::string::npos) ? tex_path.substr(0, dot) : tex_path;
-                    std::string main_txt = base + "_main.txt";
-                    std::string sub_txt  = base + "_sub.txt";
-                    
-                    if (StyledButton("加载主路 [红色路径]", ButtonVariant::Primary, btn_size, g_density)) {
-                        load_preview(main_txt);
-                    }
-                    ImGui::SameLine();
-                    if (StyledButton("加载辅路 [蓝色路径]", ButtonVariant::Primary, btn_size, g_density)) {
-                        load_preview(sub_txt);
-                    }
-                    
-                    ImGui::Spacing();
-                    
-                    if (StyledButton("确认导入", ButtonVariant::Success, ImVec2(btn_size.x, btn_size.y), g_density)) {
-                        if (!g_has_import_preview || g_import_preview_paths.empty()) {
-                            g_import_status = "错误: 没有可导入的预览数据";
-                        } else if (g_current_map_index < 0) {
-                            g_import_status = "错误: 无效地图";
-                        } else {
-                            int cnt = 0;
-                            for (auto& path : g_import_preview_paths) {
-                                if (path.size() >= 2) { g_saved_paths.push_back(path); cnt++; }
-                            }
-                            MarkPathsDirty();
-                            g_pathGraph.dirty = true;
-                            char buf[128];
-                            snprintf(buf, sizeof(buf), "已导入 %d 条路径!", cnt);
-                            g_import_status = buf;
-                            AddNotification(buf, 3.0f, ImVec4(0.3f, 1.0f, 0.3f, 1.0f));
-                            g_import_preview_paths.clear();
-                            g_has_import_preview = false;
-                        }
-                    }
-                    ImGui::SameLine();
-                    if (StyledButton("清除预览", ButtonVariant::Danger, ImVec2(btn_size.x, btn_size.y), g_density)) {
-                        g_import_preview_paths.clear();
-                        g_has_import_preview = false;
-                        g_import_status = "预览已清除";
-                    }
-                }
-                
-                ImGui::Spacing();
-                ImGui::Separator();
-                
-                // ── 状态信息 ──
-                if (!g_import_status.empty()) {
-                    ImVec4 sc = ImVec4(1.0f, 1.0f, 0.0f, 1.0f);
-                    if (g_import_status.find("错误") != std::string::npos)
-                        sc = ImVec4(1.0f, 0.3f, 0.3f, 1.0f);
-                    else if (g_import_status.find("已导入") != std::string::npos || g_import_status.find("预览:") != std::string::npos)
-                        sc = ImVec4(0.3f, 1.0f, 0.3f, 1.0f);
-                    ImGui::TextColored(sc, "%s", g_import_status.c_str());
-                }
-                
-                ImGui::Spacing();
-                ImGui::Separator();
-                StyledSectionHeader("使用说明", g_theme.text_title, g_density);
-                ImGui::TextWrapped(
-                    "1. 电脑: python extract_paths.py 攻略图文件夹\n"
-                    "2. 手机: 将生成的 *_main.txt / *_sub.txt 放到 /data/local/bin/maps/\n"
-                    "3. 打开地图 → 切到本标签页 → 点「加载主路」或「加载辅路」\n"
-                    "4. 小地图出现黄色虚线预览 → 确认正确后点「确认导入」\n"
-                    "5. 导入的路径立即参与导航寻路 + 持久化保存"
-                );
-            }
-                break;
-            case 8:  // 调试信息
+            case 7:  // 调试信息
             {
                 StyledSectionHeader("实时调试信息", g_theme.text_title, g_density);
                 
@@ -7950,7 +7700,7 @@ void Layout_tick_UI(bool *main_thread_flag) {
                 }
             }
                 break;
-            case 9:  // 关于
+            case 8:  // 关于
                 ImGui::PushFont(g_font_ui);
                 ImGui::TextColored(g_theme.danger, "超级框架");
                 ImGui::PopFont();
