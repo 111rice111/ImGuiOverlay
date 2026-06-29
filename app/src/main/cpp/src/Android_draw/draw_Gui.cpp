@@ -4558,17 +4558,19 @@ void ProcessObjectWithFullDetails(ImDrawList *Draw, const DataStruct &item,
 
         // ── 目的地/清除按钮（常驻右下角）──
         {
-            float btn_w = 56, btn_h = 24, gap = 6;
-            ImVec2 b1(me_d.x - (btn_w*2 + gap) - 4, me_d.y + 4);  // "目的地"
-            ImVec2 b2(b1.x + btn_w + gap, b1.y);                   // "清除"
+            float btn_w = 56, btn_h = 26, gap = 14;
+            ImVec2 b1(me_d.x - (btn_w*2 + gap) - 4, me_d.y + 4);
+            ImVec2 b2(b1.x + btn_w + gap, b1.y);
             // 目的地按钮
             Draw->AddRectFilled(b1, ImVec2(b1.x+btn_w, b1.y+btn_h), IM_COL32(20, 80, 160, 210), 5.0f);
             Draw->AddRect(b1, ImVec2(b1.x+btn_w, b1.y+btn_h), IM_COL32(80, 160, 255, 220), 5.0f, 0, 1.5f);
-            Draw->AddText(ImVec2(b1.x+10, b1.y+3), IM_COL32(255,255,255,255), "目的地");
+            ImVec2 t1sz = ImGui::CalcTextSize("目的地");
+            Draw->AddText(ImVec2(b1.x+(btn_w-t1sz.x)*0.5f, b1.y+(btn_h-t1sz.y)*0.5f), IM_COL32(255,255,255,255), "目的地");
             // 清除按钮
             Draw->AddRectFilled(b2, ImVec2(b2.x+btn_w, b2.y+btn_h), IM_COL32(100, 30, 30, 210), 5.0f);
             Draw->AddRect(b2, ImVec2(b2.x+btn_w, b2.y+btn_h), IM_COL32(220, 80, 80, 220), 5.0f, 0, 1.5f);
-            Draw->AddText(ImVec2(b2.x+10, b2.y+3), IM_COL32(255,255,255,255), "清除");
+            ImVec2 t2sz = ImGui::CalcTextSize("清除");
+            Draw->AddText(ImVec2(b2.x+(btn_w-t2sz.x)*0.5f, b2.y+(btn_h-t2sz.y)*0.5f), IM_COL32(255,255,255,255), "清除");
             // 点击检测
             ImVec2 ms = ImGui::GetMousePos();
             if (!g_dest_select_mode && !g_path_edit_mode) {
@@ -5066,6 +5068,12 @@ void Draw_Main_Optimized(ImDrawList *Draw) {
     // ========== 摸金导航地图 ==========
     if (g_map_enabled) {
         FlushTextures();  // 上传后台线程解码完成的纹理
+        // ★ 未识别时自动选择第一个地图
+        if (g_current_map_index < 0 && !g_all_maps.empty() && !g_all_maps[0].empty()) {
+            g_current_map_index = 0;
+            g_current_floor_index = 0;
+            LoadMapTexture(0, 0);
+        }
         TryAutoDetectMap(current_data);
         // ★ 楼层自动检测（防抖：Z 持续在对面 30 帧才切换，避免楼梯抖动/瞬移误触）
         if (g_current_map_index >= 0) {
