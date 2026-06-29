@@ -3990,7 +3990,7 @@ void ProcessObjectWithFullDetails(ImDrawList *Draw, const DataStruct &item,
 
         // ── 目的地/清除按钮（常驻右下角）──
         {
-            float btn_w = 56, btn_h = 26, gap = 14;
+            float btn_w = 60, btn_h = 28, gap = 32;
             ImVec2 b1(me_d.x - (btn_w*2 + gap) - 4, me_d.y + 4);
             ImVec2 b2(b1.x + btn_w + gap, b1.y);
             // 目的地按钮
@@ -4067,12 +4067,13 @@ void ProcessObjectWithFullDetails(ImDrawList *Draw, const DataStruct &item,
                     }
                     if(pd+ed<best_d){best_d=pd+ed;best_path=(int)pi;best_s=ps;best_e=pe;}
                 }
+                // 只沿已保存路径绘制导航线，不画穿墙直线
                 if(best_path>=0){
-                    g_nav_render_path.push_back(playerPos);
                     auto& pth=g_saved_paths[best_path];
                     size_t a=std::min(best_s,best_e),b=std::max(best_s,best_e);
                     for(size_t k=a;k<=b;k++)g_nav_render_path.push_back(pth[k]);
-                    g_nav_render_path.push_back(destPos);
+                } else {
+                    AddNotification("附近无已绘制路径，请先画线", 2.5f, ImVec4(1.0f, 0.4f, 0.2f, 1.0f));
                 }
                 g_show_nav_line = true;
                 g_map_display_size = g_draw_map_size_bak;
