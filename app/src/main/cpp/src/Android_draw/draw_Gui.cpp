@@ -218,10 +218,10 @@ static float g_grid_alpha = 0.3f;
 
 static bool  g_show_3d_paths = false;
 static float g_3d_path_height = 10.0f;
-static int   g_3d_path_style = 0;    // 0=线条,1=圆点,2=箭头
+static int   g_3d_path_style = 2;    // 0=线条,1=圆点,2=箭头 (默认箭头)
 static float g_3d_path_fade_dist = 30.0f;
 static float g_3d_line_width = 3.0f;
-static float g_3d_dot_radius = 15.0f;
+static float g_3d_dot_radius = 40.0f;
 static float g_3d_flow_speed = 20.0f;
 static bool  g_show_saved_paths = true;
 
@@ -3553,24 +3553,16 @@ void Draw_MapOverlay(ImDrawList* Draw, const std::vector<DataStruct>& data) {
 
             bool isSelected = (pi == g_selected_path_index);
 
+            ImU32 color_outer = isSelected
+                ? IM_COL32(255, 255, 0, (int)(120 * g_saved_path_opacity))
+                : IM_COL32(0, 180, 255, (int)(60 * g_saved_path_opacity));
+            ImU32 color_inner = isSelected
+                ? IM_COL32(255, 255, 100, (int)(255 * g_saved_path_opacity))
+                : IM_COL32(0, 220, 255, (int)(200 * g_saved_path_opacity));
+            float outer_width = isSelected ? 18.0f : 12.0f;
+            float inner_width = isSelected ? 5.0f : 3.0f;
+
             for (size_t i = 1; i < path.size(); i++) {
-                // ★ 距离淡化: 段中点离玩家越远越透明
-                float pmx = (path[i-1].X + path[i].X) * 0.5f;
-                float pmy = (path[i-1].Y + path[i].Y) * 0.5f;
-                float dist = sqrtf((pmx - Z.X)*(pmx - Z.X) + (pmy - Z.Y)*(pmy - Z.Y));
-                float fade_t = std::clamp(dist / g_path_fade_dist, 0.0f, 1.0f);
-                float seg_opacity = g_saved_path_opacity * (1.0f - fade_t * fade_t);
-                if (seg_opacity < 0.02f) continue;
-
-                ImU32 color_outer = isSelected
-                    ? IM_COL32(255, 255, 0, (int)(120 * seg_opacity))
-                    : IM_COL32(0, 180, 255, (int)(60 * seg_opacity));
-                ImU32 color_inner = isSelected
-                    ? IM_COL32(255, 255, 100, (int)(255 * seg_opacity))
-                    : IM_COL32(0, 220, 255, (int)(200 * seg_opacity));
-                float outer_width = isSelected ? 18.0f : 12.0f;
-                float inner_width = isSelected ? 5.0f : 3.0f;
-
                 ImVec2 p1 = ToMap(path[i-1]);
                 ImVec2 p2 = ToMap(path[i]);
                 Draw->AddLine(p1, p2, color_outer, outer_width);
@@ -6736,7 +6728,11 @@ void Layout_tick_UI(bool *main_thread_flag) {
                 // 宽高用0让ImGui根据内容自动适配 + 加大填充确保文字完整
                 ImGui::SetNextItemWidth(-1); // 占满整行
                 if (ImGui::Button("★ 注册当前场景为新地图", ImVec2(0, 0))) {
-                    if (g_detected_musicbox_pos.X != 0.0f || g_detected_musicbox_pos.Y != 0.0f) {
+                    // ★ 检查是否已知地图
+                    if (g_current_map_index >= 0 && g_current_map_index < (int)g_all_maps.size() && !g_all_maps[g_current_map_index].empty()) {
+                        AddNotification("当前已是已知地图: " + std::string(g_all_maps[g_current_map_index][0].name), 3.0f, ImVec4(1.0f, 0.5f, 0.0f, 1.0f));
+                    } else {
+                        if (g_detected_musicbox_pos.X != 0.0f || g_detected_musicbox_pos.Y != 0.0f) {
                         new_music_x = g_detected_musicbox_pos.X;
                         new_music_y = g_detected_musicbox_pos.Y;
                         new_music_z = g_detected_musicbox_pos.Z;
@@ -6758,6 +6754,7 @@ void Layout_tick_UI(bool *main_thread_flag) {
                     snprintf(new_texture, sizeof(new_texture), MAPS_ROOT "map%d_floor1.png", next_id);
                     new_map_number = 0;
                     ImGui::OpenPopup("添加新地图##detected");
+                    }
                 }
                 ImGui::PopStyleVar(2);
                 ImGui::PopStyleColor(4);
@@ -6797,7 +6794,7 @@ void Layout_tick_UI(bool *main_thread_flag) {
                         ImGui::SliderFloat("线宽(px)", &g_3d_line_width, 1.0f, 10.0f, "%.1f");
                     } else {
                         ImGui::SetNextItemWidth(100.0f * g_density);
-                        ImGui::SliderFloat("大小(px)", &g_3d_dot_radius, 5.0f, 40.0f, "%.0f");
+                        ImGui::SliderFloat("大小(px)", &g_3d_dot_radius, 20.0f, 100.0f, "%.0f");
                     }
                 }
 
@@ -7171,7 +7168,6 @@ void Layout_tick_UI(bool *main_thread_flag) {
                     }
                     if (g_show_saved_paths) {
                         ImGui::SliderFloat("路径透明度", &g_saved_path_opacity, 0.1f, 1.0f, "%.2f");
-                        ImGui::SliderFloat("淡化距离(m)", &g_path_fade_dist, 500.0f, 10000.0f, "%.0f");
                     }
                     ImGui::Separator();
                     if (g_show_graph_debug) {
