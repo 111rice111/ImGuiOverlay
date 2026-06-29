@@ -5,11 +5,11 @@ namespace ImGui {
 ImFont *SystemFont = NULL;
     bool My_Android_LoadSystemFont(float SizePixels) {
         // 直接指定一个已知存在的系统字体路径，避免遍历和加载坏文件
-        const char *fontPath = "/data/local/tmp/与辅助放同一目录.ttf";
+        const char *fontPath = "/data/local/bin/与辅助放同一目录.ttf";
 
         // 如果上面路径不存在，可以尝试备用路径
         if (access(fontPath, R_OK) != 0) {
-            fontPath = "/data/local/tmp/与辅助放同一目录.ttf";
+            fontPath = "/data/local/bin/与辅助放同一目录.ttf";
         }
 
         ImFontConfig config;

@@ -14,11 +14,11 @@ using json = nlohmann::json;
 // ============================================================
 
 static std::string GetMapJsonPath() {
-    return "/sdcard/maps/map_config.json";
+    return "/data/local/bin/maps/map_config.json";
 }
 
 static std::string GetFingerprintJsonPath() {
-    return "/sdcard/maps/musicbox_stools.json";
+    return "/data/local/bin/maps/musicbox_stools.json";
 }
 
 static bool CreateBackup(const std::string& filepath) {

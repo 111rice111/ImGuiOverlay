@@ -1,5 +1,12 @@
 # 更新日志
 
+## [2026-06-29] — 路径统一到 /data/local/bin/
+
+### 🔧 路径修正
+- **DataManager.cpp**: `/sdcard/maps/` → `/data/local/bin/maps/`（与 MAPS_ROOT 统一）
+- **my_imgui.cpp**: 字体路径 `/data/local/tmp/` → `/data/local/bin/`
+- 部署目标统一为 `/data/local/bin/overlay`（SELinux 放行，反作弊检出率更低）
+
 ## [2026-06-29] — 启动界面交互优化 + 内核选择菜单
 
 ### 🎯 交互改进
