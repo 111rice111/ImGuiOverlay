@@ -3851,32 +3851,6 @@ void Draw_MapOverlay(ImDrawList* Draw, const std::vector<DataStruct>& data) {
         ImGui::Text("选择操作:");
         ImGui::Separator();
 
-        if (ImGui::Button("标记为目的地")) {
-            // 使用长按起始位置(g_press_pos)而非当前mouse位置，
-            // 避免手指抬起或点击弹窗按钮时的坐标偏移
-            float u_click = (g_press_pos.x - map_pos.x) / map_w;
-            float v_click = (g_press_pos.y - map_pos.y) / map_h;
-            // 使用 CoordTransform 统一管道
-            const auto& act_cfg = GetActiveMapConfig();
-            float worldX = CoordTransform::UVToX(u_click, act_cfg);
-            float worldY = CoordTransform::UVToY(v_click, act_cfg);
-
-            while (g_exits.size() <= g_current_map_index) { g_exits.push_back({}); g_exit_uvs.push_back({}); }
-            while (g_exits[g_current_map_index].size() <= g_current_floor_index) { g_exits[g_current_map_index].push_back({}); g_exit_uvs[g_current_map_index].push_back({}); }
-            g_exits[g_current_map_index][g_current_floor_index].push_back(Vector3A(worldX, worldY, Z.Z));
-            // 保存原始屏幕UV（不经过任何变换，直接用于渲染）
-            float raw_u = (g_press_pos.x - map_pos.x) / map_w;
-            float raw_v = (g_press_pos.y - map_pos.y) / map_h;
-            g_exit_uvs[g_current_map_index][g_current_floor_index].push_back(ImVec2(raw_u, raw_v));
-            // 记录点击位置用于调试十字准星
-            g_last_exit_screen_pos = g_press_pos;
-            g_show_exit_debug = true;
-            SaveExitsToJSON(g_current_map_index, g_current_floor_index);
-            g_pathGraph.dirty = true;
-            AddNotification("目的地已标记", 2.0f, ImVec4(0.3f, 1.0f, 0.3f, 1.0f));
-            ImGui::CloseCurrentPopup();
-        }
-
         if (ImGui::Button("设为途经点")) {
             // 使用长按起始位置(g_press_pos)而非当前mouse位置
             float u_click = (g_press_pos.x - map_pos.x) / map_w;
@@ -3899,26 +3873,7 @@ void Draw_MapOverlay(ImDrawList* Draw, const std::vector<DataStruct>& data) {
             }
         }
 
-        int nearby_exit = -1;
-        if (g_current_map_index < g_exits.size() && g_current_floor_index < g_exits[g_current_map_index].size()) {
-            for (size_t i = 0; i < g_exits[g_current_map_index][g_current_floor_index].size(); i++) {
-                auto& e = g_exits[g_current_map_index][g_current_floor_index][i];
-                ImVec2 ep = ToMap(e);
-                float dist = sqrtf((mouse.x - ep.x)*(mouse.x - ep.x) + (mouse.y - ep.y)*(mouse.y - ep.y));
-                if (dist < 12.0f) { nearby_exit = i; break; }
-            }
-        }
-        if (nearby_exit >= 0) {
-            ImGui::Separator();
-            if (ImGui::Button("删除此目的地")) {
-                g_exits[g_current_map_index][g_current_floor_index].erase(
-                        g_exits[g_current_map_index][g_current_floor_index].begin() + nearby_exit);
-                MarkExitsDirty();
-                g_pathGraph.dirty = true;
-                AddNotification("目的地已删除", 2.0f, ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
-                ImGui::CloseCurrentPopup();
-            }
-        }
+        // ★ 已删除目的地管理 - 只保留路径操作和途经点
 
         int nearby_path = -1;
         for (size_t i = 0; i < g_saved_paths.size(); i++) {
@@ -7024,48 +6979,6 @@ void Layout_tick_UI(bool *main_thread_flag) {
                 }
 
                 if (!map_invalid) {
-                    ImGui::Separator();
-
-                    StyledSectionHeader("目的地管理", g_theme.text_title, g_density);
-                    if (StyledButton("标记当前点为目的地", ButtonVariant::Success, ImVec2(0,0), g_density)) {
-                        if (g_current_map_index >= 0 && g_current_floor_index >= 0 && Z.X != 0) {
-                            while (g_exits.size() <= g_current_map_index) { g_exits.push_back({}); g_exit_uvs.push_back({}); }
-                            while (g_exits[g_current_map_index].size() <= g_current_floor_index) {
-                                g_exits[g_current_map_index].push_back({});
-                                g_exit_uvs[g_current_map_index].push_back({});
-                            }
-                            g_exits[g_current_map_index][g_current_floor_index].push_back(Z);
-                            // 使用 CoordTransform 统一管道
-                            const auto& act_cfg = GetActiveMapConfig();
-                            ImVec2 uv = CoordTransform::WorldToUV(Z, act_cfg);
-                            g_exit_uvs[g_current_map_index][g_current_floor_index].push_back(uv);
-                            MarkExitsDirty();
-                            g_pathGraph.dirty = true;
-                            AddNotification("目的地已标记", 2.0f, ImVec4(0.3f, 1.0f, 0.3f, 1.0f));
-                        }
-                    }
-                    ImGui::SameLine();
-                    if (StyledButton("清除本层目的地", ButtonVariant::Danger, ImVec2(0,0), g_density)) {
-                        ImGui::OpenPopup("确认清除目的地");
-                    }
-                    if (ImGui::BeginPopupModal("确认清除目的地", NULL, ImGuiWindowFlags_AlwaysAutoResize)) {
-                        ImGui::Text("确定要清除本层所有目的地标记吗？此操作不可撤销。");
-                        if (ImGui::Button("确定")) {
-                            if (g_current_map_index < g_exits.size() &&
-                                g_current_floor_index < g_exits[g_current_map_index].size()) {
-                                g_exits[g_current_map_index][g_current_floor_index].clear();
-                                MarkExitsDirty();
-                                g_pathGraph.dirty = true;
-                                AddNotification("目的地已清除", 2.0f, ImVec4(1.0f, 0.5f, 0.0f, 1.0f));
-                            }
-                            ImGui::CloseCurrentPopup();
-                        }
-                        ImGui::SameLine();
-                        if (ImGui::Button("取消")) ImGui::CloseCurrentPopup();
-                        ImGui::EndPopup();
-                    }
-                    ImGui::TextColored(g_theme.text_muted, "提示：已校准地图可在小地图上长按标记目的地");
-
                     ImGui::Separator();
 
                     StyledSectionHeader("路径绘制", g_theme.text_title, g_density);
