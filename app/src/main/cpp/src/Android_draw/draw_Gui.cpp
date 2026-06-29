@@ -6844,6 +6844,10 @@ void Layout_tick_UI(bool *main_thread_flag) {
                     }
                 }
 
+                // ★ 手动选择后重新评估地图有效性
+                map_invalid = (g_current_map_index < 0 || g_current_map_index >= (int)g_all_maps.size() ||
+                               g_all_maps[g_current_map_index].empty());
+
                 if (!map_invalid) {
                     bool unknown_map = false;
                     if (g_map_enabled && g_map_auto_detect) {
