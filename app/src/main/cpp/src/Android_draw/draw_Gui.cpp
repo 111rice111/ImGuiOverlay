@@ -7398,24 +7398,56 @@ void Layout_tick_UI(bool *main_thread_flag) {
                     const auto& cfg = g_all_maps[g_current_map_index][SafeClampFloorIdx(g_current_map_index, g_current_floor_index)];
                     ImGui::TextColored(g_theme.info, "当前地图: %s (楼层 %d)", cfg.name, cfg.floorIndex + 1);
                     
-                    // 读取攻略图 PNG 的尺寸（从纹理文件头解析）
-                    int png_w = 0, png_h = 0;
+                    // 读取攻略图尺寸（从纹理文件头解析，支持PNG+JPEG）
+                    int img_w = 0, img_h = 0;
                     {
                         FILE* f = fopen(cfg.texturePath, "rb");
                         if (f) {
                             unsigned char hdr[24];
-                            if (fread(hdr, 1, 24, f) == 24 && hdr[0]==0x89 && hdr[1]=='P' && hdr[2]=='N' && hdr[3]=='G') {
-                                png_w = (hdr[16]<<24)|(hdr[17]<<16)|(hdr[18]<<8)|hdr[19];
-                                png_h = (hdr[20]<<24)|(hdr[21]<<16)|(hdr[22]<<8)|hdr[23];
+                            if (fread(hdr, 1, 24, f) == 24) {
+                                if (hdr[0]==0x89 && hdr[1]=='P' && hdr[2]=='N' && hdr[3]=='G') {
+                                    // PNG: IHDR 头在偏移16处
+                                    img_w = (hdr[16]<<24)|(hdr[17]<<16)|(hdr[18]<<8)|hdr[19];
+                                    img_h = (hdr[20]<<24)|(hdr[21]<<16)|(hdr[22]<<8)|hdr[23];
+                                } else if (hdr[0]==0xFF && hdr[1]==0xD8) {
+                                    // JPEG: 扫描 SOF0 (0xFF 0xC0) 标记获取尺寸
+                                    unsigned char buf[2];
+                                    while (fread(buf, 1, 2, f) == 2) {
+                                        if (buf[0] != 0xFF) break;
+                                        if (buf[1] == 0xC0 || buf[1] == 0xC2) {
+                                            // SOF0/SOF2: 跳过长度(2)+精度(1) = 3字节
+                                            fseek(f, 3, SEEK_CUR);
+                                            unsigned char sof[7];
+                                            if (fread(sof, 1, 7, f) == 7) {
+                                                img_h = (sof[1]<<8)|sof[2];
+                                                img_w = (sof[3]<<8)|sof[4];
+                                            }
+                                            break;
+                                        } else if (buf[1] >= 0xC0 && buf[1] <= 0xCF) {
+                                            break; // 其他 SOF，不处理
+                                        } else {
+                                            // 跳过此标记段
+                                            unsigned char len[2];
+                                            if (fread(len, 1, 2, f) != 2) break;
+                                            int skip = ((len[0]<<8)|len[1]) - 2;
+                                            fseek(f, skip, SEEK_CUR);
+                                        }
+                                    }
+                                }
                             }
                             fclose(f);
                         }
                     }
-                    if (png_w > 0) {
+                    // 文件头解析失败 → 回退到 OpenGL 纹理尺寸
+                    if (img_w <= 0) {
+                        img_w = g_map_texture_w[g_current_map_index][g_current_floor_index];
+                        img_h = g_map_texture_h[g_current_map_index][g_current_floor_index];
+                    }
+                    if (img_w > 0) {
                         ImGui::TextColored(ImVec4(0.3f, 0.9f, 0.3f, 1.0f),
-                            "攻略图尺寸: %d x %d (自动检测)", png_w, png_h);
-                        g_import_tex_w = png_w;
-                        g_import_tex_h = png_h;
+                            "攻略图尺寸: %d x %d (自动检测)", img_w, img_h);
+                        g_import_tex_w = img_w;
+                        g_import_tex_h = img_h;
                     } else {
                         ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.2f, 1.0f),
                             "攻略图尺寸: 无法检测 (需 PNG 文件)");
