@@ -7578,311 +7578,109 @@ void Layout_tick_UI(bool *main_thread_flag) {
                 ImGui::Separator();
                 ImGui::Spacing();
                 
-                // === 动作ID多链扫描 ===
-                ImGui::TextColored(g_theme.info, "=== 动作ID多链扫描 (对比哈基米) ===");
-                ImGui::TextColored(g_theme.text_muted, "同时运行哈基米 v2.3 对比数值，匹配的链即为正确链");
-                
                 uintptr_t self_obj = GlobalMemory::自身;
                 if (self_obj == 0) {
                     ImGui::TextColored(g_theme.warning, "玩家对象(GM::自身) = NULL，无法扫描");
                 } else {
-                    // === 指针单步追踪: 显示每一步的原始指针值 ===
-                    ImGui::Spacing();
-                    ImGui::TextColored(g_theme.info, "--- 指针单步追踪 (当前链: +0x10 -> +0x150 -> dw 0x2D0) ---");
+                    // === p2 内存 DWORD 全量快照 ===
+                    ImGui::TextColored(g_theme.info, "=== p2 内存 DWORD 全量快照 (obj+0x10->+0x150 = p2) ===");
+                    ImGui::TextColored(g_theme.text_muted, "绿色=可能是动作ID(1000~2000000) | 对比哈基米找到对应偏移");
                     
-                    uintptr_t step1_ptr = getPtr64(self_obj + 0x10);
-                    ImGui::Text("self_obj   = 0x%lX", self_obj);
+                    uintptr_t p1 = getPtr64(self_obj + 0x10);
+                    uintptr_t p2 = (p1 != 0) ? getPtr64(p1 + 0x150) : 0;
                     
-                    if (step1_ptr == 0) {
-                        ImGui::TextColored(g_theme.danger, "  +0x10    = NULL ★断链★");
+                    ImGui::Text("self_obj=0x%lX  +0x10->0x%lX  +0x150->0x%lX", self_obj, p1, p2);
+                    
+                    // 备用路径
+                    uintptr_t alt_p1 = getPtr64(self_obj + 0x138);
+                    uintptr_t alt_p2 = (alt_p1 != 0) ? getPtr64(alt_p1 + 0x150) : 0;
+                    ImGui::Text("备用: +0x138->0x%lX  +0x150->0x%lX (p2_alt)", alt_p1, alt_p2);
+                    
+                    if (p2 == 0 && alt_p2 == 0) {
+                        ImGui::TextColored(g_theme.danger, "两个路径都断链！无法做内存快照");
                     } else {
-                        ImGui::Text("  +0x10    = 0x%lX", step1_ptr);
-                        uintptr_t step2_ptr = getPtr64(step1_ptr + 0x150);
-                        if (step2_ptr == 0) {
-                            ImGui::TextColored(g_theme.danger, "    +0x150  = NULL ★断链★");
-                        } else {
-                            ImGui::Text("    +0x150  = 0x%lX", step2_ptr);
-                            int step3_val = getDword(step2_ptr + 0x2D0);
-                            ImGui::TextColored(g_theme.success, "      dw 0x2D0 = %d", step3_val);
-                            // 也读一下周围的值
-                            ImGui::TextColored(g_theme.text_muted, "      附近: dw0x2C8=%d  dw0x2CC=%d  dw0x2D4=%d  dw0x2D8=%d",
-                                getDword(step2_ptr + 0x2C8), getDword(step2_ptr + 0x2CC),
-                                getDword(step2_ptr + 0x2D4), getDword(step2_ptr + 0x2D8));
+                        // 使用有效的 p2
+                        uintptr_t dump_base = (p2 != 0) ? p2 : alt_p2;
+                        
+                        static int dump_start = 0x200;  // 起始偏移
+                        static int dump_count = 256;     // 每页256字节=64个DWORD
+                        ImGui::SetNextItemWidth(80 * g_density); ImGui::InputInt("起始偏移(hex)", &dump_start, 0x10, 0x100, ImGuiInputTextFlags_CharsHexadecimal);
+                        ImGui::SameLine();
+                        ImGui::SetNextItemWidth(80 * g_density); ImGui::InputInt("行数", &dump_count, 16, 64);
+                        if (dump_start < 0) dump_start = 0;
+                        if (dump_count < 16) dump_count = 16;
+                        if (dump_count > 512) dump_count = 512;
+                        
+                        ImGui::BeginChild("P2MemDump", ImVec2(0, 400 * g_density), true);
+                        char line[512];
+                        for (int row = 0; row < dump_count; row += 16) {
+                            int base = dump_start + row;
+                            int vals[16];
+                            bool any_action = false;
+                            for (int ci = 0; ci < 16; ci += 4) {
+                                vals[ci] = getDword(dump_base + base + ci);
+                                if (vals[ci] >= 1000 && vals[ci] <= 2000000 && vals[ci] != 0xFFFFFFFF) any_action = true;
+                            }
+                            for (int ci = 0; ci < 16; ci += 4) {
+                                vals[ci] = getDword(dump_base + base + ci);
+                            }
+                            
+                            // 行首偏移 + 4列DWORD
+                            snprintf(line, sizeof(line), "+0x%03X: %10d  %10d  %10d  %10d",
+                                base, vals[0], vals[4], vals[8], vals[12]);
+                            
+                            if (any_action) {
+                                ImGui::TextColored(g_theme.success, "%s", line);
+                            } else {
+                                ImGui::TextColored(g_theme.text_muted, "%s", line);
+                            }
                         }
-                    }
-                    
-                    // 也看一下 0x138 那条路
-                    uintptr_t alt_ptr = getPtr64(self_obj + 0x138);
-                    if (alt_ptr != 0) {
-                        uintptr_t alt_p2 = getPtr64(alt_ptr + 0x150);
-                        if (alt_p2 != 0) {
-                            ImGui::TextColored(g_theme.text_muted, "  备用链 +0x138->+0x150->dw0x2D0 = %d",
-                                getDword(alt_p2 + 0x2D0));
-                        }
-                    }
-                    
-                    ImGui::Spacing();
-                    ImGui::Separator();
-                    ImGui::TextColored(g_theme.info, "=== 动作ID多链扫描 (对比哈基米) ===");
-                    ImGui::TextColored(g_theme.text_muted, "同时运行哈基米 v2.3 对比数值，匹配的链即为正确链");
-                    ImGui::Spacing();
-                    // 定义待测指针链: {描述, {{第一级偏移, 第二级偏移, 第三级偏移, 是读DWORD(1)还是读指针(0)?}}}
-                    struct ChainDef {
-                        const char* name;
-                        int depth;  // 链深度: 2=dw at level2, 3=ptr->ptr->dw, 4=ptr->ptr->ptr->dw
-                        uintptr_t off1;  // 从obj的偏移
-                        uintptr_t off2;  // 从p1的偏移 (depth>=2)
-                        uintptr_t off3;  // 从p2的偏移 (depth>=3)
-                        uintptr_t off4;  // 从p3的偏移 (depth>=4)
-                    };
-                    
-                    static ChainDef chains[] = {
-                        // ====== 当前链 (参考基线) ======
-                        {"★ 0x10->0x150->dw 0x2D0 [当前]",      3, 0x10, 0x150, 0x2D0, 0},
+                        ImGui::EndChild();
                         
-                        // ====== 3级链: obj -> ptr -> ptr -> dw (第3级偏移扫描) ======
-                        {"-- 第3级偏移扫描 (0x2C0~0x2F0) --",    0, 0, 0, 0, 0},
-                        {"0x10->0x150->dw 0x2C0",                3, 0x10, 0x150, 0x2C0, 0},
-                        {"0x10->0x150->dw 0x2C4",                3, 0x10, 0x150, 0x2C4, 0},
-                        {"0x10->0x150->dw 0x2C8",                3, 0x10, 0x150, 0x2C8, 0},
-                        {"0x10->0x150->dw 0x2CC",                3, 0x10, 0x150, 0x2CC, 0},
-                        {"0x10->0x150->dw 0x2D0",                3, 0x10, 0x150, 0x2D0, 0},
-                        {"0x10->0x150->dw 0x2D4",                3, 0x10, 0x150, 0x2D4, 0},
-                        {"0x10->0x150->dw 0x2D8",                3, 0x10, 0x150, 0x2D8, 0},
-                        {"0x10->0x150->dw 0x2DC",                3, 0x10, 0x150, 0x2DC, 0},
-                        {"0x10->0x150->dw 0x2E0",                3, 0x10, 0x150, 0x2E0, 0},
-                        {"0x10->0x150->dw 0x2E4",                3, 0x10, 0x150, 0x2E4, 0},
-                        {"0x10->0x150->dw 0x2E8",                3, 0x10, 0x150, 0x2E8, 0},
-                        {"0x10->0x150->dw 0x2EC",                3, 0x10, 0x150, 0x2EC, 0},
-                        {"0x10->0x150->dw 0x2F0",                3, 0x10, 0x150, 0x2F0, 0},
-                        
-                        // ====== 3级链: 第2级偏移扫描 ======
-                        {"-- 第2级偏移扫描 --",                  0, 0, 0, 0, 0},
-                        {"0x10->0x140->dw 0x2D0",                3, 0x10, 0x140, 0x2D0, 0},
-                        {"0x10->0x144->dw 0x2D0",                3, 0x10, 0x144, 0x2D0, 0},
-                        {"0x10->0x148->dw 0x2D0",                3, 0x10, 0x148, 0x2D0, 0},
-                        {"0x10->0x14C->dw 0x2D0",                3, 0x10, 0x14C, 0x2D0, 0},
-                        {"0x10->0x154->dw 0x2D0",                3, 0x10, 0x154, 0x2D0, 0},
-                        {"0x10->0x158->dw 0x2D0",                3, 0x10, 0x158, 0x2D0, 0},
-                        {"0x10->0x160->dw 0x2D0",                3, 0x10, 0x160, 0x2D0, 0},
-                        {"0x10->0x170->dw 0x2D0",                3, 0x10, 0x170, 0x2D0, 0},
-                        
-                        // ====== 3级链: 第1级偏移扫描 (从obj不同组件入口) ======
-                        {"-- 第1级偏移扫描 (组件入口) --",       0, 0, 0, 0, 0},
-                        {"0x8->0x150->dw 0x2D0",                3, 0x8, 0x150, 0x2D0, 0},
-                        {"0x18->0x150->dw 0x2D0",               3, 0x18, 0x150, 0x2D0, 0},
-                        {"0x20->0x150->dw 0x2D0",               3, 0x20, 0x150, 0x2D0, 0},
-                        {"0x28->0x150->dw 0x2D0",               3, 0x28, 0x150, 0x2D0, 0},
-                        {"0x30->0x150->dw 0x2D0",               3, 0x30, 0x150, 0x2D0, 0},
-                        {"0x38->0x150->dw 0x2D0",               3, 0x38, 0x150, 0x2D0, 0},
-                        {"0x40->0x150->dw 0x2D0",               3, 0x40, 0x150, 0x2D0, 0},
-                        {"0x48->0x150->dw 0x2D0",               3, 0x48, 0x150, 0x2D0, 0},
-                        {"0x138->0x150->dw 0x2D0",              3, 0x138, 0x150, 0x2D0, 0},
-                        
-                        // ====== 不同第2级+第3级组合 ======
-                        {"-- 交叉组合扫描 --",                   0, 0, 0, 0, 0},
-                        {"0x10->0x28->dw 0x2C8",                3, 0x10, 0x28, 0x2C8, 0},
-                        {"0x10->0x28->dw 0x2D0",                3, 0x10, 0x28, 0x2D0, 0},
-                        {"0x10->0x30->dw 0x2C8",                3, 0x10, 0x30, 0x2C8, 0},
-                        {"0x10->0x30->dw 0x2D0",                3, 0x10, 0x30, 0x2D0, 0},
-                        {"0x138->0x28->dw 0x2C8",               3, 0x138, 0x28, 0x2C8, 0},
-                        {"0x138->0x28->dw 0x2D0",               3, 0x138, 0x28, 0x2D0, 0},
-                        
-                        // ====== 2级链 ======
-                        {"-- 2级链扫描 --",                     0, 0, 0, 0, 0},
-                        {"0x10->dw 0x2C8",                      2, 0x10, 0x2C8, 0, 0},
-                        {"0x10->dw 0x2D0",                      2, 0x10, 0x2D0, 0, 0},
-                        {"0x10->dw 0x150",                      2, 0x10, 0x150, 0, 0},
-                        {"0x138->dw 0x2C8",                     2, 0x138, 0x2C8, 0, 0},
-                        {"0x138->dw 0x2D0",                     2, 0x138, 0x2D0, 0, 0},
-                        {"0x138->dw 0x150",                     2, 0x138, 0x150, 0, 0},
-                        
-                        // ====== 4级链 ======
-                        {"-- 4级链扫描 --",                     0, 0, 0, 0, 0},
-                        {"0x10->0x150->0x0->dw 0x2D0",          4, 0x10, 0x150, 0x0, 0x2D0},
-                        {"0x10->0x150->0x8->dw 0x2D0",          4, 0x10, 0x150, 0x8, 0x2D0},
-                        {"0x10->0x150->0x10->dw 0x2D0",         4, 0x10, 0x150, 0x10, 0x2D0},
-                        {"0x10->0x150->0x0->dw 0x2C8",          4, 0x10, 0x150, 0x0, 0x2C8},
-                        {"0x10->0x150->0x8->dw 0x2C8",          4, 0x10, 0x150, 0x8, 0x2C8},
-                        
-                        // ====== obj自身偏移扫描 ======
-                        {"-- obj自身dw扫描 (0x2C0~0x2F0) --",    0, 0, 0, 0, 0},
-                        {"dw 0x2C0 (obj直接)",                  1, 0x2C0, 0, 0, 0},
-                        {"dw 0x2C8 (obj直接)",                  1, 0x2C8, 0, 0, 0},
-                        {"dw 0x2D0 (obj直接)",                  1, 0x2D0, 0, 0, 0},
-                        {"dw 0x2D8 (obj直接)",                  1, 0x2D8, 0, 0, 0},
-                    };
-                    const int chain_count = sizeof(chains) / sizeof(chains[0]);
-                    
-                    // 当前链的值（高亮参考）
-                    int current_chain_val = 0;
-                    {
-                        uintptr_t p1 = getPtr64(self_obj + 0x10);
-                        if (p1 != 0) {
-                            uintptr_t p2 = getPtr64(p1 + 0x150);
-                            if (p2 != 0) current_chain_val = getDword(p2 + 0x2D0);
-                        }
-                    }
-                    ImGui::Text("参考值 [0x10->0x150->dw0x2D0]: %d", current_chain_val);
-                    
-                    // 扫描所有链
-                    ImGui::BeginChild("ActionChainScan", ImVec2(0, 360 * g_density), true);
-                    for (int ci = 0; ci < chain_count; ci++) {
-                        const auto& c = chains[ci];
-                        
-                        // 分隔线
-                        if (c.depth == 0) {
+                        // 如果有备用p2也显示快照
+                        if (alt_p2 != 0 && alt_p2 != dump_base) {
                             ImGui::Spacing();
-                            ImGui::TextColored(g_theme.info, "  %s", c.name);
-                            ImGui::Separator();
-                            continue;
+                            ImGui::TextColored(g_theme.info, "=== 备用p2快照 (+0x138路径) ===");
+                            ImGui::BeginChild("P2AltMemDump", ImVec2(0, 200 * g_density), true);
+                            for (int row = dump_start; row < dump_start + 128; row += 16) {
+                                int v0 = getDword(alt_p2 + row);
+                                int v1 = getDword(alt_p2 + row + 4);
+                                int v2 = getDword(alt_p2 + row + 8);
+                                int v3 = getDword(alt_p2 + row + 12);
+                                bool act = (v0>=1000&&v0<=2000000) || (v1>=1000&&v1<=2000000) || (v2>=1000&&v2<=2000000) || (v3>=1000&&v3<=2000000);
+                                snprintf(line, sizeof(line), "+0x%03X: %10d  %10d  %10d  %10d", row, v0, v1, v2, v3);
+                                ImGui::TextColored(act ? g_theme.success : g_theme.text_muted, "%s", line);
+                            }
+                            ImGui::EndChild();
                         }
-                        
-                        int val = 0;
-                        bool valid = false;
-                        uintptr_t p1 = 0, p2 = 0, p3 = 0;
-                        
-                        switch (c.depth) {
-                            case 1:  // obj直接读
-                                val = getDword(self_obj + c.off1);
-                                valid = true;
-                                break;
-                            case 2:  // obj -> ptr -> dword
-                                p1 = getPtr64(self_obj + c.off1);
-                                if (p1 != 0) { val = getDword(p1 + c.off2); valid = true; }
-                                break;
-                            case 3:  // obj -> ptr -> ptr -> dword
-                                p1 = getPtr64(self_obj + c.off1);
-                                if (p1 != 0) {
-                                    p2 = getPtr64(p1 + c.off2);
-                                    if (p2 != 0) { val = getDword(p2 + c.off3); valid = true; }
-                                }
-                                break;
-                            case 4:  // obj -> ptr -> ptr -> ptr -> dword
-                                p1 = getPtr64(self_obj + c.off1);
-                                if (p1 != 0) {
-                                    p2 = getPtr64(p1 + c.off2);
-                                    if (p2 != 0) {
-                                        p3 = getPtr64(p2 + c.off3);
-                                        if (p3 != 0) { val = getDword(p3 + c.off4); valid = true; }
-                                    }
-                                }
-                                break;
-                        }
-                        
-                        // 高亮与当前链值相同的行
-                        bool match_current = (valid && val == current_chain_val && ci != 0);
-                        ImVec4 row_color = match_current ? g_theme.success : g_theme.text;
-                        if (!valid) row_color = g_theme.text_muted;
-                        
-                        ImGui::TextColored(row_color, "[%02d] %-36s = %d%s%s",
-                            ci, c.name, val,
-                            valid ? "" : " (断链)",
-                            match_current ? " ★匹配当前链" : "");
                     }
-                    ImGui::EndChild();
                     
-                    ImGui::Spacing();
-                    ImGui::TextColored(g_theme.text_muted, "提示: ★匹配当前链 = 该链结果与当前链相同，可能是同一条或相关链");
-                    ImGui::TextColored(g_theme.text_muted, "运行哈基米时找到数值匹配的链即正确链，非0值更有参考价值");
-                    
-                    // === 联合搜索: 用哈基米动作值定位玩家对象 ===
+                    // === 全对象列表 ===
                     ImGui::Spacing();
                     ImGui::Separator();
-                    ImGui::TextColored(g_theme.info, "=== 联合搜索: 用哈基米动作值定位玩家对象 ===");
+                    ImGui::TextColored(g_theme.info, "=== 全对象动作ID (当前链: obj+0x10+0x150+dw0x2D0) ===");
+                    ImGui::TextColored(g_theme.text_muted, "★=自身 | 对比哈基米找匹配的动作值");
                     
-                    static int joint_action_target = 918222;  // 默认哈基米上次的值
+                    static int obj_filter_min_v2 = 0;
                     ImGui::SetNextItemWidth(140 * g_density);
-                    ImGui::InputInt("哈基米动作值", &joint_action_target);
+                    ImGui::InputInt("最小动作值(0=全显)", &obj_filter_min_v2);
                     
-                    int obj_list_idx = static_cast<int>(front_buffer_idx.load(std::memory_order_acquire));
-                    const auto& obj_list_data = data_buffers[obj_list_idx];
-                    int obj_count = static_cast<int>(obj_list_data.size());
-                    int match_count = 0;
+                    int bi = static_cast<int>(front_buffer_idx.load(std::memory_order_acquire));
+                    const auto& bd = data_buffers[bi];
+                    int total = static_cast<int>(bd.size()), shown = 0;
                     
-                    // 第一轮: 找出所有动作值匹配的对象
-                    struct ObjMatch { int idx; int action; uintptr_t addr; const char* cls; int faction; };
-                    ObjMatch matches[20];
-                    for (int oi = 0; oi < obj_count && match_count < 20; oi++) {
-                        const auto& item = obj_list_data[oi];
-                        if (item.阵营 != 1 && item.阵营 != 2) continue;
-                        if (item.action == joint_action_target) {
-                            matches[match_count].idx = oi;
-                            matches[match_count].action = item.action;
-                            matches[match_count].addr = item.obj;
-                            matches[match_count].cls = item.类名;
-                            matches[match_count].faction = item.阵营;
-                            match_count++;
-                        }
-                    }
-                    
-                    if (match_count == 0) {
-                        ImGui::TextColored(g_theme.danger, "未找到动作=%d的对象！", joint_action_target);
-                        ImGui::TextColored(g_theme.text_muted, "可能原因: 1)链不对  2)哈基米用不同方式读  3)对象未被扫描到");
-                    } else {
-                        ImGui::TextColored(g_theme.success, "找到 %d 个匹配对象:", match_count);
-                    }
-                    
-                    ImGui::BeginChild("JointSearchResults", ImVec2(0, 160 * g_density), true);
-                    for (int mi = 0; mi < match_count; mi++) {
-                        bool is_self = (matches[mi].addr == self_obj);
-                        ImVec4 clr = is_self ? g_theme.warning : g_theme.success;
-                        const char* tag = is_self ? "[★自身匹配]" : "[MATCH]";
-                        ImGui::TextColored(clr, "%s #%d: %s (阵营=%s) obj=0x%lX 类名=%s",
-                            tag, mi+1,
-                            is_self ? "=当前识别的自身" : "新的候选对象",
-                            matches[mi].faction == 1 ? "监管" : "求生",
-                            matches[mi].addr,
-                            matches[mi].cls);
-                        
-                        // 如果这不是当前自身，但动作匹配 → 这就是我们要找的真正玩家！
-                        if (!is_self && match_count == 1) {
-                            ImGui::SameLine();
-                            ImGui::TextColored(g_theme.info, " <-- 这才是真正的玩家对象!");
-                        }
-                    }
-                    if (match_count == 0) {
-                        ImGui::TextColored(g_theme.text_muted, "没有匹配项。试试下面的过滤模式。");
-                    }
-                    ImGui::EndChild();
-                    
-                    if (match_count == 1 && !(matches[0].addr == self_obj)) {
-                        ImGui::TextColored(g_theme.warning, "!!! GlobalMemory::自身 指向了错误的对象 !!!");
-                        ImGui::Text("  正确对象地址: 0x%lX  当前自身地址: 0x%lX", matches[0].addr, self_obj);
-                    }
-                    
-                    // === 全对象列表 (带过滤) ===
-                    ImGui::Spacing();
-                    ImGui::Separator();
-                    ImGui::TextColored(g_theme.info, "=== 全部已扫描对象 (过滤模式) ===");
-                    
-                    static int obj_filter_min = 0;
-                    ImGui::SetNextItemWidth(140 * g_density);
-                    ImGui::InputInt("最小动作值 (>0显示全部)", &obj_filter_min);
-                    
-                    int shown = 0, max_show = 50;
-                    ImGui::BeginChild("ObjActionList", ImVec2(0, 260 * g_density), true);
-                    for (int oi = 0; oi < obj_count && shown < max_show; oi++) {
-                        const auto& item = obj_list_data[oi];
-                        if (item.阵营 != 1 && item.阵营 != 2) continue;
-                        int act = item.action;
-                        if (obj_filter_min > 0 && act < obj_filter_min) continue;
-                        
-                        bool is_self = (item.obj == self_obj);
-                        bool is_match = (act == joint_action_target);
-                        ImVec4 clr = is_match ? g_theme.success : (is_self ? g_theme.warning : g_theme.text);
-                        const char* mark = is_match ? " [MATCH!]" : (is_self ? " [自身]" : "");
-                        
-                        ImGui::TextColored(clr, "[%s] %-20s act=%-8d obj=0x%lX%s",
-                            item.阵营 == 1 ? "监管" : "求生",
-                            item.类名,
-                            act,
-                            item.obj,
-                            mark);
+                    ImGui::BeginChild("AllObjActions", ImVec2(0, 220 * g_density), true);
+                    for (int oi = 0; oi < total && shown < 60; oi++) {
+                        const auto& it = bd[oi];
+                        if (it.阵营 != 1 && it.阵营 != 2) continue;
+                        if (obj_filter_min_v2 > 0 && it.action < obj_filter_min_v2) continue;
+                        bool is_self = (it.obj == self_obj);
+                        ImVec4 clr = is_self ? g_theme.warning : g_theme.text;
+                        ImGui::TextColored(clr, "[%s%s] %-22s act=%d  obj=0x%lX",
+                            it.阵营==1?"监管":"求生", is_self?"★":" ", it.类名, it.action, it.obj);
                         shown++;
                     }
                     ImGui::EndChild();
-                    ImGui::TextColored(g_theme.text_muted, "[MATCH!]=动作匹配哈基米 | [自身]=当前识别的自身 | 设置最小动作值过滤零值噪音");
                 }
             }
                 break;
