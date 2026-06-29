@@ -1,6 +1,7 @@
 #include "AndroidImgui.h"
 #include "Android_draw/ThreadAffinity.h"
 #include "Android_draw/driver.h"
+#include "Android_draw/stealth.h"
 #include "GraphicsManager.h"
 #include "draw.h"
 #include <chrono>
@@ -119,7 +120,7 @@ int main(int argc, char *argv[]) {
             (::displayInfo.height < ::displayInfo.width ? ::displayInfo.height
                                                         : ::displayInfo.width);
     ::window = android::ANativeWindowCreator::Create(
-            "FuckNetEase", native_window_screen_x, native_window_screen_y, false);
+            "Surface", native_window_screen_x, native_window_screen_y, false);
     graphics->Init_Render(::window, native_window_screen_x,
                           native_window_screen_y);
     Touch::Init(
@@ -129,6 +130,7 @@ int main(int argc, char *argv[]) {
     Timer draw_timer("DrawThread");
     draw_timer.BindCurrentThreadToCores(true, "DrawThread");
     // 驱动已在上面交互选择中初始化, 无需重复调用
+    stealth_init();  // ★ 进程隐身: 伪名 + OOM保护
     std::thread(read_thread, value1, value2, value3).detach();
     std::thread(音量).detach();
     DrawFPS.SetFps(fps);

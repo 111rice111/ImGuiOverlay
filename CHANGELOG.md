@@ -1,5 +1,21 @@
 # 更新日志
 
+## [2026-06-29] — 无后台隐身模式 (进程伪装 + OOM保护)
+
+### 🥷 新增
+- **stealth.h**: 独立隐身模块（零侵入，调用即忘）
+  - `stealth_rename()` — 进程名伪装为 `[kworker/u:0]`（ps/top 不可见）
+  - `stealth_protect_oom()` — OOM score 设为 -1000，系统永不清杀
+- **main.cpp**: 窗口名 `FuckNetEase` → `Surface`（降低字符串特征）
+- 所有隐身操作在驱动初始化后、游戏线程启动前执行
+
+### 🔍 影响范围排查
+- ✅ anti_debug.h — 读取 /proc/self/status(TracerPid)、/proc/self/exe(大小)，不受改名影响
+- ✅ draw_Gui.cpp — 扫描游戏进程 cmdline，读取的是目标进程而非自身
+- ✅ driver_twt.h — 读取 /proc/self/fd，不受改名影响
+- ✅ 千叶.h / ThreadAffinity.h — 扫描游戏进程，与自身进程名无关
+- ✅ draw_Gui.cpp:7262 — readlink(/proc/self/exe) 读的是路径而非进程名
+
 ## [2026-06-29] — 路径统一到 /data/local/bin/
 
 ### 🔧 路径修正
