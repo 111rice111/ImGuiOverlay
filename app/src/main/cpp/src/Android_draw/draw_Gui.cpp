@@ -6809,31 +6809,38 @@ void Layout_tick_UI(bool *main_thread_flag) {
                 ImGui::SameLine();
                 ImGui::Checkbox("路线规划", &g_show_nav_line);
 
-                if (!map_invalid && !g_map_auto_detect) {
-                    ImGui::SameLine();
+                // ★ 手动选择地图（始终可用，无需等待自动识别）
+                {
                     std::vector<const char*> manual_names;
-                    for (auto& floor_vec : g_all_maps) {
-                        if (!floor_vec.empty() && floor_vec[0].name && strlen(floor_vec[0].name) > 0)
-                            manual_names.push_back(floor_vec[0].name);
+                    std::vector<int> manual_indices;
+                    for (int i = 0; i < (int)g_all_maps.size(); i++) {
+                        if (!g_all_maps[i].empty() && g_all_maps[i][0].name && strlen(g_all_maps[i][0].name) > 0) {
+                            manual_names.push_back(g_all_maps[i][0].name);
+                            manual_indices.push_back(i);
+                        }
                     }
                     if (!manual_names.empty()) {
-                        int manual_idx = g_current_map_index;
-                        if (manual_idx < 0 || manual_idx >= (int)manual_names.size()) manual_idx = (int)manual_names.size() - 1;
-                        ImGui::SetNextItemWidth(120);
-                        if (ImGui::Combo("手动选择", &manual_idx, manual_names.data(), manual_names.size())) {
-                            if (manual_idx >= 0 && manual_idx < (int)g_all_maps.size() && !g_all_maps[manual_idx].empty()) {
-                                g_current_map_index = manual_idx;
-                                g_current_floor_index = SafeClampFloorIdx(g_current_map_index, 0);
+                        int combo_idx = 0;
+                        for (int i = 0; i < (int)manual_indices.size(); i++) {
+                            if (manual_indices[i] == g_current_map_index) { combo_idx = i; break; }
+                        }
+                        ImGui::SameLine();
+                        ImGui::SetNextItemWidth(140);
+                        if (ImGui::Combo("切换地图", &combo_idx, manual_names.data(), manual_names.size())) {
+                            if (combo_idx >= 0 && combo_idx < (int)manual_indices.size()) {
+                                int new_idx = manual_indices[combo_idx];
+                                g_current_map_index = new_idx;
+                                g_current_floor_index = SafeClampFloorIdx(new_idx, 0);
                                 g_detect_phase = MapDetectPhase::LOCKED;
                                 g_detect_debounce_frames = 0;
-                                g_detect_best_fp_id = -1;  // 手动选择后清除指纹关联
-                                snprintf(g_detect_status_text, sizeof(g_detect_status_text),
-                                    "手动: map[%d]", manual_idx);
-                                LoadMapTexture(g_current_map_index, g_current_floor_index);
+                                g_detect_best_fp_id = -1;
+                                g_locked_stable_frames = 0;
+                                g_map_auto_detect = false;
+                                snprintf(g_detect_status_text, sizeof(g_detect_status_text), "手动: map[%d]", new_idx);
+                                LoadMapTexture(new_idx, g_current_floor_index);
+                                AddNotification("已切换到手动地图", 2.0f, ImVec4(0.3f, 1.0f, 0.3f, 1.0f));
                             }
                         }
-                    } else {
-                        ImGui::TextColored(ImVec4(1,0,0,1), "无地图配置");
                     }
                 }
 
