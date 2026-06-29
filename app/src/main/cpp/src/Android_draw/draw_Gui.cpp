@@ -4549,8 +4549,15 @@ void ProcessObjectWithFullDetails(ImDrawList *Draw, const DataStruct &item,
 
     // ★ 目的地选择按钮 + 导航路径渲染
     {
+        float map_h_d = g_map_display_size;
+        const auto& cfg_d = GetActiveMapConfig();
+        float ww_d = cfg_d.maxX - cfg_d.minX, wh_d = cfg_d.maxY - cfg_d.minY;
+        float mw_d = cfg_d.isVerticalMap ? (map_h_d * wh_d / ww_d) : (map_h_d * ww_d / wh_d);
+        ImVec2 mp_d(g_map_pos_x, g_map_pos_y);
+        ImVec2 me_d(mp_d.x + mw_d, mp_d.y + map_h_d);
+
         // ── 选择目的地按钮（常驻右下角）──
-        ImVec2 btn_pos(map_end.x - 105, map_end.y + 5);
+        ImVec2 btn_pos(me_d.x - 105, me_d.y + 5);
         ImVec2 btn_sz(100, 22);
         Draw->AddRectFilled(btn_pos, ImVec2(btn_pos.x + btn_sz.x, btn_pos.y + btn_sz.y), IM_COL32(30, 60, 120, 200), 4.0f);
         Draw->AddRect(btn_pos, ImVec2(btn_pos.x + btn_sz.x, btn_pos.y + btn_sz.y), IM_COL32(100, 160, 255, 255), 4.0f, 0, 1.5f);
@@ -4573,9 +4580,9 @@ void ProcessObjectWithFullDetails(ImDrawList *Draw, const DataStruct &item,
 
         // ── 目的地选择模式提示 ──
         if (g_dest_select_mode) {
-            Draw->AddText(ImVec2(map_pos.x + 5, map_end.y + 5), IM_COL32(255, 255, 0, 255), "请点击地图选择目的地...");
+            Draw->AddText(ImVec2(mp_d.x + 5, me_d.y + 5), IM_COL32(255, 255, 0, 255), "请点击地图选择目的地...");
             // 取消按钮
-            ImVec2 cancelp(map_end.x - 45, map_end.y + 5);
+            ImVec2 cancelp(me_d.x - 45, me_d.y + 5);
             Draw->AddRectFilled(cancelp, ImVec2(cancelp.x + 40, cancelp.y + 22), IM_COL32(100, 30, 30, 200), 4.0f);
             Draw->AddText(ImVec2(cancelp.x + 6, cancelp.y + 3), IM_COL32(255, 255, 255, 255), "取消");
             ImVec2 ms2 = ImGui::GetMousePos();
@@ -4588,10 +4595,10 @@ void ProcessObjectWithFullDetails(ImDrawList *Draw, const DataStruct &item,
 
             // 点击地图选点
             ImVec2 mm = ImGui::GetMousePos();
-            if (mm.x >= map_pos.x && mm.x <= map_end.x && mm.y >= map_pos.y && mm.y <= map_end.y &&
+            if (mm.x >= mp_d.x && mm.x <= me_d.x && mm.y >= mp_d.y && mm.y <= me_d.y &&
                 ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-                float u = (mm.x - map_pos.x) / map_w;
-                float v = (mm.y - map_pos.y) / map_h;
+                float u = (mm.x - mp_d.x) / map_w;
+                float v = (mm.y - mp_d.y) / map_h;
                 const auto& act_cfg = GetActiveMapConfig();
                 g_dest_world_x = CoordTransform::UVToX(u, act_cfg);
                 g_dest_world_y = CoordTransform::UVToY(v, act_cfg);
@@ -4634,13 +4641,13 @@ void ProcessObjectWithFullDetails(ImDrawList *Draw, const DataStruct &item,
                 float v1=act_cfg.offsetV+g_nav_render_path[k-1].Y*act_cfg.scaleY;
                 float u2=act_cfg.offsetU+g_nav_render_path[k].X*act_cfg.scaleX;
                 float v2=act_cfg.offsetV+g_nav_render_path[k].Y*act_cfg.scaleY;
-                Draw->AddLine(ImVec2(map_pos.x+u1*map_w,map_pos.y+v1*map_h),
-                              ImVec2(map_pos.x+u2*map_w,map_pos.y+v2*map_h),
+                Draw->AddLine(ImVec2(mp_d.x+u1*mw_d,mp_d.y+v1*map_h_d),
+                              ImVec2(mp_d.x+u2*mw_d,mp_d.y+v2*map_h_d),
                               IM_COL32(50,255,50,220),5.0f);
             }
             float du=act_cfg.offsetU+g_dest_world_x*act_cfg.scaleX;
             float dv=act_cfg.offsetV+g_dest_world_y*act_cfg.scaleY;
-            ImVec2 dp(map_pos.x+du*map_w,map_pos.y+dv*map_h);
+            ImVec2 dp(mp_d.x+du*mw_d,mp_d.y+dv*map_h_d);
             Draw->AddCircleFilled(dp,8.0f,IM_COL32(255,50,50,255));
             Draw->AddCircle(dp,12.0f,IM_COL32(255,255,255,180),0,2.0f);
         }
