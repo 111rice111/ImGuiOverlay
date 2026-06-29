@@ -5050,16 +5050,19 @@ void Draw_Main_Optimized(ImDrawList *Draw) {
                     if(!optimizedWorldToScreen(p1,matrix,px,py,s1x,s1y,s1w)||!optimizedWorldToScreen(p2,matrix,px,py,s2x,s2y,s2w))continue;
                     if(s1x<safe_l||s1x>safe_r||s1y<safe_t||s1y>safe_b||s2x<safe_l||s2x>safe_r||s2y<safe_t||s2y>safe_b)continue;
                     Draw->AddLine(ImVec2(s1x,s1y),ImVec2(s2x,s2y),IM_COL32((base>>0)&0xFF,(base>>8)&0xFF,(base>>16)&0xFF,alpha),g_3d_line_width);
-                    // 流光脉冲
+                    // 流光脉冲: 单向流动(不环绕)
                     float seg_dx=s2x-s1x,seg_dy=s2y-s1y,seg_len=sqrtf(seg_dx*seg_dx+seg_dy*seg_dy);
                     float pulse_len=std::min(seg_len*0.25f,100.0f);
+                    float pulse_spacing=pulse_len+80.0f;
                     float phase=g_foot_anim_t*flow_speed;
-                    for(int k=0;k<3;k++){
-                        float c=fmodf(phase-k*(pulse_len+80.0f),seg_len+pulse_len);
+                    int first=(int)ceilf(-phase/pulse_spacing);
+                    for(int k=first;;k++){
+                        float c=phase+(float)k*pulse_spacing;
+                        if(c<-pulse_len)continue; if(c>seg_len+pulse_len)break;
                         float t1=std::clamp((c-pulse_len*0.5f)/seg_len,0.0f,1.0f);
                         float t2=std::clamp((c+pulse_len*0.5f)/seg_len,0.0f,1.0f);
                         if(t1>=t2)continue;
-                        int ga=(int)(alpha*(1.0f-(float)k*0.35f));if(ga<10)continue;
+                        int ga=(int)(alpha*(1.0f-(float)std::max(0,k-first)*0.25f));if(ga<10)continue;
                         Draw->AddLine(ImVec2(s1x+seg_dx*t1,s1y+seg_dy*t1),ImVec2(s1x+seg_dx*t2,s1y+seg_dy*t2),IM_COL32((base>>0)&0xFF,(base>>8)&0xFF,(base>>16)&0xFF,ga),g_3d_line_width+4.0f);
                     }
                 }
@@ -6798,34 +6801,7 @@ void Layout_tick_UI(bool *main_thread_flag) {
                                     g_all_maps[g_current_map_index].empty());
 
                 if (map_invalid) {
-                    // ★ 未识别时: 大号手动选择器独占一行
-                    std::vector<const char*> manual_names;
-                    std::vector<int> manual_indices;
-                    for (int i = 0; i < (int)g_all_maps.size(); i++) {
-                        if (!g_all_maps[i].empty() && g_all_maps[i][0].name && strlen(g_all_maps[i][0].name) > 0) {
-                            manual_names.push_back(g_all_maps[i][0].name);
-                            manual_indices.push_back(i);
-                        }
-                    }
-                    if (!manual_names.empty()) {
-                        ImGui::TextColored(g_theme.warning, "尚未识别地图，请手动选择:");
-                        ImGui::SetNextItemWidth(-1); // 占满整行
-                        int combo_idx = 0;
-                        if (ImGui::Combo("##big_map_sel", &combo_idx, manual_names.data(), manual_names.size())) {
-                            if (combo_idx >= 0 && combo_idx < (int)manual_indices.size()) {
-                                int new_idx = manual_indices[combo_idx];
-                                g_current_map_index = new_idx;
-                                g_current_floor_index = SafeClampFloorIdx(new_idx, 0);
-                                g_detect_phase = MapDetectPhase::LOCKED;
-                                g_detect_debounce_frames = 0; g_detect_best_fp_id = -1; g_locked_stable_frames = 0;
-                                g_map_auto_detect = false;
-                                LoadMapTexture(new_idx, g_current_floor_index);
-                                AddNotification("已切换到手动地图", 2.0f, ImVec4(0.3f, 1.0f, 0.3f, 1.0f));
-                            }
-                        }
-                    } else {
-                        ImGui::TextColored(g_theme.warning, "尚未识别地图，部分功能不可用");
-                    }
+                    ImGui::TextColored(g_theme.warning, "尚未识别地图，请用下方「切换地图」手动选择");
                     ImGui::TextColored(g_theme.text_muted, "%s", g_map_scores_buf);
                 }
 
@@ -6859,6 +6835,42 @@ void Layout_tick_UI(bool *main_thread_flag) {
                         ImGui::SliderFloat("大小(px)", &g_3d_dot_radius, 5.0f, 40.0f, "%.0f");
                     }
                 }
+
+                // ★ 手动选择地图（始终可见）
+                {
+                    std::vector<const char*> manual_names;
+                    std::vector<int> manual_indices;
+                    for (int i = 0; i < (int)g_all_maps.size(); i++) {
+                        if (!g_all_maps[i].empty() && g_all_maps[i][0].name && strlen(g_all_maps[i][0].name) > 0) {
+                            manual_names.push_back(g_all_maps[i][0].name);
+                            manual_indices.push_back(i);
+                        }
+                    }
+                    if (!manual_names.empty()) {
+                        ImGui::SameLine();
+                        ImGui::SetNextItemWidth(140);
+                        int combo_idx = 0;
+                        for (int i = 0; i < (int)manual_indices.size(); i++) {
+                            if (manual_indices[i] == g_current_map_index) { combo_idx = i; break; }
+                        }
+                        if (ImGui::Combo("切换地图", &combo_idx, manual_names.data(), manual_names.size())) {
+                            if (combo_idx >= 0 && combo_idx < (int)manual_indices.size()) {
+                                int new_idx = manual_indices[combo_idx];
+                                g_current_map_index = new_idx;
+                                g_current_floor_index = SafeClampFloorIdx(new_idx, 0);
+                                g_detect_phase = MapDetectPhase::LOCKED;
+                                g_detect_debounce_frames = 0; g_detect_best_fp_id = -1; g_locked_stable_frames = 0;
+                                g_map_auto_detect = false;
+                                LoadMapTexture(new_idx, g_current_floor_index);
+                                AddNotification("已切换到手动地图", 2.0f, ImVec4(0.3f,1.0f,0.3f,1.0f));
+                            }
+                        }
+                    }
+                }
+
+                // ★ 手动选择后重新评估
+                map_invalid = (g_current_map_index < 0 || g_current_map_index >= (int)g_all_maps.size() ||
+                               g_all_maps[g_current_map_index].empty());
 
                 if (!map_invalid) {
                     bool unknown_map = false;
