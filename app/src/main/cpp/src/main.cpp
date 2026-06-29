@@ -48,58 +48,65 @@ int main(int argc, char *argv[]) {
     std::cout << "================================================" << std::endl;
     std::cout << "\033[0m" << std::endl;
 
-    // ── 等待用户按 Enter ──
-    std::cout << "\033[33m按 Enter 键继续...\033[0m" << std::flush;
-    std::cin.get();
+    // ── 检测是否有交互终端 ──
+    //    MT管理器等 GUI 工具启动时没有 stdin, 直接走自动模式
+    bool has_tty = isatty(STDIN_FILENO) && isatty(STDOUT_FILENO);
 
-    // ── 探测可用内核 ──
-    std::cout << "\n\033[36m正在探测可用内核...\033[0m" << std::endl;
-    auto probes = probe_all_drivers();
+    if (has_tty) {
+        // ── 等待用户确认 ──
+        std::cout << "\033[33m按 Enter 键继续...\033[0m" << std::flush;
+        std::cin.get();
 
-    // ── 内核选择菜单 ──
-    std::cout << "\n\033[36m════════ 请选择加载的内核 ════════\033[0m" << std::endl;
-    for (size_t i = 0; i < probes.size(); i++) {
-        if (probes[i].found)
-            std::cout << "  \033[32m[" << (i+1) << "]\033[0m " << probes[i].desc
-                      << " \033[32m[可用]\033[0m" << std::endl;
-        else
-            std::cout << "  \033[31m[" << (i+1) << "]\033[0m " << probes[i].desc
-                      << " \033[31m[不可用]\033[0m" << std::endl;
-    }
-    std::cout << "  \033[37m[0]\033[0m 自动探测 (按优先级)" << std::endl;
-    std::cout << "\033[36m请输入选项 (0-" << probes.size() << "): \033[0m" << std::flush;
+        // ── 探测可用内核 ──
+        std::cout << "\n\033[36m正在探测可用内核...\033[0m" << std::endl;
+        auto probes = probe_all_drivers();
 
-    int choice = 0;
-    std::cin >> choice;
-    std::cin.ignore(); // 清除换行符
+        // ── 内核选择菜单 ──
+        std::cout << "\n\033[36m════════ 请选择加载的内核 ════════\033[0m" << std::endl;
+        for (size_t i = 0; i < probes.size(); i++) {
+            if (probes[i].found)
+                std::cout << "  \033[32m[" << (i+1) << "]\033[0m " << probes[i].desc
+                          << " \033[32m[可用]\033[0m" << std::endl;
+            else
+                std::cout << "  \033[31m[" << (i+1) << "]\033[0m " << probes[i].desc
+                          << " \033[31m[不可用]\033[0m" << std::endl;
+        }
+        std::cout << "  \033[37m[0]\033[0m 自动探测 (按优先级)" << std::endl;
+        std::cout << "\033[36m请输入选项 (0-" << probes.size() << "): \033[0m" << std::flush;
 
-    // ── 根据选择加载驱动 ──
-    if (choice >= 1 && choice <= (int)probes.size()) {
-        const char* chosen = probes[choice-1].name.c_str();
-        std::cout << "\n\033[36m[*] 正在加载 " << chosen << " 驱动...\033[0m" << std::endl;
-        if (!driver_init_by_name(chosen)) {
-            // 指定驱动失败, 尝试备选
-            std::cout << "\033[33m[-] " << chosen << " 加载失败, 尝试备选驱动...\033[0m" << std::endl;
-            const char* fallback = nullptr;
-            for (size_t i = 0; i < probes.size(); i++) {
-                if (probes[i].name != probes[choice-1].name) {
-                    fallback = probes[i].name.c_str();
-                    break;
+        int choice = 0;
+        std::cin >> choice;
+        std::cin.ignore();
+
+        // ── 根据选择加载驱动 ──
+        if (choice >= 1 && choice <= (int)probes.size()) {
+            const char* chosen = probes[choice-1].name.c_str();
+            std::cout << "\n\033[36m[*] 正在加载 " << chosen << " 驱动...\033[0m" << std::endl;
+            if (!driver_init_by_name(chosen)) {
+                std::cout << "\033[33m[-] " << chosen << " 加载失败, 尝试备选驱动...\033[0m" << std::endl;
+                const char* fallback = nullptr;
+                for (size_t i = 0; i < probes.size(); i++) {
+                    if (probes[i].name != probes[choice-1].name) {
+                        fallback = probes[i].name.c_str();
+                        break;
+                    }
                 }
-            }
-            if (fallback) {
-                if (!driver_init_by_name(fallback)) {
-                    std::cout << "\033[31m[!!] 所有驱动加载失败, 程序退出\033[0m" << std::endl;
+                if (fallback) {
+                    if (!driver_init_by_name(fallback)) {
+                        std::cout << "\033[31m[!!] 所有驱动加载失败, 程序退出\033[0m" << std::endl;
+                        exit(1);
+                    }
+                } else {
+                    std::cout << "\033[31m[!!] 无可用备选驱动, 程序退出\033[0m" << std::endl;
                     exit(1);
                 }
-            } else {
-                std::cout << "\033[31m[!!] 无可用备选驱动, 程序退出\033[0m" << std::endl;
-                exit(1);
             }
+        } else {
+            std::cout << "\n\033[36m[*] 自动探测驱动...\033[0m" << std::endl;
+            driver_init();
         }
     } else {
-        // 自动探测
-        std::cout << "\n\033[36m[*] 自动探测驱动...\033[0m" << std::endl;
+        // 无终端 → 直接自动加载驱动
         driver_init();
     }
 
