@@ -139,6 +139,11 @@ static float g_draw_map_size_bak = 800.0f;
 static float g_draw_map_posx_bak = 700.0f;
 static float g_draw_map_posy_bak = 200.0f;
 
+// ★ 目的地选择
+static bool  g_dest_select_mode = false;
+static float g_dest_world_x = 0, g_dest_world_y = 0, g_dest_world_z = 0;
+static std::vector<Vector3A> g_nav_render_path;
+
 // === 路径导入预览 ===
 static std::vector<std::vector<Vector3A>> g_import_preview_paths;   // 预览路径（像素→世界坐标转换后）
 static bool g_has_import_preview = false;                            // 是否有预览数据
@@ -3548,6 +3553,8 @@ void Draw_MapOverlay(ImDrawList* Draw, const std::vector<DataStruct>& data) {
     if (g_show_saved_paths) {
         for (size_t pi = 0; pi < g_saved_paths.size(); pi++) {
             if (pi < g_path_visible.size() && !g_path_visible[pi]) continue;
+            // ★ 目的地导航: 2D只显示导航路径
+            if (g_show_nav_line && !g_nav_render_path.empty() && g_dest_world_x != 0) continue;
             auto& path = g_saved_paths[pi];
             if (path.size() < 2) continue;
 
@@ -4964,6 +4971,100 @@ void Draw_Main_Optimized(ImDrawList *Draw) {
             }
         }
         Draw_MapOverlay(Draw, current_data);
+
+        // ★ 目的地选择按钮 + 导航路径
+        {
+            float map_h = g_map_display_size;
+            const auto& cfg_n = GetActiveMapConfig();
+            float ww = cfg_n.maxX - cfg_n.minX, wh = cfg_n.maxY - cfg_n.minY;
+            float mw = cfg_n.isVerticalMap ? (map_h * wh / ww) : (map_h * ww / wh);
+            ImVec2 mp(g_map_pos_x, g_map_pos_y);
+            ImVec2 me(mp.x + mw, mp.y + map_h);
+
+            // ── 选择目的地按钮(常驻右下角) ──
+            if (!g_dest_select_mode && !g_path_edit_mode) {
+                ImGui::SetCursorScreenPos(ImVec2(me.x - 105, me.y + 5));
+                if (ImGui::SmallButton("选择目的地")) {
+                    g_dest_select_mode = true;
+                    g_draw_map_size_bak = g_map_display_size;
+                    g_draw_map_posx_bak = g_map_pos_x;
+                    g_draw_map_posy_bak = g_map_pos_y;
+                    g_map_display_size = std::min((float)displayInfo.height * 0.75f, 1600.0f);
+                    g_map_pos_x = (displayInfo.width - g_map_display_size) * 0.5f;
+                    g_map_pos_y = (displayInfo.height - g_map_display_size) * 0.5f;
+                }
+            }
+
+            // ── 目的地选择模式 ──
+            if (g_dest_select_mode) {
+                ImGui::SetCursorScreenPos(ImVec2(mp.x + 5, me.y + 5));
+                ImGui::TextColored(ImVec4(1,1,0,1), "请点击地图选择目的地...");
+                ImGui::SetCursorScreenPos(ImVec2(me.x - 60, me.y + 5));
+                if (ImGui::SmallButton("取消")) {
+                    g_map_display_size = g_draw_map_size_bak;
+                    g_map_pos_x = g_draw_map_posx_bak;
+                    g_map_pos_y = g_draw_map_posy_bak;
+                    g_dest_select_mode = false;
+                }
+
+                // 点击地图设置目的地
+                ImVec2 ms = ImGui::GetMousePos();
+                if (ms.x >= mp.x && ms.x <= me.x && ms.y >= mp.y && ms.y <= me.y &&
+                    ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                    float u = (ms.x - mp.x) / mw;
+                    float v = (ms.y - mp.y) / map_h;
+                    g_dest_world_x = CoordTransform::UVToX(u, cfg_n);
+                    g_dest_world_y = CoordTransform::UVToY(v, cfg_n);
+                    g_dest_world_z = Z.Z;
+                    // 计算导航路径
+                    g_nav_render_path.clear();
+                    Vector3A playerPos(Z.X, Z.Y, Z.Z);
+                    Vector3A destPos(g_dest_world_x, g_dest_world_y, g_dest_world_z);
+                    int best_path = -1; size_t best_s=0, best_e=0; float best_d=1e9f;
+                    for (size_t pi=0; pi<g_saved_paths.size(); pi++) {
+                        auto& pth=g_saved_paths[pi]; if(pth.size()<2)continue;
+                        size_t ps=0,pe=0; float pd=1e9f,ed=1e9f;
+                        for(size_t k=0;k<pth.size();k++){
+                            float d1=sqrtf((pth[k].X-playerPos.X)*(pth[k].X-playerPos.X)+(pth[k].Y-playerPos.Y)*(pth[k].Y-playerPos.Y));
+                            float d2=sqrtf((pth[k].X-destPos.X)*(pth[k].X-destPos.X)+(pth[k].Y-destPos.Y)*(pth[k].Y-destPos.Y));
+                            if(d1<pd){pd=d1;ps=k;} if(d2<ed){ed=d2;pe=k;}
+                        }
+                        if(pd+ed<best_d){best_d=pd+ed;best_path=(int)pi;best_s=ps;best_e=pe;}
+                    }
+                    if(best_path>=0){
+                        g_nav_render_path.push_back(playerPos);
+                        auto& pth=g_saved_paths[best_path];
+                        size_t a=std::min(best_s,best_e),b=std::max(best_s,best_e);
+                        for(size_t k=a;k<=b;k++)g_nav_render_path.push_back(pth[k]);
+                        g_nav_render_path.push_back(destPos);
+                    }
+                    g_show_nav_line = true;  // ★ 自动勾起路线规划
+                    g_map_display_size = g_draw_map_size_bak;
+                    g_map_pos_x = g_draw_map_posx_bak;
+                    g_map_pos_y = g_draw_map_posy_bak;
+                    g_dest_select_mode = false;
+                    AddNotification("目的地已设置", 2.0f, ImVec4(0.3f,1.0f,0.3f,1.0f));
+                }
+            }
+
+            // ── 导航路径2D渲染(玩家→目的地) + 目的地红点 ──
+            if (g_show_nav_line && !g_nav_render_path.empty() && g_dest_world_x!=0) {
+                for (size_t k=1;k<g_nav_render_path.size();k++) {
+                    float u1=cfg_n.offsetU+g_nav_render_path[k-1].X*cfg_n.scaleX;
+                    float v1=cfg_n.offsetV+g_nav_render_path[k-1].Y*cfg_n.scaleY;
+                    float u2=cfg_n.offsetU+g_nav_render_path[k].X*cfg_n.scaleX;
+                    float v2=cfg_n.offsetV+g_nav_render_path[k].Y*cfg_n.scaleY;
+                    ImVec2 s1(mp.x+u1*mw,mp.y+v1*map_h), s2(mp.x+u2*mw,mp.y+v2*map_h);
+                    Draw->AddLine(s1,s2,IM_COL32(50,255,50,220),5.0f);
+                }
+                // 目的地红点
+                float du=cfg_n.offsetU+g_dest_world_x*cfg_n.scaleX;
+                float dv=cfg_n.offsetV+g_dest_world_y*cfg_n.scaleY;
+                ImVec2 dp(mp.x+du*mw,mp.y+dv*map_h);
+                Draw->AddCircleFilled(dp,8.0f,IM_COL32(255,50,50,255));
+                Draw->AddCircle(dp,12.0f,IM_COL32(255,255,255,180),0,2.0f);
+            }
+        }
     }
 
     // ========== 3D立体路径渲染 ==========
@@ -4984,6 +5085,8 @@ void Draw_Main_Optimized(ImDrawList *Draw) {
         
         for (size_t pi = 0; pi < g_saved_paths.size(); pi++) {
             if (pi < g_path_visible.size() && !g_path_visible[pi]) continue;
+            // ★ 目的地导航：3D只显示导航路径
+            if (g_show_nav_line && !g_nav_render_path.empty() && g_dest_world_x != 0) continue;
             auto& path = g_saved_paths[pi];
             if (path.size() < 2) continue;
             
@@ -5083,6 +5186,26 @@ void Draw_Main_Optimized(ImDrawList *Draw) {
                     }
                 }
             }
+        }
+    }
+
+    // ========== 导航路径3D渲染 (玩家→目的地) ==========
+    if (g_show_3d_paths && g_show_nav_line && !g_nav_render_path.empty() && g_dest_world_x != 0) {
+        const float fcn = g_3d_path_fade_dist * 100.0f;
+        const float swn = (float)displayInfo.width, shn = (float)displayInfo.height;
+        ImU32 nc = IM_COL32(50, 255, 50, 255);
+        for (size_t i = 1; i < g_nav_render_path.size(); i++) {
+            Vector3A p1 = g_nav_render_path[i-1]; p1.Z += g_3d_path_height;
+            Vector3A p2 = g_nav_render_path[i];   p2.Z += g_3d_path_height;
+            float mx=(p1.X+p2.X)*0.5f,my=(p1.Y+p2.Y)*0.5f,mz=(p1.Z+p2.Z)*0.5f;
+            float dist=sqrtf((mx-Z.X)*(mx-Z.X)+(my-Z.Y)*(my-Z.Y)+(mz-Z.Z)*(mz-Z.Z));
+            if(dist>fcn*1.5f)continue;
+            float ft=std::clamp(dist/fcn,0.0f,1.0f);
+            int alpha=(int)(255.0f*(1.0f-ft*ft)); if(alpha<6)continue;
+            float s1x,s1y,s1w,s2x,s2y,s2w;
+            if(!optimizedWorldToScreen(p1,matrix,px,py,s1x,s1y,s1w)||!optimizedWorldToScreen(p2,matrix,px,py,s2x,s2y,s2w))continue;
+            if(s1x<-swn*0.5f||s1x>swn*1.5f||s1y<-shn*0.5f||s1y>shn*1.5f||s2x<-swn*0.5f||s2x>swn*1.5f||s2y<-shn*0.5f||s2y>shn*1.5f)continue;
+            Draw->AddLine(ImVec2(s1x,s1y),ImVec2(s2x,s2y), IM_COL32((nc>>0)&0xFF,(nc>>8)&0xFF,(nc>>16)&0xFF,alpha), g_3d_line_width+4.0f);
         }
     }
 
