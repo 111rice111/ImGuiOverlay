@@ -7584,7 +7584,11 @@ void Layout_tick_UI(bool *main_thread_flag) {
                 } else {
                     // === p2 内存 DWORD 全量快照 ===
                     ImGui::TextColored(g_theme.info, "=== p2 内存 DWORD 全量快照 (obj+0x10->+0x150 = p2) ===");
-                    ImGui::TextColored(g_theme.text_muted, "绿色=可能是动作ID(1000~2000000) | 对比哈基米找到对应偏移");
+                    ImGui::TextColored(g_theme.text_muted, "输入哈基米动作值 → 绿色高亮匹配行");
+                    
+                    static int highlight_val = 918222;  // 输入哈基米显示的当前动作
+                    ImGui::SetNextItemWidth(140 * g_density);
+                    ImGui::InputInt("高亮目标值", &highlight_val);
                     
                     uintptr_t p1 = getPtr64(self_obj + 0x10);
                     uintptr_t p2 = (p1 != 0) ? getPtr64(p1 + 0x150) : 0;
@@ -7608,49 +7612,59 @@ void Layout_tick_UI(bool *main_thread_flag) {
                         ImGui::SameLine();
                         ImGui::SetNextItemWidth(80 * g_density); ImGui::InputInt("行数", &dump_count, 16, 64);
                         if (dump_start < 0) dump_start = 0;
-                        if (dump_count < 16) dump_count = 16;
+                        if (dump_count < 32) dump_count = 32;
                         if (dump_count > 512) dump_count = 512;
+                        
+                        // 先扫一遍找到目标值在哪个偏移
+                        bool found_target = false;
+                        for (int row = 0; row < dump_count && !found_target; row += 16) {
+                            int base = dump_start + row;
+                            if (getDword(dump_base+base) == highlight_val || getDword(dump_base+base+4) == highlight_val ||
+                                getDword(dump_base+base+8) == highlight_val || getDword(dump_base+base+12) == highlight_val)
+                                found_target = true;
+                        }
                         
                         ImGui::BeginChild("P2MemDump", ImVec2(0, 400 * g_density), true);
                         char line[512];
                         for (int row = 0; row < dump_count; row += 16) {
                             int base = dump_start + row;
-                            int vals[16];
-                            bool any_action = false;
-                            for (int ci = 0; ci < 16; ci += 4) {
-                                vals[ci] = getDword(dump_base + base + ci);
-                                if (vals[ci] >= 1000 && vals[ci] <= 2000000 && vals[ci] != 0xFFFFFFFF) any_action = true;
-                            }
-                            for (int ci = 0; ci < 16; ci += 4) {
-                                vals[ci] = getDword(dump_base + base + ci);
-                            }
+                            int v0 = getDword(dump_base + base);
+                            int v1 = getDword(dump_base + base + 4);
+                            int v2 = getDword(dump_base + base + 8);
+                            int v3 = getDword(dump_base + base + 12);
                             
-                            // 行首偏移 + 4列DWORD
-                            snprintf(line, sizeof(line), "+0x%03X: %10d  %10d  %10d  %10d",
-                                base, vals[0], vals[4], vals[8], vals[12]);
+                            bool match = (v0==highlight_val) || (v1==highlight_val) || (v2==highlight_val) || (v3==highlight_val);
+                            bool any_nz = (v0!=0) || (v1!=0) || (v2!=0) || (v3!=0);
                             
-                            if (any_action) {
-                                ImGui::TextColored(g_theme.success, "%s", line);
+                            snprintf(line, sizeof(line), "+0x%03X: %10d  %10d  %10d  %10d", base, v0, v1, v2, v3);
+                            
+                            if (match) {
+                                ImGui::TextColored(g_theme.success, "%s  ★ MATCH!", line);
+                            } else if (any_nz) {
+                                ImGui::TextColored(g_theme.text, "%s", line);
                             } else {
                                 ImGui::TextColored(g_theme.text_muted, "%s", line);
                             }
                         }
                         ImGui::EndChild();
                         
+                        if (!found_target) {
+                            ImGui::TextColored(g_theme.warning, "在 +0x%X~+0x%X 范围内未找到 %d", dump_start, dump_start+dump_count, highlight_val);
+                        }
+                        
                         // 如果有备用p2也显示快照
                         if (alt_p2 != 0 && alt_p2 != dump_base) {
                             ImGui::Spacing();
                             ImGui::TextColored(g_theme.info, "=== 备用p2快照 (+0x138路径) ===");
                             ImGui::BeginChild("P2AltMemDump", ImVec2(0, 200 * g_density), true);
-                            for (int row = dump_start; row < dump_start + 128; row += 16) {
+                            for (int row = dump_start; row < dump_start + (dump_count < 128 ? dump_count : 128); row += 16) {
                                 int v0 = getDword(alt_p2 + row);
                                 int v1 = getDword(alt_p2 + row + 4);
                                 int v2 = getDword(alt_p2 + row + 8);
                                 int v3 = getDword(alt_p2 + row + 12);
-                                bool act = (v0>=1000&&v0<=2000000) || (v1>=1000&&v1<=2000000) || (v2>=1000&&v2<=2000000) || (v3>=1000&&v3<=2000000);
+                                bool match = (v0==highlight_val) || (v1==highlight_val) || (v2==highlight_val) || (v3==highlight_val);
                                 snprintf(line, sizeof(line), "+0x%03X: %10d  %10d  %10d  %10d", row, v0, v1, v2, v3);
-                                ImGui::TextColored(act ? g_theme.success : g_theme.text_muted, "%s", line);
-                            }
+                                ImGui::TextColored(match ? g_theme.success : (v0!=0?g_theme.text:g_theme.text_muted), "%s%s", line, match?" ★":"");                            }
                             ImGui::EndChild();
                         }
                     }
