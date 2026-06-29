@@ -7584,8 +7584,48 @@ void Layout_tick_UI(bool *main_thread_flag) {
                 
                 uintptr_t self_obj = GlobalMemory::自身;
                 if (self_obj == 0) {
-                    ImGui::TextColored(g_theme.warning, "玩家对象未识别，无法扫描");
+                    ImGui::TextColored(g_theme.warning, "玩家对象(GM::自身) = NULL，无法扫描");
                 } else {
+                    // === 指针单步追踪: 显示每一步的原始指针值 ===
+                    ImGui::Spacing();
+                    ImGui::TextColored(g_theme.info, "--- 指针单步追踪 (当前链: +0x10 -> +0x150 -> dw 0x2D0) ---");
+                    
+                    uintptr_t step1_ptr = getPtr64(self_obj + 0x10);
+                    ImGui::Text("self_obj   = 0x%lX", self_obj);
+                    
+                    if (step1_ptr == 0) {
+                        ImGui::TextColored(g_theme.danger, "  +0x10    = NULL ★断链★");
+                    } else {
+                        ImGui::Text("  +0x10    = 0x%lX", step1_ptr);
+                        uintptr_t step2_ptr = getPtr64(step1_ptr + 0x150);
+                        if (step2_ptr == 0) {
+                            ImGui::TextColored(g_theme.danger, "    +0x150  = NULL ★断链★");
+                        } else {
+                            ImGui::Text("    +0x150  = 0x%lX", step2_ptr);
+                            int step3_val = getDword(step2_ptr + 0x2D0);
+                            ImGui::TextColored(g_theme.success, "      dw 0x2D0 = %d", step3_val);
+                            // 也读一下周围的值
+                            ImGui::TextColored(g_theme.text_muted, "      附近: dw0x2C8=%d  dw0x2CC=%d  dw0x2D4=%d  dw0x2D8=%d",
+                                getDword(step2_ptr + 0x2C8), getDword(step2_ptr + 0x2CC),
+                                getDword(step2_ptr + 0x2D4), getDword(step2_ptr + 0x2D8));
+                        }
+                    }
+                    
+                    // 也看一下 0x138 那条路
+                    uintptr_t alt_ptr = getPtr64(self_obj + 0x138);
+                    if (alt_ptr != 0) {
+                        uintptr_t alt_p2 = getPtr64(alt_ptr + 0x150);
+                        if (alt_p2 != 0) {
+                            ImGui::TextColored(g_theme.text_muted, "  备用链 +0x138->+0x150->dw0x2D0 = %d",
+                                getDword(alt_p2 + 0x2D0));
+                        }
+                    }
+                    
+                    ImGui::Spacing();
+                    ImGui::Separator();
+                    ImGui::TextColored(g_theme.info, "=== 动作ID多链扫描 (对比哈基米) ===");
+                    ImGui::TextColored(g_theme.text_muted, "同时运行哈基米 v2.3 对比数值，匹配的链即为正确链");
+                    ImGui::Spacing();
                     // 定义待测指针链: {描述, {{第一级偏移, 第二级偏移, 第三级偏移, 是读DWORD(1)还是读指针(0)?}}}
                     struct ChainDef {
                         const char* name;
