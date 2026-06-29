@@ -157,15 +157,6 @@ static std::string g_import_status;                                   // 状态�
 static bool g_show_big_map = false;
 static float g_big_map_zoom = 1.0f;
 
-static int g_route_item_count = 0;
-static int g_route_total_value = 0;
-static float g_total_route_distance = 0.0f;
-
-static Vector3A g_via_point;
-static bool g_has_via_point = false;
-
-static int g_route_min_value = 0;
-
 // === 脏标记：延迟写 JSON，减少 /sdcard 写入 ===
 static bool g_dirty_exits = false;     // 出口数据待保存
 static bool g_dirty_paths = false;     // 路径数据待保存
@@ -208,8 +199,6 @@ static bool   g_show_exit_debug = false;  // 是否显示出口调试标记
 static int    g_drag_exit_idx = -1;       // 当前拖拽的出口索引（-1=无）
 static bool   g_map_drag_blocked = false; // 当出口拖拽时阻止地图拖动
 
-static std::unordered_set<uintptr_t> g_priority_items;
-
 static bool g_path_drawing_active = false;
 static ImVec2 g_path_start_pos;
 
@@ -233,10 +222,6 @@ static bool  g_show_saved_paths = true;
 // === 正交绘制模式（强制水平/垂直 + 直角转角） ===
 static bool  g_ortho_draw = false;          // 正交路径绘制开关（默认关闭，自由绘制）
 static float g_path_draw_threshold = 15.0f; // 添加新点的最小距离阈值（越小曲线越平滑）
-
-static PathGraph g_pathGraph;
-static bool g_show_graph_debug = false;
-static bool g_graph_ready = false;
 
 // ========== 辅助函数：获取当前活动的 MapConfig（带全局回退）==========
 // 此函数定义在 g_all_maps 等全局变量声明之后（见文件后部）
@@ -929,14 +914,12 @@ static void LoadConfig() {
     // Tab 5: 地图管理
     getBool("g_show_nav_line", g_show_nav_line);
     getFloat("g_map_label_scale", g_map_label_scale);
-    getInt("g_route_min_value", g_route_min_value);
     getFloat("g_map_opacity", g_map_opacity);
     getFloat("g_label_opacity", g_label_opacity);
     getFloat("g_self_opacity", g_self_opacity);
     getFloat("g_route_opacity", g_route_opacity);
     getFloat("g_saved_path_opacity", g_saved_path_opacity);
     getFloat("g_path_fade_dist", g_path_fade_dist);
-    getBool("g_show_graph_debug", g_show_graph_debug);
     getBool("g_use_calib", g_use_calib);
     getBool("g_map_flip_x", g_map_flip_x);
     getBool("g_map_flip_y", g_map_flip_y);
@@ -1064,14 +1047,12 @@ static void SaveConfig() {
     // Tab 5: 地图管理
     file << "g_show_nav_line=" << g_show_nav_line << "\n";
     file << "g_map_label_scale=" << g_map_label_scale << "\n";
-    file << "g_route_min_value=" << g_route_min_value << "\n";
     file << "g_map_opacity=" << g_map_opacity << "\n";
     file << "g_label_opacity=" << g_label_opacity << "\n";
     file << "g_self_opacity=" << g_self_opacity << "\n";
     file << "g_route_opacity=" << g_route_opacity << "\n";
     file << "g_saved_path_opacity=" << g_saved_path_opacity << "\n";
     file << "g_path_fade_dist=" << g_path_fade_dist << "\n";
-    file << "g_show_graph_debug=" << g_show_graph_debug << "\n";
     file << "g_use_calib=" << g_use_calib << "\n";
     file << "g_map_flip_x=" << g_map_flip_x << "\n";
     file << "g_map_flip_y=" << g_map_flip_y << "\n";
@@ -1925,7 +1906,6 @@ void TryAutoDetectMap(const std::vector<DataStruct>& data) {
                 if (clamped != g_current_floor_index) {
                     g_current_floor_index = clamped;
                     g_last_paths_map_idx = -1;
-                    g_pathGraph.dirty = true;
                 }
             }
         } else if (tp == TeleportType::FLOOR_CHANGE) {
@@ -1933,7 +1913,6 @@ void TryAutoDetectMap(const std::vector<DataStruct>& data) {
             int nf = GetFloorFromPlayerZ(Z);
             g_current_floor_index = SafeClampFloorIdx(g_current_map_index, nf);
             g_last_paths_map_idx = -1;
-            g_pathGraph.dirty = true;
             LoadMapTexture(g_current_map_index, g_current_floor_index);
             g_detect_phase = MapDetectPhase::LOCKED;
             snprintf(g_map_detect_debug, sizeof(g_map_detect_debug), "New: FLOOR z=%.0f->%d", Z.Z, nf);
@@ -2986,18 +2965,6 @@ void Draw_MapOverlay(ImDrawList* Draw, const std::vector<DataStruct>& data) {
         }
         g_last_paths_map_idx = g_current_map_index;
         g_last_paths_floor_idx = g_current_floor_index;
-        g_pathGraph.dirty = true; // 路径变了需重建通行图
-    }
-
-    // ========== 通行图构建检查（只要有已保存路径就构建，不依赖校准） ==========
-    if (g_pathGraph.dirty && !g_saved_paths.empty()) {
-        g_pathGraph.clear();
-        if (g_current_map_index < g_exits.size() && g_current_floor_index < g_exits[g_current_map_index].size()) {
-            g_pathGraph.buildFromSavedPaths(g_saved_paths, g_exits[g_current_map_index][g_current_floor_index]);
-        } else {
-            g_pathGraph.buildFromSavedPaths(g_saved_paths, {});
-        }
-        g_graph_ready = !g_pathGraph.nodes.empty();
     }
 
     // 绘制自身位置
@@ -3023,9 +2990,6 @@ void Draw_MapOverlay(ImDrawList* Draw, const std::vector<DataStruct>& data) {
         return "·";
     };
 
-    g_route_item_count = 0;
-    g_route_total_value = 0;
-
     // ========== 物品循环 ==========
     for (const auto& item : data) {
         if (item.阵营 != 6 && item.阵营 != 4) continue;
@@ -3043,7 +3007,6 @@ void Draw_MapOverlay(ImDrawList* Draw, const std::vector<DataStruct>& data) {
         if (!isHiddenDoor) {
             if (!isChest && !isMonster && price < g_treasure_threshold) continue;
             if (isMonster && !MjSubsystem::show_monsters) continue;
-            if (price < g_route_min_value) continue;
         }
 
         Vector3A pos = getObjectCoordinates(item.objcoor, true);
@@ -3057,17 +3020,7 @@ void Draw_MapOverlay(ImDrawList* Draw, const std::vector<DataStruct>& data) {
             if (dist > MjSubsystem::max_dist_monsters) continue;
         }
 
-        if (price > 0) {
-            g_route_item_count++;
-            g_route_total_value += price;
-        }
-
         ImVec2 p = ToMap(pos);
-
-        // 优先级标记
-        if (g_show_nav_line && g_priority_items.count(item.obj)) {
-            Draw->AddCircle(p, 8.0f, IM_COL32(255, 215, 0, 200), 0, 2.5f);
-        }
 
         ImColor color;
         if (isMonster) color = ImColor(255, 0, 0, 255);
@@ -3090,463 +3043,6 @@ void Draw_MapOverlay(ImDrawList* Draw, const std::vector<DataStruct>& data) {
             Draw->AddText(ImGui::GetFont(), label_font,
                           ImVec2(p.x - 6, p.y - 6), IM_COL32(255, 255, 255, (int)(255 * g_label_opacity)), onechar);
         }
-
-        // 点击物品标记优先级
-        if (g_show_nav_line && !g_use_calib && g_path_edit_mode == 0) {
-            ImVec2 mouse = ImGui::GetMousePos();
-            float dx = mouse.x - p.x;
-            float dy = mouse.y - p.y;
-            if (dx*dx + dy*dy < 100.0f && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-                if (g_priority_items.count(item.obj)) {
-                    g_priority_items.erase(item.obj);
-                } else {
-                    g_priority_items.insert(item.obj);
-                }
-            }
-        }
-    }
-
-    // ========== 智能路线规划（自动识别贵重物品 + 出口，无需手动标记） ==========
-    if (g_show_nav_line && g_graph_ready && !g_pathGraph.nodes.empty()) {
-        auto findNearestNode = [&](const Vector3A& worldPos) -> int {
-            int best = -1;
-            float bestDist = 1e30f;
-            for (int i = 0; i < (int)g_pathGraph.nodes.size(); i++) {
-                float dx = g_pathGraph.nodes[i].pos.X - worldPos.X;
-                float dy = g_pathGraph.nodes[i].pos.Y - worldPos.Y;
-                float dz = g_pathGraph.nodes[i].pos.Z - worldPos.Z;
-                float d = dx*dx + dy*dy + dz*dz;
-                if (d < bestDist) { bestDist = d; best = i; }
-            }
-            return best;
-        };
-
-        // 1. 收集全部"有价值"目标坐标（贵重物品节点 + 出口节点）
-        std::vector<Vector3A> autoTargets;
-        std::vector<const char*> autoTargetNames;
-
-        // 1a. 扫描场景中所有物品，筛选出贵重物品
-        for (const auto& item : data) {
-            if (item.阵营 != 6 && item.阵营 != 4) continue;
-            bool isHidden = (strstr(item.prop_name, "[隐藏宝箱]") != nullptr);
-            if (isHidden) continue; // 明确排除隐藏宝箱
-
-            bool isPurple = (strstr(item.prop_name, "[紫宝箱]") != nullptr);
-            bool isGold   = (strstr(item.prop_name, "[金宝箱]") != nullptr);
-            bool isMusicBox = (strstr(item.类名, "prop_musicbox") != nullptr);
-            int price = ExtractPrice(item.prop_name);
-
-            bool isHighValue = (price >= (int)g_treasure_threshold);
-            bool isTarget = isPurple || isGold || isMusicBox || isHighValue;
-            if (!isTarget) continue;
-
-            Vector3A pos = getObjectCoordinates(item.objcoor, true);
-            if (!isValidCoordinate(pos)) continue;
-
-            // 楼层过滤
-            if (g_current_floor_index == 0) { if (pos.Z > 175.0f) continue; }
-            else if (g_current_floor_index == 1) { if (pos.Z <= 175.0f) continue; }
-
-            // 检查是否能映射到路径网络
-            int node = findNearestNode(pos);
-            if (node < 0) continue;
-
-            autoTargets.push_back(pos);
-            autoTargetNames.push_back(item.prop_name[0] ? item.prop_name : "宝藏");
-        }
-
-        // 1b. 出口节点单独保存（不混入物品目标，规划完成后再走最优出口）
-        std::vector<Vector3A> exitTargets;
-        if (g_current_map_index < (int)g_exits.size() &&
-            g_current_floor_index < (int)g_exits[g_current_map_index].size()) {
-            for (auto& e : g_exits[g_current_map_index][g_current_floor_index]) {
-                int node = findNearestNode(e);
-                if (node >= 0) {
-                    exitTargets.push_back(e);
-                }
-            }
-        }
-
-        // 2. 如果存在自动识别的目标，且没有手动标记时，自动规划
-        if (!autoTargets.empty() && g_priority_items.empty()) {
-            int playerNode = findNearestNode(Z);
-            if (playerNode >= 0) {
-                // 贪心最近邻 TSP：从玩家出发→遍历所有物品→最后选最近出口
-                std::vector<int> visitOrder;
-                std::vector<Vector3A> visitedPoses;
-                std::vector<const char*> visitedNames;
-                std::vector<bool> visited(autoTargets.size(), false);
-
-                Vector3A currentPos = Z;
-                int visitedCount = 0;
-
-                // 2a. 先走所有物品节点
-                while (visitedCount < (int)autoTargets.size()) {
-                    int bestIdx = -1;
-                    float bestDist2 = 1e30f;
-                    for (size_t i = 0; i < autoTargets.size(); i++) {
-                        if (visited[i]) continue;
-                        float dx = autoTargets[i].X - currentPos.X;
-                        float dy = autoTargets[i].Y - currentPos.Y;
-                        float d2 = dx*dx + dy*dy;
-                        if (d2 < bestDist2) { bestDist2 = d2; bestIdx = (int)i; }
-                    }
-                    if (bestIdx < 0) break;
-
-                    visited[bestIdx] = true;
-                    visitedCount++;
-                    visitOrder.push_back(findNearestNode(autoTargets[bestIdx]));
-                    visitedPoses.push_back(autoTargets[bestIdx]);
-                    visitedNames.push_back(autoTargetNames[bestIdx]);
-                    currentPos = autoTargets[bestIdx];
-                }
-
-                // 2ab. 途经点插入到物品路线最前面（玩家出发后先去途经点）
-                if (g_has_via_point) {
-                    int viaNode = findNearestNode(g_via_point);
-                    if (viaNode >= 0 && viaNode != playerNode &&
-                        (visitOrder.empty() || viaNode != visitOrder.front())) {
-                        visitOrder.insert(visitOrder.begin(), viaNode);
-                        visitedPoses.insert(visitedPoses.begin(), g_via_point);
-                        visitedNames.insert(visitedNames.begin(), "途经点");
-                    }
-                }
-
-                // 2b. 物品走完后→选最近出口作为最终目的地
-                Vector3A finalExitPos{};
-                int finalExitNode = -1;
-                float bestExitDist2 = 1e30f;
-                for (auto& epos : exitTargets) {
-                    float dx = epos.X - currentPos.X;
-                    float dy = epos.Y - currentPos.Y;
-                    float d2 = dx*dx + dy*dy;
-                    if (d2 < bestExitDist2) {
-                        bestExitDist2 = d2;
-                        finalExitPos = epos;
-                        finalExitNode = findNearestNode(epos);
-                    }
-                }
-                bool hasExitSegment = (finalExitNode >= 0 && finalExitNode != (visitOrder.empty() ? playerNode : visitOrder.back()));
-
-                // 3. 渲染自动规划的路线
-                float totalMetersAuto = 0.0f;
-                int curNode = playerNode;
-                for (size_t t = 0; t < visitOrder.size(); t++) {
-                    int targetNode = visitOrder[t];
-                    if (targetNode == curNode) continue;
-
-                    auto prevEdge = g_pathGraph.dijkstra(curNode);
-                    if (prevEdge[targetNode] < 0) continue;
-
-                    std::vector<int> nodeSeq;
-                    for (int c = targetNode; c != curNode; ) {
-                        nodeSeq.push_back(c);
-                        int ei = prevEdge[c];
-                        int prev = (g_pathGraph.edges[ei].from == c)
-                                  ? g_pathGraph.edges[ei].to
-                                  : g_pathGraph.edges[ei].from;
-                        c = prev;
-                    }
-                    nodeSeq.push_back(curNode);
-                    std::reverse(nodeSeq.begin(), nodeSeq.end());
-
-                    // 绘制物品段路径（绿色双线，区别于蓝色已保存路径和橙色手动规划）
-                    bool isExitSegment = false;
-                    for (size_t i = 1; i < nodeSeq.size(); i++) {
-                        ImVec2 p1 = ToMap(g_pathGraph.nodes[nodeSeq[i-1]].pos);
-                        ImVec2 p2 = ToMap(g_pathGraph.nodes[nodeSeq[i]].pos);
-
-                        float dx = p2.x - p1.x, dy = p2.y - p1.y;
-                        float segLen = sqrtf(dx*dx + dy*dy);
-                        totalMetersAuto += segLen;
-
-                        ImU32 colOuter, colInner, colArrow;
-                        if (isExitSegment) {
-                            colOuter = IM_COL32(255, 200, 50, 60);
-                            colInner = IM_COL32(255, 220, 80, 220);
-                            colArrow = IM_COL32(255, 230, 100, 200);
-                        } else {
-                            colOuter = IM_COL32(50, 220, 80, 60);
-                            colInner = IM_COL32(50, 255, 80, 220);
-                            colArrow = IM_COL32(100, 255, 130, 200);
-                        }
-                        Draw->AddLine(p1, p2, colOuter, 8.0f);
-                        Draw->AddLine(p1, p2, colInner, 3.0f);
-
-                        // 增大箭头（上限从12→20）
-                        float arrowScale = std::min(segLen * 0.2f, 20.0f);
-                        if (arrowScale > 6.0f) {
-                            ImVec2 mid((p1.x + p2.x) * 0.5f, (p1.y + p2.y) * 0.5f);
-                            float angle = atan2f(dy, dx);
-                            ImVec2 tip(mid.x + cosf(angle) * arrowScale, mid.y + sinf(angle) * arrowScale);
-                            ImVec2 left(mid.x + cosf(angle + 2.5f) * arrowScale * 0.6f, mid.y + sinf(angle + 2.5f) * arrowScale * 0.6f);
-                            ImVec2 right(mid.x + cosf(angle - 2.5f) * arrowScale * 0.6f, mid.y + sinf(angle - 2.5f) * arrowScale * 0.6f);
-                            Draw->AddTriangleFilled(tip, left, right, colArrow);
-                        }
-                    }
-
-                    // 目标节点标记
-                    ImVec2 targetScreen = ToMap(g_pathGraph.nodes[targetNode].pos);
-                    ImVec2 itemScreen = ToMap(visitedPoses[t]);
-                    char seqLabel[8];
-                    snprintf(seqLabel, sizeof(seqLabel), "%d★", (int)t + 1);
-                    ImVec2 lblSize = ImGui::CalcTextSize(seqLabel);
-                    Draw->AddRectFilled(ImVec2(itemScreen.x - lblSize.x * 0.5f - 5, itemScreen.y - 20),
-                                        ImVec2(itemScreen.x + lblSize.x * 0.5f + 5, itemScreen.y),
-                                        IM_COL32(0, 0, 0, 180), 4.0f);
-                    Draw->AddText(g_font_ui, ImGui::GetFontSize() * 1.1f,
-                                  ImVec2(itemScreen.x - lblSize.x * 0.5f, itemScreen.y - 18),
-                                  IM_COL32(255, 215, 0, 255), seqLabel);
-                    Draw->AddLine(targetScreen, itemScreen, IM_COL32(50, 220, 80, 150), 2.0f);
-                    Draw->AddCircle(itemScreen, 10.0f, IM_COL32(255, 215, 0, 255), 0, 2.0f);
-
-                    curNode = targetNode;
-                }
-
-                // 3b. 最终段：当前物品→最优出口
-                if (hasExitSegment) {
-                    auto prevEdgeExit = g_pathGraph.dijkstra(curNode);
-                    if (prevEdgeExit[finalExitNode] >= 0) {
-                        std::vector<int> exitSeq;
-                        for (int c = finalExitNode; c != curNode; ) {
-                            exitSeq.push_back(c);
-                            int ei = prevEdgeExit[c];
-                            int prev = (g_pathGraph.edges[ei].from == c)
-                                      ? g_pathGraph.edges[ei].to
-                                      : g_pathGraph.edges[ei].from;
-                            c = prev;
-                        }
-                        exitSeq.push_back(curNode);
-                        std::reverse(exitSeq.begin(), exitSeq.end());
-
-                        for (size_t i = 1; i < exitSeq.size(); i++) {
-                            ImVec2 p1 = ToMap(g_pathGraph.nodes[exitSeq[i-1]].pos);
-                            ImVec2 p2 = ToMap(g_pathGraph.nodes[exitSeq[i]].pos);
-                            float dx = p2.x - p1.x, dy = p2.y - p1.y;
-                            float segLen = sqrtf(dx*dx + dy*dy);
-                            totalMetersAuto += segLen;
-
-                            // 出口段用金色
-                            Draw->AddLine(p1, p2, IM_COL32(255, 200, 50, 60), 8.0f);
-                            Draw->AddLine(p1, p2, IM_COL32(255, 220, 80, 220), 3.0f);
-
-                            float arrowScale = std::min(segLen * 0.2f, 20.0f);
-                            if (arrowScale > 6.0f) {
-                                ImVec2 mid((p1.x + p2.x) * 0.5f, (p1.y + p2.y) * 0.5f);
-                                float angle = atan2f(dy, dx);
-                                ImVec2 tip(mid.x + cosf(angle) * arrowScale, mid.y + sinf(angle) * arrowScale);
-                                ImVec2 left(mid.x + cosf(angle + 2.5f) * arrowScale * 0.6f, mid.y + sinf(angle + 2.5f) * arrowScale * 0.6f);
-                                ImVec2 right(mid.x + cosf(angle - 2.5f) * arrowScale * 0.6f, mid.y + sinf(angle - 2.5f) * arrowScale * 0.6f);
-                                Draw->AddTriangleFilled(tip, left, right, IM_COL32(255, 230, 100, 200));
-                            }
-                        }
-
-                        // 出口标记
-                        ImVec2 exitScreen = ToMap(finalExitPos);
-                        Draw->AddRectFilled(ImVec2(exitScreen.x - 8, exitScreen.y - 8),
-                                            ImVec2(exitScreen.x + 8, exitScreen.y + 8),
-                                            IM_COL32(255, 220, 50, 220), 3.0f);
-                        Draw->AddText(ImGui::GetFont(), 14.0f,
-                                      ImVec2(exitScreen.x + 10, exitScreen.y - 8),
-                                      IM_COL32(255, 220, 50, 220), "[目的地]");
-                    }
-                }
-
-                // 左上角绿色距离汇总
-                if (totalMetersAuto > 0.0f) {
-                    char distInfo[64];
-                    snprintf(distInfo, sizeof(distInfo), "路线总距离: %.0fm", totalMetersAuto);
-                    // 半透明背景 + 更大字体
-                    ImVec2 ts = ImGui::CalcTextSize(distInfo);
-                    float pad = 6.0f;
-                    Draw->AddRectFilled(ImVec2(map_pos.x + 2, map_pos.y + 2),
-                                        ImVec2(map_pos.x + ts.x + pad * 2 + 4, map_pos.y + ts.y + pad * 2 + 4),
-                                        IM_COL32(0, 0, 0, 160), 6.0f);
-                    Draw->AddText(ImGui::GetFont(), 18.0f,
-                                  ImVec2(map_pos.x + 4 + pad, map_pos.y + 4 + pad),
-                                  IM_COL32(50, 255, 50, 240), distInfo);
-                }
-            }
-        }
-    }
-
-    // ========== 手动标记路线规划（原逻辑保留） ==========
-    if (g_show_nav_line && g_graph_ready && !g_pathGraph.nodes.empty() && !g_priority_items.empty()) {
-        // 辅助：找到离世界坐标最近的图节点
-        auto findNearestNode = [&](const Vector3A& worldPos) -> int {
-            int best = -1;
-            float bestDist = 1e30f;
-            for (int i = 0; i < (int)g_pathGraph.nodes.size(); i++) {
-                float dx = g_pathGraph.nodes[i].pos.X - worldPos.X;
-                float dy = g_pathGraph.nodes[i].pos.Y - worldPos.Y;
-                float dz = g_pathGraph.nodes[i].pos.Z - worldPos.Z;
-                float d = dx*dx + dy*dy + dz*dz;
-                if (d < bestDist) { bestDist = d; best = i; }
-            }
-            return best;
-        };
-
-        // 找到玩家的最近路径节点
-        int playerNode = findNearestNode(Z);
-        if (playerNode >= 0) {
-            // 为每个优先物品规划路线
-            for (const auto& item : data) {
-                if (!g_priority_items.count(item.obj)) continue;
-                Vector3A itemPos = getObjectCoordinates(item.objcoor, false);
-                if (!isValidCoordinate(itemPos)) continue;
-
-                int targetNode = findNearestNode(itemPos);
-                if (targetNode < 0 || targetNode == playerNode) continue;
-
-                // Dijkstra 最短路径
-                auto prevEdge = g_pathGraph.dijkstra(playerNode);
-                if (prevEdge[targetNode] < 0) continue; // 不可达
-
-                // 回溯构建路径节点序列
-                std::vector<int> nodeSeq;
-                for (int cur = targetNode; cur != playerNode; ) {
-                    nodeSeq.push_back(cur);
-                    int ei = prevEdge[cur];
-                    int prev = (g_pathGraph.edges[ei].from == cur)
-                              ? g_pathGraph.edges[ei].to
-                              : g_pathGraph.edges[ei].from;
-                    cur = prev;
-                }
-                nodeSeq.push_back(playerNode);
-                std::reverse(nodeSeq.begin(), nodeSeq.end());
-
-                // 在路径网络内绘制规划路线
-                float totalSegDist = 0.0f;
-                for (size_t i = 1; i < nodeSeq.size(); i++) {
-                    ImVec2 p1 = ToMap(g_pathGraph.nodes[nodeSeq[i-1]].pos);
-                    ImVec2 p2 = ToMap(g_pathGraph.nodes[nodeSeq[i]].pos);
-
-                    float dx = p2.x - p1.x, dy = p2.y - p1.y;
-                    float segLen = sqrtf(dx*dx + dy*dy);
-                    totalSegDist += segLen;
-
-                    // 橙色双线：外层粗半透明 + 内层细亮色
-                    Draw->AddLine(p1, p2, IM_COL32(255, 140, 0, 60), 8.0f);
-                    Draw->AddLine(p1, p2, IM_COL32(255, 165, 0, 220), 3.0f);
-
-                    // === 方向箭头指示（每段中点画一个箭头） ===
-                    float arrowScale = std::min(segLen * 0.15f, 12.0f);
-                    if (arrowScale > 4.0f) {
-                        ImVec2 mid((p1.x + p2.x) * 0.5f, (p1.y + p2.y) * 0.5f);
-                        float angle = atan2f(dy, dx);
-                        ImVec2 tip = ImVec2(mid.x + cosf(angle) * arrowScale,
-                                             mid.y + sinf(angle) * arrowScale);
-                        ImVec2 left = ImVec2(mid.x + cosf(angle + 2.5f) * arrowScale * 0.6f,
-                                              mid.y + sinf(angle + 2.5f) * arrowScale * 0.6f);
-                        ImVec2 right = ImVec2(mid.x + cosf(angle - 2.5f) * arrowScale * 0.6f,
-                                               mid.y + sinf(angle - 2.5f) * arrowScale * 0.6f);
-                        Draw->AddTriangleFilled(tip, left, right, IM_COL32(255, 200, 50, 200));
-                    }
-                }
-
-                // 计算总距离（世界单位转米）
-                float totalWorldDist = 0.0f;
-                for (size_t i = 1; i < nodeSeq.size(); i++) {
-                    float wx = g_pathGraph.nodes[nodeSeq[i]].pos.X - g_pathGraph.nodes[nodeSeq[i-1]].pos.X;
-                    float wy = g_pathGraph.nodes[nodeSeq[i]].pos.Y - g_pathGraph.nodes[nodeSeq[i-1]].pos.Y;
-                    totalWorldDist += sqrtf(wx*wx + wy*wy);
-                }
-                float totalMeters = totalWorldDist / 距离比例;
-                g_total_route_distance = totalMeters;
-
-                // 绘制目标物品到最近节点的"最后一米"连接线（虚线效果）
-                ImVec2 nodePos = ToMap(g_pathGraph.nodes[targetNode].pos);
-                ImVec2 itemScreen = ToMap(itemPos);
-                Draw->AddLine(nodePos, itemScreen, IM_COL32(255, 200, 50, 150), 2.0f);
-                // 物品位置高亮
-                Draw->AddCircle(itemScreen, 10.0f, IM_COL32(255, 215, 0, 255), 0, 2.0f);
-
-                // === 目标物品信息标注 ===
-                float itemWorldDist = sqrtf((itemPos.X - g_pathGraph.nodes[targetNode].pos.X) *
-                                              (itemPos.X - g_pathGraph.nodes[targetNode].pos.X) +
-                                              (itemPos.Y - g_pathGraph.nodes[targetNode].pos.Y) *
-                                              (itemPos.Y - g_pathGraph.nodes[targetNode].pos.Y)) / 距离比例;
-                char itemInfo[64];
-                const char* itemN = item.prop_name[0] ? item.prop_name : "";
-                if (itemN[0] == '[') itemN++;  // 去掉 '[' 前缀用于显示
-                snprintf(itemInfo, sizeof(itemInfo), "%s 总程:%.0fm 末段:%.0fm",
-                         strlen(itemN) > 0 ? itemN : "目标",
-                         totalMeters, itemWorldDist);
-                ImVec2 infoPos(itemScreen.x - 30, itemScreen.y - 28);
-                ImVec2 infoSize = ImGui::CalcTextSize(itemInfo);
-                Draw->AddRectFilled(ImVec2(infoPos.x - 4, infoPos.y - 3),
-                                    ImVec2(infoPos.x + infoSize.x + 4, infoPos.y + infoSize.y + 3),
-                                    IM_COL32(0, 0, 0, 170), 4.0f);
-                Draw->AddText(infoPos, IM_COL32(255, 230, 120, 255), itemInfo);
-            }
-
-            // ---- 手动路线终点强制为出口 ----
-            // 收集当前地图的出口，选取距离玩家最近的作为路线终点
-            Vector3A finalExitPos{};
-            int finalExitNode = -1;
-            float nearestExitDist2 = 1e30f;
-            if (g_current_map_index < (int)g_exits.size() &&
-                g_current_floor_index < (int)g_exits[g_current_map_index].size()) {
-                for (auto& e : g_exits[g_current_map_index][g_current_floor_index]) {
-                    int enode = findNearestNode(e);
-                    if (enode < 0) continue;
-                    float dx = e.X - Z.X, dy = e.Y - Z.Y;
-                    float d2 = dx*dx + dy*dy;
-                    if (d2 < nearestExitDist2) {
-                        nearestExitDist2 = d2;
-                        finalExitPos = e;
-                        finalExitNode = enode;
-                    }
-                }
-            }
-            if (finalExitNode >= 0 && finalExitNode != playerNode) {
-                // 从玩家到出口的Dijkstra路径
-                auto prevEdge = g_pathGraph.dijkstra(playerNode);
-                if (prevEdge[finalExitNode] >= 0) {
-                    std::vector<int> exitSeq;
-                    for (int c = finalExitNode; c != playerNode; ) {
-                        exitSeq.push_back(c);
-                        int ei = prevEdge[c];
-                        int prev = (g_pathGraph.edges[ei].from == c)
-                                  ? g_pathGraph.edges[ei].to
-                                  : g_pathGraph.edges[ei].from;
-                        c = prev;
-                    }
-                    exitSeq.push_back(playerNode);
-                    std::reverse(exitSeq.begin(), exitSeq.end());
-
-                    for (size_t i = 1; i < exitSeq.size(); i++) {
-                        ImVec2 p1 = ToMap(g_pathGraph.nodes[exitSeq[i-1]].pos);
-                        ImVec2 p2 = ToMap(g_pathGraph.nodes[exitSeq[i]].pos);
-                        // 出口段用金色，与普通物品段区分
-                        Draw->AddLine(p1, p2, IM_COL32(255, 200, 50, 60), 8.0f);
-                        Draw->AddLine(p1, p2, IM_COL32(255, 220, 80, 220), 3.0f);
-                    }
-                    // 出口标记
-                    ImVec2 exitScr = ToMap(finalExitPos);
-                    Draw->AddRectFilled(ImVec2(exitScr.x-8, exitScr.y-8),
-                                        ImVec2(exitScr.x+8, exitScr.y+8),
-                                        IM_COL32(255, 220, 50, 220), 3.0f);
-                    Draw->AddText(ImGui::GetFont(), 14.0f,
-                                  ImVec2(exitScr.x+12, exitScr.y-8),
-                                  IM_COL32(255, 220, 50, 220), "[目的地终点]");
-                }
-            }
-        }
-    }
-
-    // ========== 路线总距离（小地图左上角绿色文字） ==========
-    if (g_show_nav_line && g_graph_ready && (g_route_total_value > 0 || g_total_route_distance > 0.0f)) {
-        char distInfo[64];
-        snprintf(distInfo, sizeof(distInfo), "总距离: %.0fm  总价值: %d", g_total_route_distance, g_route_total_value);
-        ImVec2 ts = ImGui::CalcTextSize(distInfo);
-        float pad = 6.0f;
-        Draw->AddRectFilled(ImVec2(map_pos.x + 2, map_pos.y + 2),
-                            ImVec2(map_pos.x + ts.x + pad * 2 + 4, map_pos.y + ts.y + pad * 2 + 4),
-                            IM_COL32(0, 0, 0, 160), 6.0f);
-        Draw->AddText(ImGui::GetFont(), 18.0f,
-                      ImVec2(map_pos.x + 4 + pad, map_pos.y + 4 + pad),
-                      IM_COL32(50, 255, 50, 240), distInfo);
     }
 
     // ========== 已保存路径绘制（带开关控制 + 选中高亮） ==========
@@ -3628,20 +3124,6 @@ void Draw_MapOverlay(ImDrawList* Draw, const std::vector<DataStruct>& data) {
                       IM_COL32(255, 255, 0, 240), "预览 [黄色虚线]");
     }
 
-    // ========== 调试显示通行网络 ==========
-    if (g_show_graph_debug && g_graph_ready) {
-        for (auto& edge : g_pathGraph.edges) {
-            ImVec2 p1 = ToMap(g_pathGraph.nodes[edge.from].pos);
-            ImVec2 p2 = ToMap(g_pathGraph.nodes[edge.to].pos);
-            Draw->AddLine(p1, p2, IM_COL32(0, 255, 255, 100), 1.5f);
-        }
-        for (auto& node : g_pathGraph.nodes) {
-            ImVec2 p = ToMap(node.pos);
-            if (node.isExit) Draw->AddCircleFilled(p, 5.0f, IM_COL32(0, 255, 0, 150));
-            else Draw->AddCircleFilled(p, 3.0f, IM_COL32(255, 255, 255, 100));
-        }
-    }
-
     // ========== 正在绘制的路径 ==========
     if (!g_current_drawing_path.empty()) {
         for (size_t i = 0; i < g_current_drawing_path.size(); i++) {
@@ -3651,30 +3133,6 @@ void Draw_MapOverlay(ImDrawList* Draw, const std::vector<DataStruct>& data) {
                 ImVec2 prev_p = ToMap(g_current_drawing_path[i-1]);
                 Draw->AddLine(prev_p, p, IM_COL32(255, 255, 0, (int)(180 * g_route_opacity)), 4.0f);
             }
-        }
-    }
-
-    // ========== 途经点标记（独立可点击） ==========
-    if (g_has_via_point) {
-        ImVec2 vp = ToMap(g_via_point);
-        // 紫色菱形
-        ImVec2 d0(vp.x, vp.y - 10);
-        ImVec2 d1(vp.x + 10, vp.y);
-        ImVec2 d2(vp.x, vp.y + 10);
-        ImVec2 d3(vp.x - 10, vp.y);
-        Draw->AddTriangleFilled(d0, d1, d2, IM_COL32(200, 50, 255, 200));
-        Draw->AddTriangleFilled(d0, d2, d3, IM_COL32(200, 50, 255, 200));
-        Draw->AddTriangle(d0, d1, d2, IM_COL32(255, 255, 255, 180), 2.0f);
-        Draw->AddTriangle(d0, d2, d3, IM_COL32(255, 255, 255, 180), 2.0f);
-        Draw->AddText(ImGui::GetFont(), 12.0f, ImVec2(vp.x + 12, vp.y - 8),
-                      IM_COL32(200, 50, 255, 220), "途经点");
-
-        // 点击途经点可清除
-        ImVec2 ms = ImGui::GetMousePos();
-        float d = sqrtf((ms.x - vp.x)*(ms.x - vp.x) + (ms.y - vp.y)*(ms.y - vp.y));
-        if (d < 15.0f && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-            g_has_via_point = false;
-            AddNotification("途经点已清除", 2.0f, ImVec4(1.0f, 0.5f, 0.0f, 1.0f));
         }
     }
 
@@ -3750,7 +3208,6 @@ void Draw_MapOverlay(ImDrawList* Draw, const std::vector<DataStruct>& data) {
             if ((int)ei == g_drag_exit_idx && ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
                 g_drag_exit_idx = -1;
                 MarkExitsDirty();
-                g_pathGraph.dirty = true;
                 AddNotification("目的地位置已更新", 1.5f, ImVec4(0.3f, 1.0f, 0.3f, 1.0f));
             }
         }
@@ -3767,7 +3224,6 @@ void Draw_MapOverlay(ImDrawList* Draw, const std::vector<DataStruct>& data) {
                     g_exit_uvs[g_current_map_index][g_current_floor_index].begin() + g_del_exit_idx);
             }
             SaveExitsToJSON(g_current_map_index, g_current_floor_index);
-            g_pathGraph.dirty = true;
             AddNotification("目的地已删除", 2.0f, ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
             ImGui::CloseCurrentPopup();
         }
@@ -3860,29 +3316,7 @@ void Draw_MapOverlay(ImDrawList* Draw, const std::vector<DataStruct>& data) {
         ImGui::Text("选择操作:");
         ImGui::Separator();
 
-        if (ImGui::Button("设为途经点")) {
-            // 使用长按起始位置(g_press_pos)而非当前mouse位置
-            float u_click = (g_press_pos.x - map_pos.x) / map_w;
-            float v_click = (g_press_pos.y - map_pos.y) / map_h;
-            // 使用 CoordTransform 统一管道
-            const auto& act_cfg = GetActiveMapConfig();
-            float wx = CoordTransform::UVToX(u_click, act_cfg);
-            float wy = CoordTransform::UVToY(v_click, act_cfg);
-            g_via_point = Vector3A(wx, wy, Z.Z);
-            g_has_via_point = true;
-            AddNotification("途经点已设置", 2.0f, ImVec4(1.0f, 0.5f, 1.0f, 1.0f));
-            ImGui::CloseCurrentPopup();
-        }
-
-        if (g_has_via_point) {
-            if (ImGui::Button("清除途经点")) {
-                g_has_via_point = false;
-                AddNotification("途经点已清除", 2.0f, ImVec4(1.0f, 0.5f, 0.0f, 1.0f));
-                ImGui::CloseCurrentPopup();
-            }
-        }
-
-        // ★ 已删除目的地管理 - 只保留路径操作和途经点
+        // ★ 途经点功能已移除
 
         int nearby_path = -1;
         for (size_t i = 0; i < g_saved_paths.size(); i++) {
@@ -3905,7 +3339,6 @@ void Draw_MapOverlay(ImDrawList* Draw, const std::vector<DataStruct>& data) {
                 if (g_selected_path_index == nearby_path) g_selected_path_index = -1;
                 else if (g_selected_path_index > nearby_path) g_selected_path_index--;
                 MarkPathsDirty();
-                g_pathGraph.dirty = true;
                 AddNotification("路径已删除", 2.0f, ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
                 ImGui::CloseCurrentPopup();
             }
@@ -3920,7 +3353,6 @@ void Draw_MapOverlay(ImDrawList* Draw, const std::vector<DataStruct>& data) {
             g_saved_paths.erase(g_saved_paths.begin() + g_selected_path_index);
             g_selected_path_index = -1;
             SavePlayerPathsToJSON(g_current_map_index, g_current_floor_index);
-            g_pathGraph.dirty = true;
             AddNotification("路径已删除", 2.0f, ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
         }
         // 点击地图空白区域取消选中
@@ -7109,30 +6541,6 @@ void Layout_tick_UI(bool *main_thread_flag) {
                     ImGui::SliderFloat("标签大小", &g_map_label_scale, 0.2f, 0.8f, "%.2f");
 
                     ImGui::Separator();
-
-                    StyledSectionHeader("路线规划筛选", g_theme.text_title, g_density);
-                    ImGui::PushItemWidth(100);
-                    ImGui::InputInt("最低价值", &g_route_min_value, 100);
-                    if (g_route_min_value < 0) g_route_min_value = 0;
-                    ImGui::PopItemWidth();
-                    ImGui::SameLine();
-                    if (StyledButton("全部", ButtonVariant::Secondary, ImVec2(0,0), g_density)) g_route_min_value = 0;
-                    ImGui::SameLine();
-                    if (StyledButton("≥10000", ButtonVariant::Secondary, ImVec2(0,0), g_density)) g_route_min_value = 10000;
-                    ImGui::SameLine();
-                    if (StyledButton("≥50000", ButtonVariant::Secondary, ImVec2(0,0), g_density)) g_route_min_value = 50000;
-
-                    if (g_show_nav_line) {
-                        ImGui::Spacing();
-                        ImGui::TextColored(g_theme.info, "操作提示: 勾选「路线规划」后，在小地图上点击物品即可标记为导航目标");
-                        if (g_priority_items.empty()) {
-                            ImGui::TextColored(g_theme.text_muted, "当前未选中任何物品，请点击地图上的物品标记路线");
-                        } else {
-                            ImGui::TextColored(g_theme.success, "已标记 %zu 个导航目标，点击已标记物品可取消", g_priority_items.size());
-                        }
-                    }
-
-                    ImGui::Separator();
                 }
 
                 if (ImGui::CollapsingHeader("透明度设置")) {
@@ -7189,7 +6597,6 @@ void Layout_tick_UI(bool *main_thread_flag) {
                             g_current_drawing_path.clear();
                             g_path_edit_mode = 0;
                             MarkPathsDirty();
-                            g_pathGraph.dirty = true;
                             AddNotification("路径已清除", 2.0f, ImVec4(1.0f, 0.5f, 0.0f, 1.0f));
                             ImGui::CloseCurrentPopup();
                         }
@@ -7214,7 +6621,7 @@ void Layout_tick_UI(bool *main_thread_flag) {
                             while (g_saved_paths_by_map.size() <= g_current_map_index) g_saved_paths_by_map.push_back({});
                             while (g_saved_paths_by_map[g_current_map_index].size() <= g_current_floor_index) g_saved_paths_by_map[g_current_map_index].push_back({});
                             g_saved_paths_by_map[g_current_map_index][g_current_floor_index].push_back(g_pending_path);
-                            MarkPathsDirty(); g_pathGraph.dirty = true;
+                            MarkPathsDirty();
                             AddNotification("路径已保存 [OK]", 2.0f, ImVec4(0.3f, 1.0f, 0.3f, 1.0f));
                             g_pending_path.clear(); g_pending_save_confirm = false;
                             g_map_display_size = g_draw_map_size_bak; g_map_pos_x = g_draw_map_posx_bak; g_map_pos_y = g_draw_map_posy_bak;
@@ -7287,12 +6694,12 @@ void Layout_tick_UI(bool *main_thread_flag) {
                             if (deleteTarget < (int)g_path_colors.size()) g_path_colors.erase(g_path_colors.begin() + deleteTarget);
                             if (g_selected_path_index == deleteTarget) g_selected_path_index = -1;
                             else if (g_selected_path_index > deleteTarget) g_selected_path_index--;
-                            MarkPathsDirty(); g_pathGraph.dirty = true;
+                            MarkPathsDirty();
                             AddNotification("路径已删除", 2.0f, ImVec4(1.0f, 0.3f, 0.3f, 1.0f));
                         }
                         if (reverseTarget >= 0 && reverseTarget < (int)g_saved_paths.size()) {
                             std::reverse(g_saved_paths[reverseTarget].begin(), g_saved_paths[reverseTarget].end());
-                            MarkPathsDirty(); g_pathGraph.dirty = true;
+                            MarkPathsDirty();
                             AddNotification("路径已反向", 1.5f, ImVec4(0.5f, 0.8f, 1.0f, 1.0f));
                         }
                     }
@@ -7327,14 +6734,6 @@ void Layout_tick_UI(bool *main_thread_flag) {
                     if (g_show_saved_paths) {
                         ImGui::SliderFloat("路径透明度", &g_saved_path_opacity, 0.1f, 1.0f, "%.2f");
                     }
-                    ImGui::Separator();
-                    if (g_show_graph_debug) {
-                        ImGui::SameLine();
-                        if (StyledButton("强制重建网络", ButtonVariant::Secondary, ImVec2(0,0), g_density)) {
-                            g_pathGraph.dirty = true;
-                        }
-                    }
-
                     ImGui::Separator();
 
                     if (ImGui::CollapsingHeader("地图校准", ImGuiTreeNodeFlags_DefaultOpen)) {
@@ -7774,7 +7173,7 @@ void Layout_tick_UI(bool *main_thread_flag) {
                 
                 ImGui::TextColored(g_theme.info, "=== 渲染调试 ===");
                 ImGui::Checkbox("显示出口调试十字", &g_show_exit_debug);
-                ImGui::Checkbox("显示通行网络", &g_show_graph_debug);
+                // 显示通行网络已移除
                 if (g_show_exit_debug) {
                     ImGui::Text("出口点击位置: (%.0f, %.0f)", g_last_exit_screen_pos.x, g_last_exit_screen_pos.y);
                     ImGui::Text("出口渲染位置: (%.0f, %.0f)", g_last_exit_rendered_pos.x, g_last_exit_rendered_pos.y);
