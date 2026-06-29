@@ -4597,8 +4597,8 @@ void ProcessObjectWithFullDetails(ImDrawList *Draw, const DataStruct &item,
             ImVec2 mm = ImGui::GetMousePos();
             if (mm.x >= mp_d.x && mm.x <= me_d.x && mm.y >= mp_d.y && mm.y <= me_d.y &&
                 ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-                float u = (mm.x - mp_d.x) / map_w;
-                float v = (mm.y - mp_d.y) / map_h;
+                float u = (mm.x - mp_d.x) / mw_d;
+                float v = (mm.y - mp_d.y) / map_h_d;
                 const auto& act_cfg = GetActiveMapConfig();
                 g_dest_world_x = CoordTransform::UVToX(u, act_cfg);
                 g_dest_world_y = CoordTransform::UVToY(v, act_cfg);
