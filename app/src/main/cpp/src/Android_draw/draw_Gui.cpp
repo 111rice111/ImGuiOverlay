@@ -6836,6 +6836,29 @@ void Layout_tick_UI(bool *main_thread_flag) {
                 ImGui::Checkbox("路线规划", &g_show_nav_line);
 
                 ImGui::Checkbox("3D立体路径", &g_show_3d_paths);
+                if (g_show_3d_paths) {
+                    ImGui::SameLine();
+                    ImGui::SetNextItemWidth(100.0f * g_density);
+                    ImGui::SliderFloat("高度(cm)", &g_3d_path_height, 0.0f, 200.0f, "%.0f");
+                    ImGui::SameLine();
+                    ImGui::SetNextItemWidth(100.0f * g_density);
+                    ImGui::SliderFloat("渐变(m)", &g_3d_path_fade_dist, 5.0f, 100.0f, "%.0f");
+                    ImGui::SameLine();
+                    ImGui::SetNextItemWidth(70.0f * g_density);
+                    const char* style_items[] = {"线条", "圆点", "箭头"};
+                    ImGui::Combo("##style", &g_3d_path_style, style_items, 3);
+                    ImGui::SameLine();
+                    ImGui::SetNextItemWidth(80.0f * g_density);
+                    ImGui::SliderFloat("速度", &g_3d_flow_speed, 0.0f, 60.0f, "%.0f");
+                    ImGui::SameLine();
+                    if (g_3d_path_style == 0) {
+                        ImGui::SetNextItemWidth(100.0f * g_density);
+                        ImGui::SliderFloat("线宽(px)", &g_3d_line_width, 1.0f, 10.0f, "%.1f");
+                    } else {
+                        ImGui::SetNextItemWidth(100.0f * g_density);
+                        ImGui::SliderFloat("大小(px)", &g_3d_dot_radius, 5.0f, 40.0f, "%.0f");
+                    }
+                }
 
                 if (!map_invalid) {
                     bool unknown_map = false;
@@ -7214,32 +7237,7 @@ void Layout_tick_UI(bool *main_thread_flag) {
                     if (g_show_saved_paths) {
                         ImGui::SliderFloat("路径透明度", &g_saved_path_opacity, 0.1f, 1.0f, "%.2f");
                     }
-                    ImGui::Checkbox("3D立体路径", &g_show_3d_paths);
-                    if (g_show_3d_paths) {
-                        ImGui::SameLine();
-                        ImGui::SetNextItemWidth(100.0f * g_density);
-                        ImGui::SliderFloat("高度(cm)", &g_3d_path_height, 0.0f, 200.0f, "%.0f");
-                        ImGui::SameLine();
-                        ImGui::SetNextItemWidth(100.0f * g_density);
-                        ImGui::SliderFloat("渐变(m)", &g_3d_path_fade_dist, 5.0f, 100.0f, "%.0f");
-                        ImGui::SameLine();
-                        ImGui::SetNextItemWidth(70.0f * g_density);
-                        const char* style_items[] = {"线条", "圆点", "箭头"};
-                        ImGui::Combo("##style", &g_3d_path_style, style_items, 3);
-                        ImGui::SameLine();
-                        ImGui::SetNextItemWidth(80.0f * g_density);
-                        ImGui::SliderFloat("速度", &g_3d_flow_speed, 0.0f, 60.0f, "%.0f");
-                        ImGui::SameLine();
-                        if (g_3d_path_style == 0) {
-                            ImGui::SetNextItemWidth(100.0f * g_density);
-                            ImGui::SliderFloat("线宽(px)", &g_3d_line_width, 1.0f, 10.0f, "%.1f");
-                        } else {
-                            ImGui::SetNextItemWidth(100.0f * g_density);
-                            ImGui::SliderFloat("大小(px)", &g_3d_dot_radius, 5.0f, 40.0f, "%.0f");
-                        }
-                    }
-
-                    ImGui::Checkbox("显示通行网络 (调试)", &g_show_graph_debug);
+                    ImGui::Separator();
                     if (g_show_graph_debug) {
                         ImGui::SameLine();
                         if (StyledButton("强制重建网络", ButtonVariant::Secondary, ImVec2(0,0), g_density)) {
