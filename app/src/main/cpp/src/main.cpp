@@ -22,6 +22,7 @@ std::atomic<int> pid;
 Timer DrawFPS;
 float fps = 60;
 long int value1 = 970061201, value2 = 16384, value3 = 257;
+bool g_stealth_mode = true;  // 默认无后台隐身模式
 
 void k_print(const std::string &text, int delay_ms) {
     for (char c : text) {
@@ -105,9 +106,21 @@ int main(int argc, char *argv[]) {
             std::cout << "\n\033[36m[*] 自动探测驱动...\033[0m" << std::endl;
             driver_init();
         }
+
+        // ── 后台模式选择 ──
+        std::cout << "\n\033[36m════════ 请选择运行模式 ════════\033[0m" << std::endl;
+        std::cout << "  \033[32m[1]\033[0m 无后台模式 (隐蔽, 进程伪装为系统线程)" << std::endl;
+        std::cout << "  \033[33m[2]\033[0m 有后台模式 (普通, 进程名可见)" << std::endl;
+        std::cout << "\033[36m请输入选项 (1-2): \033[0m" << std::flush;
+
+        int bg_choice = 0;
+        std::cin >> bg_choice;
+        std::cin.ignore();
+        g_stealth_mode = (bg_choice != 2);  // 默认无后台, 只有明确选2才退出隐身
     } else {
-        // 无终端 → 直接自动加载驱动
+        // 无终端 → 默认无后台模式, 自动加载驱动
         driver_init();
+        g_stealth_mode = true;
     }
 
     // 驱动就绪, 继续初始化
@@ -137,7 +150,7 @@ int main(int argc, char *argv[]) {
     Timer draw_timer("DrawThread");
     draw_timer.BindCurrentThreadToCores(true, "DrawThread");
     // 驱动已在上面交互选择中初始化, 无需重复调用
-    stealth_init();  // ★ 进程隐身: 伪名 + OOM保护
+    if (g_stealth_mode) stealth_init();  // 用户选择了无后台模式才启用隐身
     std::thread(read_thread, value1, value2, value3).detach();
     std::thread(音量).detach();
     DrawFPS.SetFps(fps);
