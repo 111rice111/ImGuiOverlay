@@ -7785,6 +7785,104 @@ void Layout_tick_UI(bool *main_thread_flag) {
                     ImGui::Spacing();
                     ImGui::TextColored(g_theme.text_muted, "提示: ★匹配当前链 = 该链结果与当前链相同，可能是同一条或相关链");
                     ImGui::TextColored(g_theme.text_muted, "运行哈基米时找到数值匹配的链即正确链，非0值更有参考价值");
+                    
+                    // === 联合搜索: 用哈基米动作值定位玩家对象 ===
+                    ImGui::Spacing();
+                    ImGui::Separator();
+                    ImGui::TextColored(g_theme.info, "=== 联合搜索: 用哈基米动作值定位玩家对象 ===");
+                    
+                    static int joint_action_target = 918222;  // 默认哈基米上次的值
+                    ImGui::SetNextItemWidth(140 * g_density);
+                    ImGui::InputInt("哈基米动作值", &joint_action_target);
+                    
+                    int obj_list_idx = static_cast<int>(front_buffer_idx.load(std::memory_order_acquire));
+                    const auto& obj_list_data = data_buffers[obj_list_idx];
+                    int obj_count = static_cast<int>(obj_list_data.size());
+                    int match_count = 0;
+                    
+                    // 第一轮: 找出所有动作值匹配的对象
+                    struct ObjMatch { int idx; int action; uintptr_t addr; const char* cls; int faction; };
+                    ObjMatch matches[20];
+                    for (int oi = 0; oi < obj_count && match_count < 20; oi++) {
+                        const auto& item = obj_list_data[oi];
+                        if (item.阵营 != 1 && item.阵营 != 2) continue;
+                        if (item.action == joint_action_target) {
+                            matches[match_count].idx = oi;
+                            matches[match_count].action = item.action;
+                            matches[match_count].addr = item.obj;
+                            matches[match_count].cls = item.类名;
+                            matches[match_count].faction = item.阵营;
+                            match_count++;
+                        }
+                    }
+                    
+                    if (match_count == 0) {
+                        ImGui::TextColored(g_theme.danger, "未找到动作=%d的对象！", joint_action_target);
+                        ImGui::TextColored(g_theme.text_muted, "可能原因: 1)链不对  2)哈基米用不同方式读  3)对象未被扫描到");
+                    } else {
+                        ImGui::TextColored(g_theme.success, "找到 %d 个匹配对象:", match_count);
+                    }
+                    
+                    ImGui::BeginChild("JointSearchResults", ImVec2(0, 160 * g_density), true);
+                    for (int mi = 0; mi < match_count; mi++) {
+                        bool is_self = (matches[mi].addr == self_obj);
+                        ImVec4 clr = is_self ? g_theme.warning : g_theme.success;
+                        const char* tag = is_self ? "[★自身匹配]" : "[MATCH]";
+                        ImGui::TextColored(clr, "%s #%d: %s (阵营=%s) obj=0x%lX 类名=%s",
+                            tag, mi+1,
+                            is_self ? "=当前识别的自身" : "新的候选对象",
+                            matches[mi].faction == 1 ? "监管" : "求生",
+                            matches[mi].addr,
+                            matches[mi].cls);
+                        
+                        // 如果这不是当前自身，但动作匹配 → 这就是我们要找的真正玩家！
+                        if (!is_self && match_count == 1) {
+                            ImGui::SameLine();
+                            ImGui::TextColored(g_theme.info, " <-- 这才是真正的玩家对象!");
+                        }
+                    }
+                    if (match_count == 0) {
+                        ImGui::TextColored(g_theme.text_muted, "没有匹配项。试试下面的过滤模式。");
+                    }
+                    ImGui::EndChild();
+                    
+                    if (match_count == 1 && !(matches[0].addr == self_obj)) {
+                        ImGui::TextColored(g_theme.warning, "!!! GlobalMemory::自身 指向了错误的对象 !!!");
+                        ImGui::Text("  正确对象地址: 0x%lX  当前自身地址: 0x%lX", matches[0].addr, self_obj);
+                    }
+                    
+                    // === 全对象列表 (带过滤) ===
+                    ImGui::Spacing();
+                    ImGui::Separator();
+                    ImGui::TextColored(g_theme.info, "=== 全部已扫描对象 (过滤模式) ===");
+                    
+                    static int obj_filter_min = 0;
+                    ImGui::SetNextItemWidth(140 * g_density);
+                    ImGui::InputInt("最小动作值 (>0显示全部)", &obj_filter_min);
+                    
+                    int shown = 0, max_show = 50;
+                    ImGui::BeginChild("ObjActionList", ImVec2(0, 260 * g_density), true);
+                    for (int oi = 0; oi < obj_count && shown < max_show; oi++) {
+                        const auto& item = obj_list_data[oi];
+                        if (item.阵营 != 1 && item.阵营 != 2) continue;
+                        int act = item.action;
+                        if (obj_filter_min > 0 && act < obj_filter_min) continue;
+                        
+                        bool is_self = (item.obj == self_obj);
+                        bool is_match = (act == joint_action_target);
+                        ImVec4 clr = is_match ? g_theme.success : (is_self ? g_theme.warning : g_theme.text);
+                        const char* mark = is_match ? " [MATCH!]" : (is_self ? " [自身]" : "");
+                        
+                        ImGui::TextColored(clr, "[%s] %-20s act=%-8d obj=0x%lX%s",
+                            item.阵营 == 1 ? "监管" : "求生",
+                            item.类名,
+                            act,
+                            item.obj,
+                            mark);
+                        shown++;
+                    }
+                    ImGui::EndChild();
+                    ImGui::TextColored(g_theme.text_muted, "[MATCH!]=动作匹配哈基米 | [自身]=当前识别的自身 | 设置最小动作值过滤零值噪音");
                 }
             }
                 break;
