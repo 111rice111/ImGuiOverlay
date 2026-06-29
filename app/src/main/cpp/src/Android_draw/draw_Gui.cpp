@@ -118,6 +118,7 @@ static float g_label_opacity = 1.0f;
 static float g_self_opacity = 1.0f;
 static float g_route_opacity = 1.0f;
 static float g_saved_path_opacity = 0.6f;
+static float g_path_fade_dist = 3000.0f;         // 路径渐变距离(cm), 超过此距离完全透明
 
 static bool g_draw_path_mode = false;
 static std::vector<Vector3A> g_current_drawing_path;
@@ -929,6 +930,7 @@ static void LoadConfig() {
     getFloat("g_self_opacity", g_self_opacity);
     getFloat("g_route_opacity", g_route_opacity);
     getFloat("g_saved_path_opacity", g_saved_path_opacity);
+    getFloat("g_path_fade_dist", g_path_fade_dist);
     getBool("g_show_graph_debug", g_show_graph_debug);
     getBool("g_use_calib", g_use_calib);
     getBool("g_map_flip_x", g_map_flip_x);
@@ -1063,6 +1065,7 @@ static void SaveConfig() {
     file << "g_self_opacity=" << g_self_opacity << "\n";
     file << "g_route_opacity=" << g_route_opacity << "\n";
     file << "g_saved_path_opacity=" << g_saved_path_opacity << "\n";
+    file << "g_path_fade_dist=" << g_path_fade_dist << "\n";
     file << "g_show_graph_debug=" << g_show_graph_debug << "\n";
     file << "g_use_calib=" << g_use_calib << "\n";
     file << "g_map_flip_x=" << g_map_flip_x << "\n";
@@ -3550,17 +3553,24 @@ void Draw_MapOverlay(ImDrawList* Draw, const std::vector<DataStruct>& data) {
 
             bool isSelected = (pi == g_selected_path_index);
 
-            // 选中路径使用亮黄色 + 加粗，未选中使用标准蓝色
-            ImU32 color_outer = isSelected
-                ? IM_COL32(255, 255, 0, (int)(120 * g_saved_path_opacity))
-                : IM_COL32(0, 180, 255, (int)(60 * g_saved_path_opacity));
-            ImU32 color_inner = isSelected
-                ? IM_COL32(255, 255, 100, (int)(255 * g_saved_path_opacity))
-                : IM_COL32(0, 220, 255, (int)(200 * g_saved_path_opacity));
-            float outer_width = isSelected ? 18.0f : 12.0f;
-            float inner_width = isSelected ? 5.0f : 3.0f;
-
             for (size_t i = 1; i < path.size(); i++) {
+                // ★ 距离淡化: 段中点离玩家越远越透明
+                float pmx = (path[i-1].X + path[i].X) * 0.5f;
+                float pmy = (path[i-1].Y + path[i].Y) * 0.5f;
+                float dist = sqrtf((pmx - Z.X)*(pmx - Z.X) + (pmy - Z.Y)*(pmy - Z.Y));
+                float fade_t = std::clamp(dist / g_path_fade_dist, 0.0f, 1.0f);
+                float seg_opacity = g_saved_path_opacity * (1.0f - fade_t * fade_t);
+                if (seg_opacity < 0.02f) continue;
+
+                ImU32 color_outer = isSelected
+                    ? IM_COL32(255, 255, 0, (int)(120 * seg_opacity))
+                    : IM_COL32(0, 180, 255, (int)(60 * seg_opacity));
+                ImU32 color_inner = isSelected
+                    ? IM_COL32(255, 255, 100, (int)(255 * seg_opacity))
+                    : IM_COL32(0, 220, 255, (int)(200 * seg_opacity));
+                float outer_width = isSelected ? 18.0f : 12.0f;
+                float inner_width = isSelected ? 5.0f : 3.0f;
+
                 ImVec2 p1 = ToMap(path[i-1]);
                 ImVec2 p2 = ToMap(path[i]);
                 Draw->AddLine(p1, p2, color_outer, outer_width);
@@ -7086,7 +7096,7 @@ void Layout_tick_UI(bool *main_thread_flag) {
                             ImGui::Checkbox("##vis", &vis_tmp);
                             g_path_visible[pi] = (char)vis_tmp;
                             ImGui::PopID();
-                            ImGui::SameLine(0, 10.0f * g_density);
+                            ImGui::SameLine(0, 14.0f * g_density);
                             {
                                 const ImU32 palette[] = {
                                     IM_COL32(0,255,255,255), IM_COL32(255,100,255,255),
@@ -7161,6 +7171,7 @@ void Layout_tick_UI(bool *main_thread_flag) {
                     }
                     if (g_show_saved_paths) {
                         ImGui::SliderFloat("路径透明度", &g_saved_path_opacity, 0.1f, 1.0f, "%.2f");
+                        ImGui::SliderFloat("淡化距离(m)", &g_path_fade_dist, 500.0f, 10000.0f, "%.0f");
                     }
                     ImGui::Separator();
                     if (g_show_graph_debug) {
