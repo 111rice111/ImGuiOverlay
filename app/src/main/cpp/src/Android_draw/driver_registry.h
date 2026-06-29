@@ -1,10 +1,13 @@
 /*
- * driver_registry.h — 驱动注册中心 + 自动检测加载
+ * driver_registry.h — 驱动注册中心 + 交互式选择
  *
  * 新增驱动三步:
  *   Step 1: 创建类继承 IDriver, 实现所有纯虚方法
  *   Step 2: #include 对应的头文件
- *   Step 3: 在 driver_init() 里加一行 try_load(new XxxDriver())
+ *   Step 3: 在 probe_all_drivers() / driver_init_by_name() / driver_init() 中注册
+ *
+ * 交互流程:
+ *   probe_all_drivers() → 列出可用驱动 → 用户选择 → driver_init_by_name() 加载
  */
 
 #pragma once
@@ -13,6 +16,7 @@
 #include "driver_twt.h"
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -29,6 +33,34 @@ inline bool try_load(IDriver* d) {
     g_drv = d;
     printf("[Registry] %s 驱动就绪 (fd=%d)\n", d->name(), d->get_fd());
     return true;
+}
+
+// ── 探测已适配驱动 (不实际连接, 仅 probe) ──
+struct ProbeResult { std::string name; std::string desc; bool found; std::string device_path; };
+
+inline std::vector<ProbeResult> probe_all_drivers() {
+    std::vector<ProbeResult> result;
+    
+    {   RTDriver* d = new RTDriver();
+        const char* p = d->probe();
+        result.push_back({"RT", "RT 内核 (/dev/ 自动探测)", p != nullptr, p ? p : ""});
+        delete d;
+    }
+    {   TWTDriver* d = new TWTDriver();
+        const char* p = d->probe();
+        result.push_back({"TWT", "TWT 内核 (MY_CALL 探测)", p != nullptr, p ? p : ""});
+        delete d;
+    }
+    return result;
+}
+
+// ── 按名称加载指定驱动 ──
+inline bool driver_init_by_name(const char* name) {
+    if (g_drv) return true;  // 已加载
+    if (strcmp(name, "RT") == 0)  return try_load(new RTDriver());
+    if (strcmp(name, "TWT") == 0) return try_load(new TWTDriver());
+    printf("[Registry] 未知驱动: %s\n", name);
+    return false;
 }
 
 // ── 预检测: 列出编译时已适配的驱动 + 运行时状态 ──
