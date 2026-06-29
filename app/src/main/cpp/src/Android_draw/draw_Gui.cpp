@@ -7138,7 +7138,7 @@ void Layout_tick_UI(bool *main_thread_flag) {
                             ImGui::Checkbox("##vis", &vis_tmp);
                             g_path_visible[pi] = (char)vis_tmp;
                             ImGui::PopID();
-                            ImGui::SameLine(0, 6.0f * g_density);
+                            ImGui::SameLine(0, 10.0f * g_density);
                             {
                                 const ImU32 palette[] = {
                                     IM_COL32(0,255,255,255), IM_COL32(255,100,255,255),
