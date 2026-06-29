@@ -4556,25 +4556,40 @@ void ProcessObjectWithFullDetails(ImDrawList *Draw, const DataStruct &item,
         ImVec2 mp_d(g_map_pos_x, g_map_pos_y);
         ImVec2 me_d(mp_d.x + mw_d, mp_d.y + map_h_d);
 
-        // ── 选择目的地按钮（常驻右下角）──
-        ImVec2 btn_pos(me_d.x - 105, me_d.y + 5);
-        ImVec2 btn_sz(100, 22);
-        Draw->AddRectFilled(btn_pos, ImVec2(btn_pos.x + btn_sz.x, btn_pos.y + btn_sz.y), IM_COL32(30, 60, 120, 200), 4.0f);
-        Draw->AddRect(btn_pos, ImVec2(btn_pos.x + btn_sz.x, btn_pos.y + btn_sz.y), IM_COL32(100, 160, 255, 255), 4.0f, 0, 1.5f);
-        Draw->AddText(ImVec2(btn_pos.x + 8, btn_pos.y + 3), IM_COL32(255, 255, 255, 255), "选择目的地");
-
-        // 检测点击
-        if (!g_dest_select_mode && !g_path_edit_mode) {
+        // ── 目的地/清除按钮（常驻右下角）──
+        {
+            float btn_w = 56, btn_h = 24, gap = 6;
+            ImVec2 b1(me_d.x - (btn_w*2 + gap) - 4, me_d.y + 4);  // "目的地"
+            ImVec2 b2(b1.x + btn_w + gap, b1.y);                   // "清除"
+            // 目的地按钮
+            Draw->AddRectFilled(b1, ImVec2(b1.x+btn_w, b1.y+btn_h), IM_COL32(20, 80, 160, 210), 5.0f);
+            Draw->AddRect(b1, ImVec2(b1.x+btn_w, b1.y+btn_h), IM_COL32(80, 160, 255, 220), 5.0f, 0, 1.5f);
+            Draw->AddText(ImVec2(b1.x+10, b1.y+3), IM_COL32(255,255,255,255), "目的地");
+            // 清除按钮
+            Draw->AddRectFilled(b2, ImVec2(b2.x+btn_w, b2.y+btn_h), IM_COL32(100, 30, 30, 210), 5.0f);
+            Draw->AddRect(b2, ImVec2(b2.x+btn_w, b2.y+btn_h), IM_COL32(220, 80, 80, 220), 5.0f, 0, 1.5f);
+            Draw->AddText(ImVec2(b2.x+10, b2.y+3), IM_COL32(255,255,255,255), "清除");
+            // 点击检测
             ImVec2 ms = ImGui::GetMousePos();
-            if (ms.x >= btn_pos.x && ms.x <= btn_pos.x + btn_sz.x && ms.y >= btn_pos.y && ms.y <= btn_pos.y + btn_sz.y &&
-                ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-                g_dest_select_mode = true;
-                g_draw_map_size_bak = g_map_display_size;
-                g_draw_map_posx_bak = g_map_pos_x;
-                g_draw_map_posy_bak = g_map_pos_y;
-                g_map_display_size = std::min((float)displayInfo.height * 0.75f, 1600.0f);
-                g_map_pos_x = (displayInfo.width - g_map_display_size) * 0.5f;
-                g_map_pos_y = (displayInfo.height - g_map_display_size) * 0.5f;
+            if (!g_dest_select_mode && !g_path_edit_mode) {
+                // 目的地
+                if (ms.x >= b1.x && ms.x <= b1.x+btn_w && ms.y >= b1.y && ms.y <= b1.y+btn_h &&
+                    ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                    g_dest_select_mode = true;
+                    g_draw_map_size_bak = g_map_display_size;
+                    g_draw_map_posx_bak = g_map_pos_x; g_draw_map_posy_bak = g_map_pos_y;
+                    g_map_display_size = std::min((float)displayInfo.height * 0.75f, 1600.0f);
+                    g_map_pos_x = (displayInfo.width - g_map_display_size) * 0.5f;
+                    g_map_pos_y = (displayInfo.height - g_map_display_size) * 0.5f;
+                }
+                // 清除
+                if (ms.x >= b2.x && ms.x <= b2.x+btn_w && ms.y >= b2.y && ms.y <= b2.y+btn_h &&
+                    ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                    g_dest_world_x = g_dest_world_y = g_dest_world_z = 0;
+                    g_nav_render_path.clear();
+                    g_show_nav_line = false;
+                    AddNotification("目的地已清除", 1.5f, ImVec4(1.0f, 0.5f, 0.3f, 1.0f));
+                }
             }
         }
 
