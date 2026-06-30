@@ -17,8 +17,10 @@
 #include <sys/ioctl.h>
 #include <sys/stat.h>
 #include <linux/input.h>
+#include <linux/uinput.h>
 #include <cstring>
 #include <linux/input.h>
+#include <linux/uinput.h>
 #include <mutex>
 #include <sched.h>
 #include <string>
@@ -661,16 +663,36 @@ void AutoWoodCheck();
 static bool wood_enabled = false;
 static float wood_touch_x = 2450.0f;
 static float wood_touch_y = 1050.0f;
+static float wood_offset_x = 0.0f;
+static float wood_offset_y = 0.0f;
 static float wood_length = 18.0f;
 static float wood_width  = 12.0f;
+static bool  wood_show_params = false;
+static bool  show_wood_rect = false;
+static Vector3A g_wood_viz_pos;
+static float g_wood_viz_angle = 0;
+static bool  g_wood_viz_valid = false;
 static float wood_trigger_dist = 25.0f;
+static float wood_cooldown_dur = 1.0f;
+static bool  g_was_hunter_inside = false;
+static float g_wood_cooldown = 0.0f;
 static bool show_touch_point = false;
+static float g_last_touch_x = 0, g_last_touch_y = 0;
+static float g_last_touch_time = 0;
 static bool g_MimicModeEnabled = false;
 
 static int   g_touch_max_x = 23999;
 static int   g_touch_max_y = 33919;
 static char  g_touch_path[128] = {0};
 static bool  g_touch_ready = false;
+
+// 四点校准: 屏幕四角注入触摸, 用户输入指针位置坐标
+static int   g_calib_step = 0;
+static float g_calib_inj[4][2];
+static float g_calib_obs_buf[4][2];
+static bool  g_calib_done = true;  // 硬编码校准值
+static float g_calib_A=1.00334f,g_calib_B=0,g_calib_C=-1.67224f;
+static float g_calib_D=0,g_calib_E=-1,g_calib_F=2400;
 
 static ImColor g_BoxColor_Survivor = ImColor(50, 255, 50, 255);
 static ImColor g_BoxColor_Hunter   = ImColor(255, 50, 50, 255);
@@ -906,8 +928,15 @@ static void LoadConfig() {
     getFloat("wood_touch_x", wood_touch_x);
     getFloat("wood_touch_y", wood_touch_y);
     getFloat("wood_trigger_dist", wood_trigger_dist);
+    getFloat("wood_cooldown_dur", wood_cooldown_dur);
     getFloat("wood_length", wood_length);
     getFloat("wood_width", wood_width);
+    getBool("wood_show_params", wood_show_params);
+    getBool("show_wood_rect", show_wood_rect);
+    getFloat("wood_offset_x", wood_offset_x); getFloat("wood_offset_y", wood_offset_y);
+    getFloat("calib_A", g_calib_A); getFloat("calib_B", g_calib_B); getFloat("calib_C", g_calib_C);
+    getFloat("calib_D", g_calib_D); getFloat("calib_E", g_calib_E); getFloat("calib_F", g_calib_F);
+    getBool("calib_done", g_calib_done);
 
     // Tab 3: 模仿者
     getBool("show_mimic_overlay", show_mimic_overlay);
@@ -1039,6 +1068,17 @@ static void SaveConfig() {
     file << "wood_touch_x=" << wood_touch_x << "\n";
     file << "wood_touch_y=" << wood_touch_y << "\n";
     file << "wood_trigger_dist=" << wood_trigger_dist << "\n";
+    file << "wood_cooldown_dur=" << wood_cooldown_dur << "\n";
+    file << "wood_length=" << wood_length << "\n";
+    file << "wood_width=" << wood_width << "\n";
+    file << "wood_show_params=" << wood_show_params << "\n";
+    file << "show_wood_rect=" << show_wood_rect << "\n";
+    file << "wood_offset_x=" << wood_offset_x << "\n";
+    file << "wood_offset_y=" << wood_offset_y << "\n";
+    file << "calib_A=" << g_calib_A << "\n"; file << "calib_B=" << g_calib_B << "\n";
+    file << "calib_C=" << g_calib_C << "\n"; file << "calib_D=" << g_calib_D << "\n";
+    file << "calib_E=" << g_calib_E << "\n"; file << "calib_F=" << g_calib_F << "\n";
+    file << "calib_done=" << g_calib_done << "\n";
     file << "wood_length=" << wood_length << "\n";
     file << "wood_width=" << wood_width << "\n";
 
@@ -5386,10 +5426,29 @@ void SimulateClick(int x, int y) {
     if (!g_touch_ready) {
         if (!InitTouch()) return;
     }
-    int raw_x = (int)((float)x / displayInfo.width * g_touch_max_x);
-    int raw_y = (int)((float)y / displayInfo.height * g_touch_max_y);
+    // 应用校准
+    float sx = x + wood_offset_x;
+    float sy = y + wood_offset_y;
+    int tx, ty;
+    if (g_calib_done) {
+        float dx = sx - g_calib_C;
+        float dy = sy - g_calib_F;
+        float det = g_calib_A * g_calib_E - g_calib_B * g_calib_D;
+        if (fabsf(det) < 0.01f) { tx = (int)sx; ty = (int)sy; }
+        else {
+            tx = (int)(( g_calib_E * dx - g_calib_B * dy) / det);
+            ty = (int)((-g_calib_D * dx + g_calib_A * dy) / det);
+        }
+    } else {
+        tx = (int)sx; ty = (int)sy;
+    }
+    g_last_touch_x = sx;
+    g_last_touch_y = sy;
+    g_last_touch_time = ImGui::GetTime();
     int fd = open(g_touch_path, O_RDWR);
     if (fd < 0) return;
+    int raw_x = (int)((float)tx / displayInfo.width * g_touch_max_x);
+    int raw_y = (int)((float)ty / displayInfo.height * g_touch_max_y);
     struct input_event ev;
     memset(&ev, 0, sizeof(ev));
     ev.type = EV_ABS; ev.code = ABS_MT_SLOT; ev.value = 0; write(fd, &ev, sizeof(ev));
@@ -5454,11 +5513,17 @@ void AutoWoodCheck() {
             woodPos = pos;
         }
     }
-    if (!nearest_wood) return;
+    if (!nearest_wood) {
+        g_wood_viz_valid = false;
+        return;
+    }
 
     float dx = getFloat(nearest_wood->objcoor + 0xB8);
     float dy = getFloat(nearest_wood->objcoor + 0xC0);
     float angle = atan2f(dy, dx);
+    g_wood_viz_pos = woodPos;
+    g_wood_viz_angle = angle;
+    g_wood_viz_valid = true;
 
     float x[4], y[4];
     x[0] = woodPos.X + (wood_length / 2) * cosf(angle) + (wood_width / 2) * cosf(angle + M_PI_2);
@@ -5483,11 +5548,14 @@ void AutoWoodCheck() {
     float distToWood = sqrtf(FastMath::fastDistanceSquared(Z, woodPos)) / 11.886f;
 
     if (hunterInside && distToWood <= wood_trigger_dist) {
+        if (g_wood_cooldown > 0.0f) return;  // 冷却中
         int tx = wood_touch_x + (rand() % 100 - 50);
         int ty = wood_touch_y + (rand() % 100 - 50);
         SimulateClick(tx, ty);
+        g_wood_cooldown = wood_cooldown_dur;
         usleep(50000);
     }
+    g_was_hunter_inside = hunterInside;
 }
 
 // ===================== g_talent_view功能 =====================
@@ -5995,6 +6063,8 @@ void Layout_tick_UI(bool *main_thread_flag) {
     drawBegin();
 
     Draw_Main_Optimized(ImGui::GetForegroundDrawList());
+    // 木冷却递减
+    if (g_wood_cooldown > 0.0f) g_wood_cooldown -= 0.016f;  // ~60fps
     AutoWoodCheck();
 
     // 延迟写 JSON：脏标记倒计时刷写
@@ -6328,10 +6398,80 @@ void Layout_tick_UI(bool *main_thread_flag) {
                 ImGui::SliderFloat("X 坐标", &wood_touch_x, 0.0f, (float)displayInfo.width);
                 ImGui::SliderFloat("Y 坐标", &wood_touch_y, 0.0f, (float)displayInfo.height);
                 ImGui::Spacing();
+                ImGui::TextColored(g_theme.text_muted, "微调偏移 (粗定后精调)");
+                ImGui::InputFloat("X 偏移", &wood_offset_x, 1.0f, 10.0f, "%.0f");
+                ImGui::InputFloat("Y 偏移", &wood_offset_y, 1.0f, 10.0f, "%.0f");
+                if (StyledButton("归零偏移", ButtonVariant::Secondary, ImVec2(0,0), g_density)) {
+                    wood_offset_x = 0.0f; wood_offset_y = 0.0f;
+                }
+                ImGui::SameLine();
+                if (g_calib_done) ImGui::TextColored(g_theme.success, "已校准");
+                ImGui::Spacing();
+                // 四点校准
+                if (g_calib_step == 0) {
+                    if (StyledButton("四点校准(重置)", ButtonVariant::Primary, ImVec2(0,0), g_density)) {
+                        g_calib_done = false;
+                        float w = displayInfo.width, h = displayInfo.height;
+                        g_calib_inj[0][0]=500;     g_calib_inj[0][1]=500;
+                        g_calib_inj[1][0]=w-500;   g_calib_inj[1][1]=500;
+                        g_calib_inj[2][0]=w-500;   g_calib_inj[2][1]=h-500;
+                        g_calib_inj[3][0]=500;     g_calib_inj[3][1]=h-500;
+                        g_calib_step = 1;
+                        SimulateClick((int)g_calib_inj[0][0], (int)g_calib_inj[0][1]);
+                    }
+                    ImGui::TextColored(g_theme.text_muted, "开启指针位置→四点校准→输入观察坐标");
+                } else {
+                    int s = g_calib_step - 1;
+                    const char* cn[4]={"左上","右上","右下","左下"};
+                    ImGui::TextColored(g_theme.warning, "校准 %d/4: %s 注入(%.0f,%.0f)",
+                        g_calib_step, cn[s], g_calib_inj[s][0], g_calib_inj[s][1]);
+                    ImGui::TextColored(g_theme.text_muted, "查看指针位置坐标, 输入观察到的X/Y:");
+                    ImGui::InputFloat("观察X", &g_calib_obs_buf[s][0], 100.0f, 1000.0f, "%.0f");
+                    ImGui::InputFloat("观察Y", &g_calib_obs_buf[s][1], 100.0f, 1000.0f, "%.0f");
+                    if (StyledButton("重新注入此点", ButtonVariant::Secondary, ImVec2(0,0), g_density)) {
+                        SimulateClick((int)g_calib_inj[s][0], (int)g_calib_inj[s][1]);
+                    }
+                    ImGui::SameLine();
+                    if (StyledButton("确认此点", ButtonVariant::Secondary, ImVec2(0,0), g_density)) {
+                        if (g_calib_step >= 4) {
+                            float x1=g_calib_inj[0][0],y1=g_calib_inj[0][1];
+                            float X1=g_calib_obs_buf[0][0],Y1=g_calib_obs_buf[0][1];
+                            float x2=g_calib_inj[1][0],y2=g_calib_inj[1][1];
+                            float X2=g_calib_obs_buf[1][0],Y2=g_calib_obs_buf[1][1];
+                            float x3=g_calib_inj[2][0],y3=g_calib_inj[2][1];
+                            float X3=g_calib_obs_buf[2][0],Y3=g_calib_obs_buf[2][1];
+                            float det3 = x1*(y2-y3) + x2*(y3-y1) + x3*(y1-y2);
+                            if (fabsf(det3) > 0.01f) {
+                                g_calib_A = (X1*(y2-y3) + X2*(y3-y1) + X3*(y1-y2)) / det3;
+                                g_calib_B = (x1*(X2-X3) + x2*(X3-X1) + x3*(X1-X2)) / det3;
+                                g_calib_C = (x1*(y2*X3-y3*X2)+x2*(y3*X1-y1*X3)+x3*(y1*X2-y2*X1)) / det3;
+                                g_calib_D = (Y1*(y2-y3) + Y2*(y3-y1) + Y3*(y1-y2)) / det3;
+                                g_calib_E = (x1*(Y2-Y3) + x2*(Y3-Y1) + x3*(Y1-Y2)) / det3;
+                                g_calib_F = (x1*(y2*Y3-y3*Y2)+x2*(y3*Y1-y1*Y3)+x3*(y1*Y2-y2*Y1)) / det3;
+                                g_calib_done = true;
+                            }
+                            g_calib_step = 0;
+                        } else {
+                            g_calib_step++;
+                            SimulateClick((int)g_calib_inj[g_calib_step-1][0],
+                                          (int)g_calib_inj[g_calib_step-1][1]);
+                        }
+                    }
+                    ImGui::SameLine();
+                    if (StyledButton("取消", ButtonVariant::Danger, ImVec2(0,0), g_density)) {
+                        g_calib_step = 0;
+                    }
+                }
+                ImGui::Spacing();
                 ImGui::TextColored(g_theme.text_muted, "判定参数");
                 ImGui::SliderFloat("触发距离(米)", &wood_trigger_dist, 5.0f, 40.0f);
-                ImGui::SliderFloat("判定长度", &wood_length, 5.0f, 30.0f);
-                ImGui::SliderFloat("判定宽度", &wood_width, 3.0f, 20.0f);
+                ImGui::SliderFloat("冷却时间(秒)", &wood_cooldown_dur, 0.5f, 5.0f);
+                ImGui::Checkbox("显示判定尺寸", &wood_show_params);
+                if (wood_show_params) {
+                    ImGui::SliderFloat("判定长度", &wood_length, 5.0f, 30.0f);
+                    ImGui::SliderFloat("判定宽度", &wood_width, 3.0f, 20.0f);
+                }
+                ImGui::Checkbox("显示判定范围", &show_wood_rect);
                 ImGui::Spacing();
                 ImGui::TextColored(g_theme.warning, "提示：先测试触摸，确认交互键有反应后再开启");
                 break;
