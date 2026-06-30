@@ -143,6 +143,7 @@ static float g_draw_map_posy_bak = 200.0f;
 static bool  g_dest_select_mode = false;
 static float g_dest_world_x = 0, g_dest_world_y = 0, g_dest_world_z = 0;
 static std::vector<Vector3A> g_nav_render_path;
+static constexpr float kPathSnapThreshold = 80.0f;  // 端点吸附/连通判定距离（世界单位）
 
 // === 路径导入预览 ===
 static std::vector<std::vector<Vector3A>> g_import_preview_paths;   // 预览路径（像素→世界坐标转换后）
@@ -2967,13 +2968,29 @@ void Draw_MapOverlay(ImDrawList* Draw, const std::vector<DataStruct>& data) {
         g_last_paths_floor_idx = g_current_floor_index;
     }
 
-    // 绘制自身位置
+    // 绘制自身位置 + 手电筒光锥朝向
     if (Z.X != 0 || Z.Y != 0) {
         ImVec2 self = ToMap(Z);
-        Draw->AddCircleFilled(self, 7.0f, ImColor(0, 255, 0, (int)(200 * g_self_opacity)));
         float angle = atan2f(matrix[10], matrix[8]) + (cfg.isVerticalMap ? 1.57f : 3.14f);
-        ImVec2 arrow(self.x + cosf(angle) * 15, self.y + sinf(angle) * 15);
-        Draw->AddLine(self, arrow, IM_COL32(255, 255, 255, (int)(200 * g_self_opacity)), 2.0f);
+
+        // 扇形光锥（半透明黄色三角扇）
+        const float cone_radius = 28.0f;
+        const float half_fov = 28.0f * (3.14159265f / 180.0f); // ±28度, 总56度视野
+        const int segs = 7; // 弧线分段
+        ImVec2 pts[2 + segs]; // 顶点 + segs+1个弧点
+        pts[0] = self;
+        for (int i = 0; i <= segs; i++) {
+            float a = angle - half_fov + (2.0f * half_fov) * (float)i / (float)segs;
+            pts[1 + i] = ImVec2(self.x + cosf(a) * cone_radius, self.y + sinf(a) * cone_radius);
+        }
+        Draw->AddConvexPolyFilled(pts, segs + 2, IM_COL32(255, 220, 60, 70));
+        // 光锥边框
+        Draw->AddLine(self, pts[1], IM_COL32(255, 220, 60, 120), 1.5f);
+        Draw->AddLine(self, pts[segs + 1], IM_COL32(255, 220, 60, 120), 1.5f);
+        Draw->AddPolyline(&pts[1], segs + 1, IM_COL32(255, 220, 60, 120), ImDrawFlags_Closed, 1.5f);
+
+        // 玩家圆点（亮黄色实心）
+        Draw->AddCircleFilled(self, 6.5f, IM_COL32(255, 240, 40, 240));
     }
 
     auto GetOneCharLabel = [](const char* prop_name) -> const char* {
@@ -3132,6 +3149,17 @@ void Draw_MapOverlay(ImDrawList* Draw, const std::vector<DataStruct>& data) {
             if (i > 0) {
                 ImVec2 prev_p = ToMap(g_current_drawing_path[i-1]);
                 Draw->AddLine(prev_p, p, IM_COL32(255, 255, 0, (int)(180 * g_route_opacity)), 4.0f);
+            }
+        }
+        // ★ 吸附辅助：绘制模式下高亮附近可吸附端点（白色虚线环）
+        if (g_path_edit_mode == 1) {
+            for (auto& pth : g_saved_paths) {
+                if (pth.size() < 2) continue;
+                for (int ep : {0, (int)pth.size()-1}) {
+                    ImVec2 ep_s = ToMap(pth[ep]);
+                    Draw->AddCircle(ep_s, 22.0f, IM_COL32(255,255,255,100), 16, 2.0f);
+                    Draw->AddCircleFilled(ep_s, 4.0f, IM_COL32(255,255,255,160));
+                }
             }
         }
     }
@@ -3988,9 +4016,9 @@ void ProcessObjectWithFullDetails(ImDrawList *Draw, const DataStruct &item,
         ImVec2 mp_d(g_map_pos_x, g_map_pos_y);
         ImVec2 me_d(mp_d.x + mw_d, mp_d.y + map_h_d);
 
-        // ── 目的地/清除按钮（常驻右下角）──
-        {
-            float btn_w = 60, btn_h = 28, gap = 32;
+        // ── 目的地/清除按钮（仅在导航启用时显示）──
+        if (g_show_nav_line) {
+            float btn_w = 72, btn_h = 30, gap = 32;
             ImVec2 b1(me_d.x - (btn_w*2 + gap) - 4, me_d.y + 4);
             ImVec2 b2(b1.x + btn_w + gap, b1.y);
             // 目的地按钮
@@ -4052,28 +4080,117 @@ void ProcessObjectWithFullDetails(ImDrawList *Draw, const DataStruct &item,
                 g_dest_world_x = CoordTransform::UVToX(u, act_cfg);
                 g_dest_world_y = CoordTransform::UVToY(v, act_cfg);
                 g_dest_world_z = Z.Z;
-                // 计算导航路径
+                // ★ 跨路径连通图导航
                 g_nav_render_path.clear();
                 Vector3A playerPos(Z.X, Z.Y, Z.Z);
                 Vector3A destPos(g_dest_world_x, g_dest_world_y, g_dest_world_z);
-                int best_path = -1; size_t best_s=0, best_e=0; float best_d=1e9f;
-                for (size_t pi=0; pi<g_saved_paths.size(); pi++) {
-                    auto& pth=g_saved_paths[pi]; if(pth.size()<2)continue;
-                    size_t ps=0,pe=0; float pd=1e9f,ed=1e9f;
-                    for(size_t k=0;k<pth.size();k++){
-                        float d1=sqrtf((pth[k].X-playerPos.X)*(pth[k].X-playerPos.X)+(pth[k].Y-playerPos.Y)*(pth[k].Y-playerPos.Y));
-                        float d2=sqrtf((pth[k].X-destPos.X)*(pth[k].X-destPos.X)+(pth[k].Y-destPos.Y)*(pth[k].Y-destPos.Y));
-                        if(d1<pd){pd=d1;ps=k;} if(d2<ed){ed=d2;pe=k;}
+                do {  // multi-path Dijkstra scope
+                    struct RNode { int pi, ep; Vector3A p; }; // pi=-1玩家,-2目的地; ep=0起点,1终点
+                    std::vector<RNode> rn;
+                    rn.push_back({-1, 0, playerPos});
+                    rn.push_back({-2, 0, destPos});
+                    for (int pi = 0; pi < (int)g_saved_paths.size(); pi++) {
+                        if (g_saved_paths[pi].size() < 2) continue;
+                        rn.push_back({pi, 0, g_saved_paths[pi].front()});
+                        rn.push_back({pi, 1, g_saved_paths[pi].back()});
                     }
-                    if(pd+ed<best_d){best_d=pd+ed;best_path=(int)pi;best_s=ps;best_e=pe;}
-                }
-                // 只沿已保存路径绘制导航线，不画穿墙直线
-                if(best_path>=0){
-                    auto& pth=g_saved_paths[best_path];
-                    size_t a=std::min(best_s,best_e),b=std::max(best_s,best_e);
-                    for(size_t k=a;k<=b;k++)g_nav_render_path.push_back(pth[k]);
-                } else {
-                    AddNotification("附近无已绘制路径，请先画线", 2.5f, ImVec4(1.0f, 0.4f, 0.2f, 1.0f));
+                    int N = (int)rn.size();
+                    if (N <= 2) { AddNotification("无可用路径", 1.5f, ImVec4(1,0.4f,0.2f,1)); break; }
+
+                    // 构建邻接表
+                    std::vector<std::vector<std::pair<int,float>>> adj(N);
+                    auto addEdge = [&](int a, int b, float cost) { adj[a].push_back({b,cost}); adj[b].push_back({a,cost}); };
+
+                    // 同路径内部边
+                    for (int i = 2; i < N; i += 2) {
+                        int j = i + 1; auto& p = g_saved_paths[rn[i].pi];
+                        float len = 0;
+                        for (size_t k = 1; k < p.size(); k++) {
+                            float dx = p[k].X-p[k-1].X, dy = p[k].Y-p[k-1].Y;
+                            len += sqrtf(dx*dx+dy*dy);
+                        }
+                        addEdge(i, j, len);
+                    }
+
+                    // 跨路径端点连通（阈值内）
+                    for (int i = 2; i < N; i++) {
+                        for (int j = i + 2; j < N; j++) {
+                            if ((i ^ 1) == j) continue; // 同路径跳过
+                            float dx = rn[i].p.X - rn[j].p.X, dy = rn[i].p.Y - rn[j].p.Y;
+                            float d = sqrtf(dx*dx+dy*dy);
+                            if (d < kPathSnapThreshold) addEdge(i, j, d);
+                        }
+                    }
+
+                    // 玩家/目的地连接到附近端点
+                    for (int src = 0; src < 2; src++) {
+                        for (int j = 2; j < N; j++) {
+                            float dx = rn[src].p.X - rn[j].p.X, dy = rn[src].p.Y - rn[j].p.Y;
+                            float d = sqrtf(dx*dx+dy*dy);
+                            if (d < kPathSnapThreshold) addEdge(src, j, d);
+                        }
+                    }
+
+                    // Dijkstra
+                    std::vector<float> md(N, 1e9f);
+                    std::vector<int> prv(N, -1);
+                    using P = std::pair<float,int>;
+                    std::priority_queue<P, std::vector<P>, std::greater<P>> pq;
+                    md[0] = 0; pq.push({0,0});
+                    while (!pq.empty()) {
+                        auto [du, u] = pq.top(); pq.pop();
+                        if (du > md[u]) continue;
+                        if (u == 1) break;
+                        for (auto& [v, w] : adj[u]) {
+                            float nd = du + w;
+                            if (nd < md[v]) { md[v]=nd; prv[v]=u; pq.push({nd,v}); }
+                        }
+                    }
+
+                    if (prv[1] < 0) { AddNotification("目的地不可达(请画更多路径)", 2.5f, ImVec4(1,0.4f,0.2f,1)); break; }
+
+                    // 回溯节点序列
+                    std::vector<int> seq;
+                    for (int cur = 1; cur >= 0; cur = prv[cur]) seq.push_back(cur);
+                    std::reverse(seq.begin(), seq.end());
+
+                    // 展开为完整路径点
+                    for (size_t si = 0; si < seq.size(); si++) {
+                        int ni = seq[si];
+                        if (ni <= 1) continue; // 跳过玩家/目的地节点
+                        if (si + 1 < seq.size() && seq[si+1] == (ni ^ 1)) {
+                            // 同路径内移动：起点→终点 或 终点→起点
+                            auto& p = g_saved_paths[rn[ni].pi];
+                            int a = (rn[ni].ep == 0) ? 0 : (int)p.size()-1;
+                            int b = (rn[ni].ep == 0) ? (int)p.size()-1 : 0;
+                            int step = (a <= b) ? 1 : -1;
+                            for (int k = a; k != b + step; k += step)
+                                g_nav_render_path.push_back(p[k]);
+                            si++; // 跳过配对的终点节点
+                        } else {
+                            // 单端点/跨路径跳
+                            g_nav_render_path.push_back(rn[ni].p);
+                        }
+                    }
+                } while (0);
+                if (g_nav_render_path.empty()) {
+                    // 回退：单路径直连
+                    int best_path = -1; size_t best_s=0, best_e=0; float best_d=1e9f;
+                    for (size_t pi=0; pi<g_saved_paths.size(); pi++) {
+                        auto& pth=g_saved_paths[pi]; if(pth.size()<2)continue;
+                        size_t ps=0,pe=0; float pd=1e9f,ed=1e9f;
+                        for(size_t k=0;k<pth.size();k++){
+                            float d1=sqrtf((pth[k].X-playerPos.X)*(pth[k].X-playerPos.X)+(pth[k].Y-playerPos.Y)*(pth[k].Y-playerPos.Y));
+                            float d2=sqrtf((pth[k].X-destPos.X)*(pth[k].X-destPos.X)+(pth[k].Y-destPos.Y)*(pth[k].Y-destPos.Y));
+                            if(d1<pd){pd=d1;ps=k;} if(d2<ed){ed=d2;pe=k;}
+                        }
+                        if(pd+ed<best_d){best_d=pd+ed;best_path=(int)pi;best_s=ps;best_e=pe;}
+                    }
+                    if(best_path>=0){
+                        auto& pth=g_saved_paths[best_path];
+                        size_t a=std::min(best_s,best_e),b=std::max(best_s,best_e);
+                        for(size_t k=a;k<=b;k++)g_nav_render_path.push_back(pth[k]);
+                    }
                 }
                 g_show_nav_line = true;
                 g_map_display_size = g_draw_map_size_bak;
@@ -6268,10 +6385,26 @@ void Layout_tick_UI(bool *main_thread_flag) {
             case 4:  // 摸金模式
             {
                 StyledSectionHeader("摸金模式", g_theme.text_title, g_density);
+                // ★ 摸金模式 — 一键全开/全关两个模块所有选项
                 if (ImGui::Checkbox("摸金模式", &MjSubsystem::draw_props)) {
                     if (MjSubsystem::draw_props) {
-                        disable_skip_filter = true;
-                        inform_ghost = true;
+                        MjSubsystem::show_monsters = true;  MjSubsystem::show_big_chest = true;
+                        MjSubsystem::show_small_chest = true; MjSubsystem::show_traps = true;
+                        MjSubsystem::show_interactables = true; MjSubsystem::show_high_value = true;
+                        MjSubsystem::show_low_value = true; MjSubsystem::show_distance = true;
+                        disable_skip_filter = true; inform_ghost = true;
+                        g_map_enabled = true; g_map_auto_detect = true;
+                        g_show_nav_line = true; g_show_3d_paths = true;
+                        g_show_saved_paths = true; g_use_calib = true;
+                    } else {
+                        MjSubsystem::show_monsters = false; MjSubsystem::show_big_chest = false;
+                        MjSubsystem::show_small_chest = false; MjSubsystem::show_traps = false;
+                        MjSubsystem::show_interactables = false; MjSubsystem::show_high_value = false;
+                        MjSubsystem::show_low_value = false; MjSubsystem::show_distance = false;
+                        disable_skip_filter = false; inform_ghost = false;
+                        g_map_enabled = false; g_map_auto_detect = false;
+                        g_show_nav_line = false; g_show_3d_paths = false;
+                        g_show_saved_paths = false; g_use_calib = false;
                     }
                 }
                 ImGui::SameLine();
@@ -6618,6 +6751,24 @@ void Layout_tick_UI(bool *main_thread_flag) {
                         ImGui::Separator();
                         ImGui::TextColored(g_theme.warning, "路径绘制完成 (%d点), 请确认:  %.0f秒后自动丢弃", (int)g_pending_path.size(), std::max(0.0f, g_pending_save_timeout));
                         if (StyledButton("保存路径", ButtonVariant::Primary, ImVec2(0,0), g_density)) {
+                            // ★ 端点自动吸附：首尾点贴近已有路径端点时自动对齐
+                            if (g_pending_path.size() >= 2) {
+                                auto snapPoint = [&](Vector3A& pt) {
+                                    float best = kPathSnapThreshold;
+                                    Vector3A bestPos = pt;
+                                    for (auto& p : g_saved_paths) {
+                                        if (p.size() < 2) continue;
+                                        for (int ep : {0, (int)p.size()-1}) {
+                                            float dx = pt.X-p[ep].X, dy = pt.Y-p[ep].Y;
+                                            float d = sqrtf(dx*dx+dy*dy);
+                                            if (d < best) { best = d; bestPos = p[ep]; }
+                                        }
+                                    }
+                                    pt = bestPos;
+                                };
+                                snapPoint(g_pending_path.front());
+                                snapPoint(g_pending_path.back());
+                            }
                             g_saved_paths.push_back(g_pending_path); g_path_visible.push_back(true); g_path_colors.push_back(0);
                             while (g_saved_paths_by_map.size() <= g_current_map_index) g_saved_paths_by_map.push_back({});
                             while (g_saved_paths_by_map[g_current_map_index].size() <= g_current_floor_index) g_saved_paths_by_map[g_current_map_index].push_back({});
@@ -6669,7 +6820,7 @@ void Layout_tick_UI(bool *main_thread_flag) {
                                 };
                                 ImU32 cur = (pi < g_path_colors.size() && g_path_colors[pi] != 0) ? g_path_colors[pi] : palette[pi % 8];
                                 ImGui::PushID((int)pi + 20000);
-                                if (ImGui::ColorButton("##clr", ImVec4(((cur>>0)&0xFF)/255.0f, ((cur>>8)&0xFF)/255.0f, ((cur>>16)&0xFF)/255.0f, 1.0f), ImGuiColorEditFlags_NoTooltip | ImGuiColorEditFlags_NoDragDrop, ImVec2(34, 24))) {
+                                if (ImGui::ColorButton("##clr", ImVec4(((cur>>0)&0xFF)/255.0f, ((cur>>8)&0xFF)/255.0f, ((cur>>16)&0xFF)/255.0f, 1.0f), ImGuiColorEditFlags_NoTooltip | ImGuiColorEditFlags_NoDragDrop, ImVec2(44, 32))) {
                                     int ci = 0;
                                     for (int pidx = 0; pidx < 8; pidx++) if (palette[pidx] == cur) { ci = pidx; break; }
                                     if (g_path_colors.size() <= pi) g_path_colors.resize(pi+1, 0);
