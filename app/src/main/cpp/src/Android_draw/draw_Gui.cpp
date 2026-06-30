@@ -5211,6 +5211,7 @@ void read_thread(long int 状态数值, long int PD2, long int PD3) {
                 if (std::strstr(cls, "player") || std::strstr(cls, "boss") ||
                     状态数值 == 450.0f || std::strstr(cls, "scene") ||
                     std::strstr(cls, "prop") || std::strstr(cls, "mirror") || Debugging ||
+                    is_woodplane ||
                     disable_skip_filter ||
                     MjSubsystem::IsMjSpecialClass(cls) ||
                     MjSubsystem::IsMjPropClass(cls) || std::strstr(cls, "monster")) {
@@ -5261,6 +5262,9 @@ void read_thread(long int 状态数值, long int PD2, long int PD3) {
                         std::strcpy(item.str, getplayer(cls));
                         item.阵营 = 2;
                         item.sub_type = ObjSubClass::Player;
+                    } else if (is_woodplane) {
+                        item.阵营 = 3;
+                        item.sub_type = ObjSubClass::Pallet;
                     } else if (std::strstr(cls, "scene") && !std::strstr(cls, "prop") && !std::strstr(cls, "rd") && !MjSubsystem::IsMjSpecialClass(cls) && !std::strstr(cls, "monster")) {
                         std::strcpy(item.str, getscene(cls));
                         item.阵营 = 3;
@@ -5479,7 +5483,8 @@ void AutoWoodCheck() {
             break;
         }
     }
-    if (!self_is_survivor) return;
+    // 跳过 self_is_survivor 检查: GlobalMemory::自身 可能指向错误对象
+    // if (!self_is_survivor) return;
     if (GlobalMemory::自身 == 0) return;
 
     float minHunterDist = 9999.0f;
@@ -5513,14 +5518,12 @@ void AutoWoodCheck() {
             woodPos = pos;
         }
     }
-    if (!nearest_wood) {
-        g_wood_viz_valid = false;
-        return;
-    }
+    if (!nearest_wood) return;
 
     float dx = getFloat(nearest_wood->objcoor + 0xB8);
     float dy = getFloat(nearest_wood->objcoor + 0xC0);
     float angle = atan2f(dy, dx);
+
     g_wood_viz_pos = woodPos;
     g_wood_viz_angle = angle;
     g_wood_viz_valid = true;
@@ -5548,14 +5551,11 @@ void AutoWoodCheck() {
     float distToWood = sqrtf(FastMath::fastDistanceSquared(Z, woodPos)) / 11.886f;
 
     if (hunterInside && distToWood <= wood_trigger_dist) {
-        if (g_wood_cooldown > 0.0f) return;  // 冷却中
         int tx = wood_touch_x + (rand() % 100 - 50);
         int ty = wood_touch_y + (rand() % 100 - 50);
         SimulateClick(tx, ty);
-        g_wood_cooldown = wood_cooldown_dur;
         usleep(50000);
     }
-    g_was_hunter_inside = hunterInside;
 }
 
 // ===================== g_talent_view功能 =====================
@@ -6063,9 +6063,58 @@ void Layout_tick_UI(bool *main_thread_flag) {
     drawBegin();
 
     Draw_Main_Optimized(ImGui::GetForegroundDrawList());
-    // 木冷却递减
-    if (g_wood_cooldown > 0.0f) g_wood_cooldown -= 0.016f;  // ~60fps
     AutoWoodCheck();
+
+    // 诊断: 显示板子/监管者检测状态
+    {
+        static int dbg_hunter_cnt = 0, dbg_wood_cnt = 0;
+        const auto& cd = data_buffers[front_buffer_idx.load(std::memory_order_acquire)];
+        dbg_hunter_cnt = 0; dbg_wood_cnt = 0;
+        for (const auto& it : cd) {
+            if (it.阵营 == 1 && !it.is_ghost) dbg_hunter_cnt++;
+            if (it.sub_type == ObjSubClass::Pallet) dbg_wood_cnt++;
+        }
+        ImGui::SetNextWindowBgAlpha(0.5f);
+        ImGui::Begin("木诊断", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoInputs);
+        ImGui::Text("监管者:%d 板子:%d 判区:%s 冷却:%.1f", dbg_hunter_cnt, dbg_wood_cnt,
+            g_wood_viz_valid ? "OK" : "无", g_wood_cooldown);
+        ImGui::End();
+    }
+
+    // 判定范围可视化 — 钻石切面风格
+    if (show_wood_rect && g_wood_viz_valid && wood_enabled) {
+        float ca = cosf(g_wood_viz_angle), sa = sinf(g_wood_viz_angle);
+        float hw = wood_width * 0.5f, hl = wood_length * 0.5f;
+        Vector3A wc[4] = {
+            {g_wood_viz_pos.X + hl*ca + hw*(-sa), g_wood_viz_pos.Y + hl*sa + hw*ca, g_wood_viz_pos.Z},
+            {g_wood_viz_pos.X + hl*ca - hw*(-sa), g_wood_viz_pos.Y + hl*sa - hw*ca, g_wood_viz_pos.Z},
+            {g_wood_viz_pos.X - hl*ca - hw*(-sa), g_wood_viz_pos.Y - hl*sa - hw*ca, g_wood_viz_pos.Z},
+            {g_wood_viz_pos.X - hl*ca + hw*(-sa), g_wood_viz_pos.Y - hl*sa + hw*ca, g_wood_viz_pos.Z}
+        };
+        ImVec2 sc[4]; int valid = 0;
+        for (int k = 0; k < 4; k++) {
+            float sx, sy, sw;
+            if (optimizedWorldToScreen(wc[k], matrix, px, py, sx, sy, sw)) { sc[k] = ImVec2(sx, sy); valid++; }
+        }
+        if (valid >= 3) {
+            ImDrawList* fg = ImGui::GetForegroundDrawList();
+            // 内填: 极淡银白
+            fg->AddQuadFilled(sc[0], sc[1], sc[2], sc[3], IM_COL32(255,255,255,8));
+            // 三层银白光晕 (1.02x / 1.04x / 1.07x)
+            ImVec2 ctr = {(sc[0].x+sc[1].x+sc[2].x+sc[3].x)*0.25f, (sc[0].y+sc[1].y+sc[2].y+sc[3].y)*0.25f};
+            float glow_r[3] = {1.02f, 1.04f, 1.07f};
+            int   glow_a[3] = {8, 5, 3};
+            for (int g = 0; g < 3; g++) {
+                ImVec2 gl[4];
+                for (int k = 0; k < 4; k++) { gl[k].x = ctr.x + (sc[k].x - ctr.x)*glow_r[g]; gl[k].y = ctr.y + (sc[k].y - ctr.y)*glow_r[g]; }
+                fg->AddQuadFilled(gl[0], gl[1], gl[2], gl[3], IM_COL32(224, 224, 232, glow_a[g]));
+            }
+            // 边框: 银白 1.5px
+            fg->AddQuad(sc[0], sc[1], sc[2], sc[3], IM_COL32(232, 232, 238, 100), 1.5f);
+            // 四角亮点
+            for (int k = 0; k < 4; k++) fg->AddCircleFilled(sc[k], 2.5f, IM_COL32(232, 232, 238, 102));
+        }
+    }
 
     // 延迟写 JSON：脏标记倒计时刷写
     if (g_dirty_flush_counter > 0) {
