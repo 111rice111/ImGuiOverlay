@@ -6761,8 +6761,9 @@ void Layout_tick_UI(bool *main_thread_flag) {
                     }
                 }
 
-                // ★ 手动选择地图（始终可见）
+                // ★ 手动选择地图 + 楼层（始终可见）
                 {
+                    // ── 地图下拉 ──
                     std::vector<const char*> manual_names;
                     std::vector<int> manual_indices;
                     for (int i = 0; i < (int)g_all_maps.size(); i++) {
@@ -6773,7 +6774,7 @@ void Layout_tick_UI(bool *main_thread_flag) {
                     }
                     if (!manual_names.empty()) {
                         ImGui::SameLine();
-                        ImGui::SetNextItemWidth(140);
+                        ImGui::SetNextItemWidth(130);
                         int combo_idx = 0;
                         for (int i = 0; i < (int)manual_indices.size(); i++) {
                             if (manual_indices[i] == g_current_map_index) { combo_idx = i; break; }
@@ -6787,7 +6788,41 @@ void Layout_tick_UI(bool *main_thread_flag) {
                                 g_detect_debounce_frames = 0; g_detect_best_fp_id = -1; g_locked_stable_frames = 0;
                                 g_map_auto_detect = false;
                                 LoadMapTexture(new_idx, g_current_floor_index);
-                                AddNotification("已切换到手动地图", 2.0f, ImVec4(0.3f,1.0f,0.3f,1.0f));
+                                AddNotification("已切换地图", 1.5f, ImVec4(0.3f,1.0f,0.3f,1.0f));
+                            }
+                        }
+
+                        // ── 楼层下拉（仅当前地图有 ≥2 层时显示）──
+                        if (g_current_map_index >= 0 && g_current_map_index < (int)g_all_maps.size()) {
+                            int nFloors = (int)g_all_maps[g_current_map_index].size();
+                            if (nFloors >= 2) {
+                                ImGui::SameLine();
+                                ImGui::SetNextItemWidth(70);
+                                int curF = g_current_floor_index;
+                                if (curF < 0) curF = 0;
+                                if (curF >= nFloors) curF = nFloors - 1;
+                                // 构建楼层名列表
+                                std::vector<const char*> floor_names;
+                                std::vector<int> floor_vals;
+                                static std::list<std::string> floor_name_buf;
+                                for (int f = 0; f < nFloors; f++) {
+                                    floor_name_buf.push_back(std::to_string(f + 1) + "楼");
+                                    floor_names.push_back(floor_name_buf.back().c_str());
+                                    floor_vals.push_back(f);
+                                }
+                                int fl_combo = 0;
+                                for (int f = 0; f < nFloors; f++) {
+                                    if (f == curF) { fl_combo = f; break; }
+                                }
+                                if (ImGui::Combo("楼层", &fl_combo, floor_names.data(), nFloors)) {
+                                    g_current_floor_index = SafeClampFloorIdx(g_current_map_index, fl_combo);
+                                    g_detect_phase = MapDetectPhase::LOCKED;
+                                    g_map_auto_detect = false;
+                                    LoadMapTexture(g_current_map_index, g_current_floor_index);
+                                    AddNotification("已切换楼层", 1.5f, ImVec4(0.3f,1.0f,0.3f,1.0f));
+                                }
+                                // 清理临时字符串（每帧重建但没问题）
+                                floor_name_buf.clear();
                             }
                         }
                     }
