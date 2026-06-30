@@ -454,6 +454,7 @@ bool g_map_enabled = false;
 float g_map_display_size = 800.0f;
 
 static bool  g_use_calib = true;
+static bool  g_show_map_status = true;       // 地图识别状态浮窗开关
 static std::string g_save_notification;
 static float g_notification_timer = 0.0f;
 
@@ -675,6 +676,7 @@ static float wood_cooldown_dur = 1.0f;
 static bool  g_was_hunter_inside = false;
 static float g_wood_cooldown = 0.0f;
 static bool show_touch_point = false;
+static bool g_show_wood_diag = false;       // 木诊断浮窗开关
 static float g_last_touch_x = 0, g_last_touch_y = 0;
 static float g_last_touch_time = 0;
 static bool g_MimicModeEnabled = false;
@@ -922,6 +924,7 @@ static void LoadConfig() {
 
     // Tab 2: 自动盖板
     getBool("wood_enabled", wood_enabled);
+    getBool("show_wood_diag", g_show_wood_diag);
     getBool("show_touch_point", show_touch_point);
     getFloat("wood_touch_x", wood_touch_x);
     getFloat("wood_touch_y", wood_touch_y);
@@ -949,6 +952,7 @@ static void LoadConfig() {
     getFloat("g_saved_path_opacity", g_saved_path_opacity);
     getFloat("g_path_fade_dist", g_path_fade_dist);
     getBool("g_use_calib", g_use_calib);
+    getBool("g_show_map_status", g_show_map_status);
     getBool("g_map_flip_x", g_map_flip_x);
     getBool("g_map_flip_y", g_map_flip_y);
 
@@ -1062,6 +1066,7 @@ static void SaveConfig() {
 
     // Tab 2: 自动盖板
     file << "wood_enabled=" << wood_enabled << "\n";
+    file << "show_wood_diag=" << g_show_wood_diag << "\n";
     file << "show_touch_point=" << show_touch_point << "\n";
     file << "wood_touch_x=" << wood_touch_x << "\n";
     file << "wood_touch_y=" << wood_touch_y << "\n";
@@ -1093,6 +1098,7 @@ static void SaveConfig() {
     file << "g_saved_path_opacity=" << g_saved_path_opacity << "\n";
     file << "g_path_fade_dist=" << g_path_fade_dist << "\n";
     file << "g_use_calib=" << g_use_calib << "\n";
+    file << "g_show_map_status=" << g_show_map_status << "\n";
     file << "g_map_flip_x=" << g_map_flip_x << "\n";
     file << "g_map_flip_y=" << g_map_flip_y << "\n";
 
@@ -4858,8 +4864,7 @@ void Draw_Main_Optimized(ImDrawList *Draw) {
     }
 
     // ========== 地图识别状态 & 新地图提示 ==========
-    // 在左上角显示识别状态
-    {
+    if (g_show_map_status) {
         ImVec2 st_pos(20, displayInfo.height * 0.12f);
         ImU32 st_col = IM_COL32(255, 255, 255, 220);
         const char* phase_str = "?";
@@ -5499,6 +5504,21 @@ void SimulateClick(int x, int y) {
 void AutoWoodCheck() {
     if (!wood_enabled) return;
     const auto& current_data = data_buffers[front_buffer_idx.load(std::memory_order_acquire)];
+
+    // ★ 监管者自动关闭：玩家坐标与任意阵营1实体距离<3米则关闭盖板
+    if (Z.X != 0 || Z.Y != 0) {
+        for (const auto& item : current_data) {
+            if (item.阵营 != 1 || item.is_ghost) continue;
+            Vector3A hp = getObjectCoordinates(item.objcoor, false);
+            if (!isValidCoordinate(hp)) continue;
+            float dx = hp.X - Z.X, dy = hp.Y - Z.Y;
+            if (sqrtf(dx*dx + dy*dy) < 300.0f) {  // <3米(300cm世界单位)
+                wood_enabled = false;
+                return;
+            }
+        }
+    }
+
     bool self_is_survivor = false;
     for (const auto& item : current_data) {
         if (item.obj == GlobalMemory::自身) {
@@ -6093,7 +6113,7 @@ void Layout_tick_UI(bool *main_thread_flag) {
     AutoWoodCheck();
 
     // 诊断: 显示板子/监管者检测状态
-    {
+    if (g_show_wood_diag) {
         static int dbg_hunter_cnt = 0, dbg_wood_cnt = 0;
         const auto& cd = data_buffers[front_buffer_idx.load(std::memory_order_acquire)];
         dbg_hunter_cnt = 0; dbg_wood_cnt = 0;
@@ -6469,6 +6489,7 @@ void Layout_tick_UI(bool *main_thread_flag) {
                 ImGui::Checkbox("启用自动盖板", &wood_enabled); ImGui::SameLine();
                 if (StyledButton("测试触摸", ButtonVariant::Secondary, ImVec2(0,0), g_density)) { SimulateClick(wood_touch_x, wood_touch_y); }
                 ImGui::SameLine(); ImGui::Checkbox("显示触摸点", &show_touch_point);
+                ImGui::SameLine(); ImGui::Checkbox("显示诊断", &g_show_wood_diag);
                 ImGui::Spacing();
                 ImGui::TextColored(g_theme.text_muted, "交互键坐标");
                 ImGui::SliderFloat("X 坐标", &wood_touch_x, 0.0f, (float)displayInfo.width);
@@ -6712,6 +6733,8 @@ void Layout_tick_UI(bool *main_thread_flag) {
                 ImGui::Checkbox("自动识别", &g_map_auto_detect);
                 ImGui::SameLine();
                 ImGui::Checkbox("路线规划", &g_show_nav_line);
+                ImGui::SameLine();
+                ImGui::Checkbox("显示识别状态", &g_show_map_status);
 
                 ImGui::Checkbox("3D立体路径", &g_show_3d_paths);
                 if (g_show_3d_paths) {
@@ -7105,7 +7128,20 @@ void Layout_tick_UI(bool *main_thread_flag) {
                     ImGui::Separator();
 
                     if (ImGui::CollapsingHeader("地图校准", ImGuiTreeNodeFlags_DefaultOpen)) {
-                        ImGui::Checkbox("启用校准", &g_use_calib);
+                        if (ImGui::Checkbox("启用校准", &g_use_calib)) {
+                            if (g_use_calib) {
+                                // ★ 校准模式：自动放大居中地图
+                                g_draw_map_size_bak = g_map_display_size;
+                                g_draw_map_posx_bak = g_map_pos_x; g_draw_map_posy_bak = g_map_pos_y;
+                                g_map_display_size = std::min((float)displayInfo.height * 0.75f, 1600.0f);
+                                g_map_pos_x = (displayInfo.width - g_map_display_size) * 0.5f;
+                                g_map_pos_y = (displayInfo.height - g_map_display_size) * 0.5f;
+                            } else {
+                                // 退出校准：恢复
+                                g_map_display_size = g_draw_map_size_bak;
+                                g_map_pos_x = g_draw_map_posx_bak; g_map_pos_y = g_draw_map_posy_bak;
+                            }
+                        }
                         if (g_use_calib) {
                             ImGui::SameLine();
                             ImGui::TextColored(g_theme.warning, "  ⚠ 校准中 — 调整完毕请保存");
