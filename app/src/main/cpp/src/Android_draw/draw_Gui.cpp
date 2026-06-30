@@ -1854,18 +1854,39 @@ static void FlushTextures() {
     std::lock_guard<std::mutex> lk(g_pending_mtx);
     for (size_t i = 0; i < g_pending.size(); ) {
         auto& t = g_pending[i]; if (!t.ready) { i++; continue; }
-        if (g_map_textures[t.map][t.floor]) { glDeleteTextures(1, &g_map_textures[t.map][t.floor]); g_map_textures[t.map][t.floor] = 0; }
-        GLuint tex = 0; glGenTextures(1, &tex);
-        if (!tex) { t.fail = true; i++; continue; }
-        glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, tex);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, t.w, t.h, 0, GL_RGBA, GL_UNSIGNED_BYTE, t.px);
-        if (glGetError() != GL_NO_ERROR) { glDeleteTextures(1, &tex); stbi_image_free(t.px); t.fail = true; i++; continue; }
-        g_map_textures[t.map][t.floor] = tex;
-        g_map_texture_w[t.map][t.floor] = t.w;
-        g_map_texture_h[t.map][t.floor] = t.h;
-        stbi_image_free(t.px); t.ready = false; t.uploaded = true; i++;
+        // ★ P3: 大纹理分帧上传，每帧256行，避免单帧卡顿
+        if (t.w > 1024 || t.h > 1024) {
+            if (t.upload_row == 0) {
+                if (g_map_textures[t.map][t.floor]) { glDeleteTextures(1, &g_map_textures[t.map][t.floor]); g_map_textures[t.map][t.floor] = 0; }
+                glGenTextures(1, &t.tex);
+                if (!t.tex) { t.fail = true; i++; continue; }
+                glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, t.tex);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, t.w, t.h, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+            }
+            int end = std::min(t.upload_row + 256, t.h);
+            glBindTexture(GL_TEXTURE_2D, t.tex);
+            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, t.upload_row, t.w, end - t.upload_row, GL_RGBA, GL_UNSIGNED_BYTE, t.px + t.upload_row * t.w * 4);
+            t.upload_row = end;
+            if (t.upload_row >= t.h) {
+                g_map_textures[t.map][t.floor] = t.tex;
+                g_map_texture_w[t.map][t.floor] = t.w; g_map_texture_h[t.map][t.floor] = t.h;
+                stbi_image_free(t.px); t.px = nullptr; t.uploaded = true;
+            } else { i++; continue; }
+        } else {
+            if (g_map_textures[t.map][t.floor]) { glDeleteTextures(1, &g_map_textures[t.map][t.floor]); g_map_textures[t.map][t.floor] = 0; }
+            GLuint tex = 0; glGenTextures(1, &tex);
+            if (!tex) { t.fail = true; i++; continue; }
+            glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, tex);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, t.w, t.h, 0, GL_RGBA, GL_UNSIGNED_BYTE, t.px);
+            if (glGetError() != GL_NO_ERROR) { glDeleteTextures(1, &tex); stbi_image_free(t.px); t.fail = true; i++; continue; }
+            g_map_textures[t.map][t.floor] = tex; g_map_texture_w[t.map][t.floor] = t.w; g_map_texture_h[t.map][t.floor] = t.h;
+            stbi_image_free(t.px); t.px = nullptr; t.uploaded = true;
+        }
+        i++;
     }
     g_pending.erase(std::remove_if(g_pending.begin(), g_pending.end(), [](const PendingTex& t) { return t.uploaded || t.fail; }), g_pending.end());
 }
@@ -3125,15 +3146,22 @@ void Draw_MapOverlay(ImDrawList* Draw, const std::vector<DataStruct>& data) {
 
     // ========== 已保存路径绘制（带开关控制 + 选中高亮 + 顶点缓存P2优化） ==========
     if (g_show_saved_paths) {
-        // ★ P2: 顶点缓存 — 仅在脏时重建
+        // ★ P2+P5: 顶点缓存 — 仅在脏时重建，同时合并近距离点
         if (g_path_cache_dirty || g_saved_paths.size() != g_path_vertex_cache.size()) {
             g_path_vertex_cache.resize(g_saved_paths.size());
             for (size_t pi = 0; pi < g_saved_paths.size(); pi++) {
                 auto& src = g_saved_paths[pi];
                 auto& dst = g_path_vertex_cache[pi];
-                dst.resize(src.size());
-                for (size_t i = 0; i < src.size(); i++)
-                    dst[i] = ToMap(src[i]);
+                dst.clear(); dst.reserve(src.size());
+                ImVec2 last(-99999, -99999);
+                for (size_t i = 0; i < src.size(); i++) {
+                    ImVec2 p = ToMap(src[i]);
+                    float dx = p.x - last.x, dy = p.y - last.y;
+                    // ★ P5: 5px 内合并，保留最后一个点
+                    if (dst.empty() || dx*dx + dy*dy > 25.0f || i == src.size() - 1) {
+                        dst.push_back(p); last = p;
+                    } else { dst.back() = p; }
+                }
             }
             g_path_cache_dirty = false;
         }
