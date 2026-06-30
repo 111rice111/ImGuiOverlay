@@ -131,6 +131,9 @@ static std::vector<ImU32> g_path_colors;              // 每条路径颜色
 static std::vector<std::vector<std::vector<std::vector<Vector3A>>>> g_saved_paths_by_map;
 static int g_last_paths_map_idx = -1;
 static int g_last_paths_floor_idx = -1;
+// ★ P2 路径顶点缓存
+static std::vector<std::vector<ImVec2>> g_path_vertex_cache;
+static bool g_path_cache_dirty = true;
 static int g_path_edit_mode = 0;
 // 手动确认保存
 static std::vector<Vector3A> g_pending_path;
@@ -169,7 +172,7 @@ static const int DIRTY_FLUSH_INTERVAL = 1800; // 每30秒(@60fps)强制刷写一
 // 标记出口数据为脏
 static void MarkExitsDirty() { g_dirty_exits = true; g_dirty_flush_counter = DIRTY_FLUSH_INTERVAL; }
 // 标记路径数据为脏
-static void MarkPathsDirty() { g_dirty_paths = true; g_dirty_flush_counter = DIRTY_FLUSH_INTERVAL; }
+static void MarkPathsDirty() { g_dirty_paths = true; g_dirty_flush_counter = DIRTY_FLUSH_INTERVAL; g_path_cache_dirty = true; }
 static void FlushDirtyData();  // 前向声明，函数体在 g_current_map_index 之后
 
 struct Notification {
@@ -485,7 +488,14 @@ static const MapConfig& GetActiveMapConfig() {
     static MapConfig s_fallback;
     if (g_current_map_index >= 0 && g_current_map_index < (int)g_all_maps.size() &&
         g_current_floor_index >= 0 && g_current_floor_index < (int)g_all_maps[g_current_map_index].size()) {
-        return g_all_maps[g_current_map_index][g_current_floor_index];
+        auto& cfg = g_all_maps[g_current_map_index][g_current_floor_index];
+        float ww = cfg.maxX - cfg.minX, wh = cfg.maxY - cfg.minY;
+        // ★ P1 防卡死: 二楼未校准时(min==max 或范围极小)回退到一楼配置
+        if ((ww < 10.0f || wh < 10.0f) && g_current_floor_index > 0) {
+            auto& f0 = g_all_maps[g_current_map_index][0];
+            if (f0.maxX - f0.minX >= 10.0f) return f0;
+        }
+        return cfg;
     }
     s_fallback = MapConfig{};
     s_fallback.scaleX = g_map_scale_x; s_fallback.scaleY = g_map_scale_y;
@@ -1805,11 +1815,14 @@ void UpdateCurrentFloor() {
     }
 }
 // ========== 异步纹理加载 ==========
-struct PendingTex { int map, floor; unsigned char* px; int w, h; bool ready, fail, uploaded; };
+struct PendingTex { int map, floor; unsigned char* px; int w, h; bool ready, fail, uploaded; GLuint tex; int upload_row; };
 static std::vector<PendingTex> g_pending;
 static std::mutex g_pending_mtx;
 static std::thread g_loader;
 static bool g_loader_on = false;
+
+// ★ P3: 纹理分帧上传 — 每帧最多上传 N 行，避免单个大纹理上传导致卡顿
+static const int TEX_UPLOAD_ROWS_PER_FRAME = 256;
 
 static void LoaderLoop() {
     while (g_loader_on) {
@@ -3013,6 +3026,7 @@ void Draw_MapOverlay(ImDrawList* Draw, const std::vector<DataStruct>& data) {
         }
         g_last_paths_map_idx = g_current_map_index;
         g_last_paths_floor_idx = g_current_floor_index;
+        g_path_cache_dirty = true;  // ★ P2: 地图/楼层切换时重建顶点缓存
     }
 
     // 绘制自身位置 + 手电筒光锥朝向
@@ -3109,13 +3123,24 @@ void Draw_MapOverlay(ImDrawList* Draw, const std::vector<DataStruct>& data) {
         }
     }
 
-    // ========== 已保存路径绘制（带开关控制 + 选中高亮） ==========
+    // ========== 已保存路径绘制（带开关控制 + 选中高亮 + 顶点缓存P2优化） ==========
     if (g_show_saved_paths) {
+        // ★ P2: 顶点缓存 — 仅在脏时重建
+        if (g_path_cache_dirty || g_saved_paths.size() != g_path_vertex_cache.size()) {
+            g_path_vertex_cache.resize(g_saved_paths.size());
+            for (size_t pi = 0; pi < g_saved_paths.size(); pi++) {
+                auto& src = g_saved_paths[pi];
+                auto& dst = g_path_vertex_cache[pi];
+                dst.resize(src.size());
+                for (size_t i = 0; i < src.size(); i++)
+                    dst[i] = ToMap(src[i]);
+            }
+            g_path_cache_dirty = false;
+        }
         for (size_t pi = 0; pi < g_saved_paths.size(); pi++) {
             if (pi < g_path_visible.size() && !g_path_visible[pi]) continue;
-            // ★ 目的地导航: 2D只显示导航路径
             if (g_show_nav_line && !g_nav_render_path.empty() && g_dest_world_x != 0) continue;
-            auto& path = g_saved_paths[pi];
+            auto& path = g_path_vertex_cache[pi];
             if (path.size() < 2) continue;
 
             bool isSelected = (pi == g_selected_path_index);
@@ -3130,13 +3155,13 @@ void Draw_MapOverlay(ImDrawList* Draw, const std::vector<DataStruct>& data) {
             float inner_width = isSelected ? 5.0f : 3.0f;
 
             for (size_t i = 1; i < path.size(); i++) {
-                ImVec2 p1 = ToMap(path[i-1]);
-                ImVec2 p2 = ToMap(path[i]);
+                ImVec2 p1 = path[i-1];
+                ImVec2 p2 = path[i];
                 Draw->AddLine(p1, p2, color_outer, outer_width);
                 Draw->AddLine(p1, p2, color_inner, inner_width);
             }
-            ImVec2 start = ToMap(path.front());
-            ImVec2 end = ToMap(path.back());
+            ImVec2 start = path.front();
+            ImVec2 end = path.back();
             Draw->AddCircleFilled(start, isSelected ? 7.0f : 5.0f,
                 isSelected ? IM_COL32(255, 255, 0, 255) : IM_COL32(0, 255, 0, 200));
             Draw->AddCircleFilled(end, isSelected ? 7.0f : 5.0f,
