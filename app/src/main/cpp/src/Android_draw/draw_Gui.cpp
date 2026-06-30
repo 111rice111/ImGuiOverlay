@@ -4697,8 +4697,8 @@ void Draw_Main_Optimized(ImDrawList *Draw) {
             LoadMapTexture(0, 0);
         }
         TryAutoDetectMap(current_data);
-        // ★ 楼层自动检测（防抖：Z 持续在对面 30 帧才切换，避免楼梯抖动/瞬移误触）
-        if (g_current_map_index >= 0) {
+        // ★ 楼层自动检测（防抖：仅自动识别模式下启用，手动模式下不覆盖用户选择）
+        if (g_current_map_index >= 0 && g_map_auto_detect) {
             static int g_floor_debounce = 0;
             static int g_floor_target = -1;
             int rawFloor = GetFloorFromPlayerZ(Z);
