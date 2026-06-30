@@ -1783,6 +1783,9 @@ void UpdateCurrentFloor() {
     auto& floors = g_all_maps[g_current_map_index];
     if (floors.empty()) return;
 
+    // 手动模式下不自动切换楼层，尊重用户的手动选择
+    if (!g_map_auto_detect) return;
+
     int targetFloor = GetFloorFromPlayerZ(Z);
 
     if (targetFloor >= (int)floors.size()) return;
