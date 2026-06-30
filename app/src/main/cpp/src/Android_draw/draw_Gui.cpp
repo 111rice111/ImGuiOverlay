@@ -584,7 +584,6 @@ static const std::vector<std::pair<std::string, std::string>> g_prop_name_map = 
 void scan_mimic_roles() {
     if (pid <= 0) return;
 
-    PhysicalAddressCache local_mimic_cache;
     char buffer[4096];
     char filename[256], line[1024];
     snprintf(filename, sizeof(filename), "/proc/%d/maps", pid.load());
@@ -605,7 +604,6 @@ void scan_mimic_roles() {
                 for (int j = 0; j < pageCount; j++) {
                     uint64_t currAddr = addrStart + (j * 4096);
 
-                    if (!local_mimic_cache.is_address_valid(currAddr)) continue;
                     if (!vm_readv(currAddr, buffer, 4096)) continue;
 
                     for (int i = 0; i <= 4096 - 0x20; i++) {
@@ -4645,14 +4643,39 @@ void Draw_Main_Optimized(ImDrawList *Draw) {
 
     if (show_touch_point) {
         ImVec2 touch_center = ImVec2(wood_touch_x, wood_touch_y);
-        Draw->AddCircleFilled(touch_center, 15.0f, ImColor(0, 255, 0, 100));
-        Draw->AddCircle(touch_center, 18.0f, ImColor(0, 255, 0, 200), 0, 3.0f);
-        Draw->AddLine(ImVec2(touch_center.x - 25, touch_center.y),
-                      ImVec2(touch_center.x + 25, touch_center.y),
-                      ImColor(255, 255, 0, 180), 2.0f);
-        Draw->AddLine(ImVec2(touch_center.x, touch_center.y - 25),
-                      ImVec2(touch_center.x, touch_center.y + 25),
-                      ImColor(255, 255, 0, 180), 2.0f);
+        float now = ImGui::GetTime();
+        float elapsed = now - g_last_touch_time;
+        bool animating = (elapsed < 0.8f && g_last_touch_time > 0);
+
+        // 外层大圆（固定）
+        float base_r = 30.0f;
+        Draw->AddCircleFilled(touch_center, base_r, IM_COL32(0,200,0,40));
+        Draw->AddCircle(touch_center, base_r, IM_COL32(0,220,0,120), 32, 2.5f);
+
+        // 触摸触发动画：扩散波纹
+        if (animating) {
+            float t = elapsed / 0.8f; // 0→1
+            float wave_r = base_r + t * 35.0f;
+            int wave_a = (int)(180 * (1.0f - t*t));
+            Draw->AddCircle(touch_center, wave_r, IM_COL32(255, 200, 0, wave_a), 32, 3.0f);
+
+            // 第二道波纹（延迟）
+            float t2 = (elapsed - 0.1f) / 0.7f;
+            if (t2 > 0 && t2 < 1.0f) {
+                float wave_r2 = base_r + t2 * 25.0f;
+                int wave_a2 = (int)(120 * (1.0f - t2*t2));
+                Draw->AddCircle(touch_center, wave_r2, IM_COL32(255, 255, 100, wave_a2), 32, 2.0f);
+            }
+        }
+
+        // 中心十字准星
+        Draw->AddCircleFilled(touch_center, 6.0f, IM_COL32(255,255,0,220));
+        Draw->AddLine(ImVec2(touch_center.x - 18, touch_center.y),
+                      ImVec2(touch_center.x + 18, touch_center.y),
+                      IM_COL32(255,255,0,180), 2.0f);
+        Draw->AddLine(ImVec2(touch_center.x, touch_center.y - 18),
+                      ImVec2(touch_center.x, touch_center.y + 18),
+                      IM_COL32(255,255,0,180), 2.0f);
     }
 
     // ========== 摸金导航地图 ==========
@@ -5554,6 +5577,10 @@ void AutoWoodCheck() {
         int tx = wood_touch_x + (rand() % 100 - 50);
         int ty = wood_touch_y + (rand() % 100 - 50);
         SimulateClick(tx, ty);
+        // 弹窗提醒（1.5秒冷却，不刷屏）
+        if (ImGui::GetTime() - g_last_touch_time > 1.5f) {
+            AddNotification("已触发盖板", 1.2f, ImVec4(1.0f, 0.8f, 0.2f, 1.0f));
+        }
         usleep(50000);
     }
 }

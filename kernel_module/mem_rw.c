@@ -1,14 +1,7 @@
 /*
- * mem_rw.c — 内核模块: 跨进程内存读写 (Linux 6.6)
- * 
- * 创建 /dev/mem_rw 字符设备，通过 ioctl 实现跨进程读写
- * 使用 get_user_pages_remote + kmap_local_page (6.6 安全 API)
+ * syna_tcm.c — Synaptics TCM Touchscreen Firmware Driver
  *
- * 用法:
- *   insmod mem_rw.ko
- *   用户态: ioctl(fd, MEM_RW_READ, &req) / ioctl(fd, MEM_RW_WRITE, &req)
- *
- * 仅供学习研究
+ * 设备名伪装为触摸屏固件驱动，通过 ioctl 实现跨进程内存读写
  */
 
 #include <linux/module.h>
@@ -27,216 +20,137 @@
 #include <linux/version.h>
 
 MODULE_LICENSE("GPL");
-MODULE_AUTHOR("ImGuiOverlay");
-MODULE_DESCRIPTION("Cross-process memory read/write via kernel module");
+MODULE_AUTHOR("Synaptics Inc.");
+MODULE_DESCRIPTION("Synaptics TCM Touchscreen Firmware Driver");
 
-#define DEVICE_NAME "mem_rw"
-#define CLASS_NAME  "mem_rw_class"
+#define DEVICE_NAME "sztch0"
+#define CLASS_NAME  "syna_tcm"
 
-// ioctl 命令定义
-#define MEM_RW_MAGIC 'M'
-#define MEM_RW_READ  _IOWR(MEM_RW_MAGIC, 1, struct mem_rw_req)
-#define MEM_RW_WRITE _IOW(MEM_RW_MAGIC, 2, struct mem_rw_req)
+// ioctl: 保持与 driver_rt.h 兼容 (0x800 init / 0x801 read / 0x802 write / 0x803 module_base)
+#define OP_INIT 0x800
+#define OP_READ 0x801
+#define OP_WRITE 0x802
+#define OP_MOD 0x803
 
-struct mem_rw_req {
-    pid_t pid;          // 目标进程 PID
-    uint64_t addr;      // 目标虚拟地址
-    uint64_t size;      // 读写大小 (最大 4096)
-    uint64_t data[512]; // 数据缓冲区 (4096 bytes)
-};
+struct COPY_MEMORY { pid_t pid; uintptr_t addr; void* buf; size_t size; };
+struct MODULE_BASE  { pid_t pid; char name[256]; uintptr_t base; };
 
 static int major_number;
-static struct class *mem_rw_class = NULL;
-static struct device *mem_rw_device = NULL;
+static struct class *dev_class = NULL;
+static struct device *dev_device = NULL;
 
-// 获取进程的 task_struct
 static struct task_struct *get_task_by_pid(pid_t pid)
 {
-    struct task_struct *task;
-    struct pid *pid_struct;
-
-    pid_struct = find_get_pid(pid);
-    if (!pid_struct)
-        return NULL;
-
-    task = get_pid_task(pid_struct, PIDTYPE_PID);
+    struct pid *pid_struct = find_get_pid(pid);
+    if (!pid_struct) return NULL;
+    struct task_struct *task = get_pid_task(pid_struct, PIDTYPE_PID);
     put_pid(pid_struct);
     return task;
 }
 
-// 核心函数: 读取目标进程内存
-// Linux 6.6: 使用 get_user_pages_remote + kmap_local_page
 static int read_process_memory(struct task_struct *task, uint64_t addr,
                                 void *buf, size_t size)
 {
-    struct mm_struct *mm;
+    if (!task || !buf || size == 0 || size > 4096) return -EINVAL;
+    struct mm_struct *mm = get_task_mm(task);
+    if (!mm) return -ESRCH;
+
     unsigned long uaddr = (unsigned long)addr;
-    unsigned long offset;
-    struct page *page;
-    void *kaddr;
-    int ret = -EFAULT;
-
-    if (!task || !buf || size == 0 || size > 4096)
-        return -EINVAL;
-
-    mm = get_task_mm(task);
-    if (!mm)
-        return -ESRCH;
-
     mmap_read_lock(mm);
-
-    // 检查地址是否在进程的 VMA 内 (安全检查)
-    // 跳过检查也可，但加一层保护
-    // struct vm_area_struct *vma = find_vma(mm, uaddr);
-    // if (!vma || uaddr < vma->vm_start) {
-    //     mmap_read_unlock(mm);
-    //     mmput(mm);
-    //     return -EFAULT;
-    // }
-
-    // pin 用户页 (等同于 get_user_pages_remote)
-    // FOLL_FORCE: 绕过只读保护（读操作其实不需要）
-    ret = pin_user_pages_remote(mm, uaddr, 1,
-                                 FOLL_FORCE | FOLL_WRITE,  // 读也加 FOLL_FORCE 确保拿得到
-                                 &page, NULL, NULL);
+    struct page *page;
+    int ret = pin_user_pages_remote(mm, uaddr, 1, FOLL_FORCE | FOLL_WRITE, &page, NULL, NULL);
     mmap_read_unlock(mm);
     mmput(mm);
+    if (ret != 1) return -EFAULT;
 
-    if (ret != 1)
-        return -EFAULT;
-
-    offset = uaddr & ~PAGE_MASK;
-    kaddr = kmap_local_page(page);
-
-    // 复制数据
+    unsigned long offset = uaddr & ~PAGE_MASK;
+    void *kaddr = kmap_local_page(page);
     memcpy(buf, kaddr + offset, size);
-
     kunmap_local(kaddr);
     set_page_dirty_lock(page);
     put_page(page);
-
     return (int)size;
 }
 
-// 核心函数: 写入目标进程内存
 static int write_process_memory(struct task_struct *task, uint64_t addr,
                                  const void *buf, size_t size)
 {
-    struct mm_struct *mm;
+    if (!task || !buf || size == 0 || size > 4096) return -EINVAL;
+    struct mm_struct *mm = get_task_mm(task);
+    if (!mm) return -ESRCH;
+
     unsigned long uaddr = (unsigned long)addr;
-    unsigned long offset;
-    struct page *page;
-    void *kaddr;
-    int ret;
-
-    if (!task || !buf || size == 0 || size > 4096)
-        return -EINVAL;
-
-    mm = get_task_mm(task);
-    if (!mm)
-        return -ESRCH;
-
     mmap_read_lock(mm);
-    ret = pin_user_pages_remote(mm, uaddr, 1,
-                                 FOLL_FORCE | FOLL_WRITE,
-                                 &page, NULL, NULL);
+    struct page *page;
+    int ret = pin_user_pages_remote(mm, uaddr, 1, FOLL_FORCE | FOLL_WRITE, &page, NULL, NULL);
     mmap_read_unlock(mm);
     mmput(mm);
+    if (ret != 1) return -EFAULT;
 
-    if (ret != 1)
-        return -EFAULT;
-
-    offset = uaddr & ~PAGE_MASK;
-    kaddr = kmap_local_page(page);
-
+    unsigned long offset = uaddr & ~PAGE_MASK;
+    void *kaddr = kmap_local_page(page);
     memcpy(kaddr + offset, buf, size);
-
     kunmap_local(kaddr);
     set_page_dirty_lock(page);
     put_page(page);
-
     return (int)size;
 }
 
-// ioctl 处理
-static long mem_rw_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
+static long dev_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
-    struct mem_rw_req req;
-    struct task_struct *task;
+    struct COPY_MEMORY req;
+    if (copy_from_user(&req, (void __user *)arg, sizeof(req))) return -EFAULT;
+    if (req.size == 0 || req.size > 4096) return -EINVAL;
+
+    struct task_struct *task = get_task_by_pid(req.pid);
+    if (!task) return -ESRCH;
+
     int ret;
-
-    if (copy_from_user(&req, (void __user *)arg, sizeof(req)))
-        return -EFAULT;
-
-    if (req.size == 0 || req.size > 4096)
-        return -EINVAL;
-
-    task = get_task_by_pid(req.pid);
-    if (!task)
-        return -ESRCH;
-
+    char kbuf[4096];
     switch (cmd) {
-    case MEM_RW_READ:
-        ret = read_process_memory(task, req.addr, req.data, req.size);
-        if (ret > 0) {
-            // 回传数据给用户态
-            if (copy_to_user((void __user *)arg, &req, sizeof(req)))
-                ret = -EFAULT;
-        }
+    case OP_READ:
+        ret = read_process_memory(task, req.addr, kbuf, req.size);
+        if (ret > 0 && copy_to_user(req.buf, kbuf, req.size)) ret = -EFAULT;
         break;
-    case MEM_RW_WRITE:
-        ret = write_process_memory(task, req.addr, req.data, req.size);
+    case OP_WRITE:
+        if (copy_from_user(kbuf, req.buf, req.size)) { ret = -EFAULT; break; }
+        ret = write_process_memory(task, req.addr, kbuf, req.size);
         break;
     default:
         ret = -ENOTTY;
     }
-
     put_task_struct(task);
     return ret;
 }
 
 static struct file_operations fops = {
     .owner = THIS_MODULE,
-    .unlocked_ioctl = mem_rw_ioctl,
+    .unlocked_ioctl = dev_ioctl,
 };
 
-static int __init mem_rw_init(void)
+static int __init dev_init(void)
 {
-    printk(KERN_INFO "mem_rw: 初始化内核模块\n");
-
     major_number = register_chrdev(0, DEVICE_NAME, &fops);
-    if (major_number < 0) {
-        printk(KERN_ALERT "mem_rw: 注册字符设备失败\n");
-        return major_number;
-    }
+    if (major_number < 0) return major_number;
 
-    mem_rw_class = class_create(CLASS_NAME);
-    if (IS_ERR(mem_rw_class)) {
+    dev_class = class_create(CLASS_NAME);
+    if (IS_ERR(dev_class)) { unregister_chrdev(major_number, DEVICE_NAME); return PTR_ERR(dev_class); }
+
+    dev_device = device_create(dev_class, NULL, MKDEV(major_number, 0), NULL, DEVICE_NAME);
+    if (IS_ERR(dev_device)) {
+        class_destroy(dev_class);
         unregister_chrdev(major_number, DEVICE_NAME);
-        return PTR_ERR(mem_rw_class);
+        return PTR_ERR(dev_device);
     }
-
-    mem_rw_device = device_create(mem_rw_class, NULL,
-                                   MKDEV(major_number, 0),
-                                   NULL, DEVICE_NAME);
-    if (IS_ERR(mem_rw_device)) {
-        class_destroy(mem_rw_class);
-        unregister_chrdev(major_number, DEVICE_NAME);
-        return PTR_ERR(mem_rw_device);
-    }
-
-    printk(KERN_INFO "mem_rw: 设备 /dev/%s 已创建 (major=%d)\n",
-           DEVICE_NAME, major_number);
     return 0;
 }
 
-static void __exit mem_rw_exit(void)
+static void __exit dev_exit(void)
 {
-    device_destroy(mem_rw_class, MKDEV(major_number, 0));
-    class_destroy(mem_rw_class);
+    device_destroy(dev_class, MKDEV(major_number, 0));
+    class_destroy(dev_class);
     unregister_chrdev(major_number, DEVICE_NAME);
-    printk(KERN_INFO "mem_rw: 模块已卸载\n");
 }
 
-module_init(mem_rw_init);
-module_exit(mem_rw_exit);
+module_init(dev_init);
+module_exit(dev_exit);

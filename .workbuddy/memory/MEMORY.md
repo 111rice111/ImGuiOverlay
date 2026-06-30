@@ -45,7 +45,25 @@ Git commit: ff6784e
 
 ---
 
-## ★ v2.9-stable — 当前稳定版 (2026-06-27 18:47)
+## ★ v2.16-stable — 当前稳定版 (2026-06-30 15:10)
+
+二进制: `E:\ImGuiOverlay\overlay-v2.16-stable` (MD5: b5575c306182e8e5ee74fda6d0082c9e)
+Git commit: c36341de, tag: v2.16-stable
+
+### v2.16 vs v2.9 差异
+| 修复 | 说明 |
+|------|------|
+| 板子扫描 | `is_woodplane` 加回主过滤器 + 独立分支 |
+| 自身检测 | 绕过 `self_is_survivor`（GM::自身指向错误对象） |
+| 触摸校准 | A=1.00334,B=0,C=-1.67,D=0,E=-1,F=2400 |
+| 判定框 | 钻石切面: 极淡银白+三层光晕+银边+四角亮点 |
+| 诊断面板 | 实时显示监管者/板子/判区/冷却 |
+
+### v2.16 已知问题
+- GlobalMemory::自身 指向错误对象（self_is_survivor 已注释）
+- 诊断面板需正式发布前隐藏
+
+## ★ v2.9-stable — 上一稳定版 (2026-06-27 18:47)
 
 二进制: `E:\ImGuiOverlay\overlay-v2.9-stable` (MD5: 6425eaa414dc76d6fad72c662d599400)
 源码备份: `E:\ImGuiOverlay\draw_Gui.cpp-v2.9-backup`
