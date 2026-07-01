@@ -245,11 +245,6 @@ class APIHandler(BaseHTTPRequestHandler):
         else:
             return self._respond(False, "unknown")
 
-    def do_GET(self):
-        if self.path == "/admin" or self.path == "/admin/":
-            return self._html(ADMIN_HTML)
-        self._respond(False, "POST only")
-
 # ========== 管理后台 HTML ==========
 ADMIN_HTML = '''<!DOCTYPE html>
 <html lang="zh">
