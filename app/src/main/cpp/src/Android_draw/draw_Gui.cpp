@@ -2100,7 +2100,8 @@ void TryAutoDetectMap(const std::vector<DataStruct>& data) {
         return;
     }
     // LOCKED: 常规验证
-    if (musicbox_found || piano_found || !g_detected_chairs.empty()) {
+    // ★ 无信号源时不做评分匹配，避免误识别
+    if (musicbox_found || piano_found || g_detected_chairs.size() >= 3) {
         MapScoreResult sr = ScoreMapFingerprints(musicbox_pos, musicbox_found, piano_pos, piano_found, g_detected_chairs);
         snprintf(g_score_debug_buf, sizeof(g_score_debug_buf), "%s", sr.debug_text.c_str());
         if (sr.fp_id >= 0 && sr.score >= 60.0f && !sr.is_tie) {
@@ -2618,13 +2619,18 @@ static MapScoreResult ScoreMapFingerprints(
     for (size_t fi = 0; fi < g_fingerprint_db.size(); fi++) {
         auto& fp = g_fingerprint_db[fi];
         if (!fp.valid) continue;
-        // 椅子数量差 ≤ 2 才进候选（宽松容忍+多椅场景）
-        int diff = abs(fp.chairCount - detected_count);
-        if (diff <= 2) candidates.push_back((int)fi);
+        // ★ 椅子数预筛: 仅在扫到 ≥3 个凳子时启用（少量凳子不可靠, 可能还未扫全）
+        if (detected_count >= 3) {
+            int diff = abs(fp.chairCount - detected_count);
+            // 扩展容忍: diff≤3 覆盖"扫到5个但DB有8个"的情况
+            if (diff > 3) continue;
+        }
+        candidates.push_back((int)fi);
     }
 
-    // 如果没有候选（极少发生）, 放宽到全部
-    if (candidates.empty()) {
+    // 如果预筛后候选 < 2 个，放弃预筛, 全量评分 (防误杀正确地图)
+    if (candidates.size() < 2) {
+        candidates.clear();
         for (size_t fi = 0; fi < g_fingerprint_db.size(); fi++)
             if (g_fingerprint_db[fi].valid) candidates.push_back((int)fi);
     }
