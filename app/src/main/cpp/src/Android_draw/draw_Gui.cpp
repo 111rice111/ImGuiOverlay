@@ -1964,29 +1964,6 @@ void TryAutoDetectMap(const std::vector<DataStruct>& data) {
     }
     if (g_fingerprint_db.empty()) LoadFingerprintDB();
     
-    // ★ v2.35-debug: 诊断日志
-    static FILE* g_md_log = nullptr;
-    static int g_md_frame = 0;
-    if (!g_md_log) { g_md_log = fopen("/data/local/bin/mapdetect.log", "a"); g_md_frame = 0; }
-    g_md_frame++;
-#define MD_LOG(fmt, ...) do { if (g_md_log) { fprintf(g_md_log, "[F%d] " fmt "\n", g_md_frame, ##__VA_ARGS__); fflush(g_md_log); } } while(0)
-    
-    if (g_md_frame == 1) {
-        MD_LOG("=== v2.35-debug START ===");
-        MD_LOG("g_fingerprint_db.size=%zu g_musicbox_db.size=%zu g_all_maps.size=%zu",
-            g_fingerprint_db.size(), g_musicbox_db.size(), g_all_maps.size());
-        MD_LOG("g_mapidx_from_fp_id.size=%zu g_fp_id_from_mapidx.size=%zu",
-            g_mapidx_from_fp_id.size(), g_fp_id_from_mapidx.size());
-        for (int fi = 0; fi < (int)g_mapidx_from_fp_id.size() && fi < 35; fi++) {
-            if (g_mapidx_from_fp_id[fi] >= 0)
-                MD_LOG("  fp[%d] -> g_all_maps[%d]", fi, g_mapidx_from_fp_id[fi]);
-        }
-        MD_LOG("g_detect_phase=%d g_current_map_index=%d", (int)g_detect_phase, g_current_map_index);
-    }
-    if (g_md_frame <= 10 || g_md_frame % 60 == 0) {
-        MD_LOG("TRY_DETECT frame=%d phase=%d cur_map=%d", g_md_frame, (int)g_detect_phase, g_current_map_index);
-    }
-    
     // Step1: 扫描信号源（音乐盒/钢琴/凳子）
     Vector3A musicbox_pos{}, piano_pos{};
     bool musicbox_found = false, piano_found = false;
@@ -2015,11 +1992,6 @@ void TryAutoDetectMap(const std::vector<DataStruct>& data) {
     // ★★★ 音乐盒精确匹配 — 第一优先级 ★★★
     // v2.34: 使用 g_fingerprint_db 搜索匹配指纹，通过 ExecuteMapSwitch() 正确解析 fp_id→g_all_maps
     if (musicbox_found && g_detected_musicbox_pos.X != 0) {
-        // ★ v2.35-debug: 诊断输出
-        MD_LOG("MBOX_DETECTED pos=(%.1f,%.1f,%.1f) cur_map=%d phase=%d",
-            g_detected_musicbox_pos.X, g_detected_musicbox_pos.Y, g_detected_musicbox_pos.Z,
-            g_current_map_index, (int)g_detect_phase);
-            
         // 收集所有匹配的指纹ID (XYZ三轴容差5)
         struct FpCandidate { int fp_id; float dist; };
         std::vector<FpCandidate> fp_candidates;
@@ -2032,19 +2004,12 @@ void TryAutoDetectMap(const std::vector<DataStruct>& data) {
             if (d < 5.0f) fp_candidates.push_back({fp.id, d});
         }
         
-        MD_LOG("MBOX_CANDIDATES cnt=%zu", fp_candidates.size());
-        for (auto& fc : fp_candidates) {
-            MD_LOG("  FpCandidate fp=%d dist=%.2f", fc.fp_id, fc.dist);
-        }
-        
         if (!fp_candidates.empty()) {
             int best_fp = -1;
             if (fp_candidates.size() == 1) {
                 // ★ 唯一指纹 — 直接命中
                 best_fp = fp_candidates[0].fp_id;
-                MD_LOG("MBOX_SINGLE fp=%d", best_fp);
             } else {
-                MD_LOG("MBOX_MULTI chair_cnt=%zu piano_found=%d", g_detected_chairs.size(), piano_found);
                 // ★ 同名音乐盒多指纹 — 用钢琴/凳子区分
                 // 优先钢琴精确匹配（直接从指纹DB查询）
                 if (piano_found && g_detected_piano_pos.X != 0) {
@@ -2061,9 +2026,6 @@ void TryAutoDetectMap(const std::vector<DataStruct>& data) {
                         if (best_fp >= 0) break;
                     }
                 }
-                if (best_fp >= 0) {
-                    MD_LOG("MBOX_PIANO_MATCH fp=%d", best_fp);
-                }
                 // 钢琴不匹配 → 用凳子数量匹配
                 if (best_fp < 0) {
                     int det_c = (int)g_detected_chairs.size();
@@ -2075,17 +2037,13 @@ void TryAutoDetectMap(const std::vector<DataStruct>& data) {
                             if (diff < best_diff) { best_diff = diff; best_fp = fc.fp_id; }
                         }
                     }
-                    MD_LOG("MBOX_STOOL_MATCH best_fp=%d best_diff=%d det_c=%d", best_fp, best_diff, det_c);
                 }
             }
             
             if (best_fp >= 0) {
                 // 通过 ExecuteMapSwitch 正确解析 fp_id → g_all_maps
                 int tgt_check = (best_fp < (int)g_mapidx_from_fp_id.size()) ? g_mapidx_from_fp_id[best_fp] : -1;
-                MD_LOG("MBOX_RESOLVE fp=%d tgt=%d (mapsize=%zu) cur=%d",
-                    best_fp, tgt_check, g_mapidx_from_fp_id.size(), g_current_map_index);
                 if (tgt_check >= 0 && tgt_check < (int)g_all_maps.size() && tgt_check != g_current_map_index) {
-                    MD_LOG("MBOX_SWITCH fp=%d -> g_all_maps[%d] name=%s", best_fp, tgt_check, g_all_maps[tgt_check][0].name);
                     ExecuteMapSwitch(best_fp);
                     g_detect_phase = MapDetectPhase::LOCKED;
                     snprintf(g_map_detect_debug, sizeof(g_map_detect_debug), "Musicbox: (%.0f,%.0f,%.0f) fp=%d -> %s",
@@ -2093,14 +2051,8 @@ void TryAutoDetectMap(const std::vector<DataStruct>& data) {
                         best_fp, g_all_maps[tgt_check][0].name);
                     AddNotification("Mbox→" + std::string(g_all_maps[tgt_check][0].name), 1.5f, ImVec4(0.3f, 1.0f, 0.3f, 1.0f));
                     return;
-                } else {
-                    MD_LOG("MBOX_SKIP reason: tgt=%d allmaps=%zu cur=%d (check: %d,%d,%d)",
-                        tgt_check, g_all_maps.size(), g_current_map_index,
-                        tgt_check >= 0, tgt_check < (int)g_all_maps.size(), tgt_check != g_current_map_index);
                 }
             }
-        } else {
-            MD_LOG("MBOX_NO_MATCH in fingerprint_db (checked %zu fps)", g_fingerprint_db.size());
         }
     }
     
@@ -2220,21 +2172,15 @@ void TryAutoDetectMap(const std::vector<DataStruct>& data) {
         snprintf(g_score_debug_buf, sizeof(g_score_debug_buf), "%s", sr.debug_text.c_str());
         if (sr.fp_id >= 0 && sr.score >= 60.0f && !sr.is_tie) {
             int tgt = (sr.fp_id < (int)g_mapidx_from_fp_id.size()) ? g_mapidx_from_fp_id[sr.fp_id] : -1;
-            MD_LOG("LOCKED_SCORE fp=%d score=%.0f tgt=%d cur=%d tie=%d",
-                sr.fp_id, sr.score, tgt, g_current_map_index, sr.is_tie);
             
             if (g_current_map_index < 0) {
                 // ★ 首次检测：直接切换到正确地图
                 if (tgt >= 0 && tgt < (int)g_all_maps.size()) {
                     ExecuteMapSwitch(sr.fp_id);
                     g_detect_phase = MapDetectPhase::LOCKED;
-                    MD_LOG("LOCKED_FIRST_DETECT fp=%d score=%.0f -> %s",
-                        sr.fp_id, sr.score, g_all_maps[tgt][0].name);
                     printf("[MapDetect] 首次检测: fp=%d (%.0f分) → map[%d]\n",
                         sr.fp_id, sr.score, g_current_map_index);
                 } else {
-                    MD_LOG("LOCKED_NO_MAP fp=%d tgt=%d (maps=%zu)",
-                        sr.fp_id, tgt, g_all_maps.size());
                     // fp_id 未关联到任何地图，跳到 LOW_CONFIDENCE 等待用户手动选择
                     printf("[MapDetect] fp_id=%d 未关联到 g_all_maps 索引，转到 LOW_CONFIDENCE\n", sr.fp_id);
                     g_detect_phase = MapDetectPhase::LOW_CONFIDENCE;
@@ -2242,9 +2188,6 @@ void TryAutoDetectMap(const std::vector<DataStruct>& data) {
                 }
             } else if (tgt >= 0 && tgt != g_current_map_index && sr.score >= 65.0f) {
                 // ★ v2.34: 评分高分指向不同地图 → 直接切换（解决"评分18却匹配1"的问题）
-                MD_LOG("LOCKED_CORRECT fp=%d score=%.0f tgt=%d (old cur=%d) -> %s",
-                    sr.fp_id, sr.score, tgt, g_current_map_index,
-                    tgt < (int)g_all_maps.size() ? g_all_maps[tgt][0].name : "?");
                 printf("[MapDetect] LOCKED评分纠正: fp=%d (%.0f分) → map[%d] (原map[%d])\n",
                     sr.fp_id, sr.score, tgt, g_current_map_index);
                 ExecuteMapSwitch(sr.fp_id);
@@ -2257,13 +2200,6 @@ void TryAutoDetectMap(const std::vector<DataStruct>& data) {
                     if (g_current_map_index >= (int)g_fp_id_from_mapidx.size()) g_fp_id_from_mapidx.resize(g_current_map_index+1, -1);
                     g_fp_id_from_mapidx[g_current_map_index] = sr.fp_id;
                 }
-            }
-        // ★ 首次检测时 ExecuteMapSwitch 已设楼层；每帧更新已移到 TryAutoDetectMap 末尾
-        } else {
-            // 评分未达阈值或无匹配 — v2.35 诊断
-            if (g_md_frame <= 10 || g_md_frame % 30 == 0) {
-                MD_LOG("LOCKED_LOW fp=%d score=%.0f tie=%d cur=%d",
-                    sr.fp_id, sr.score, sr.is_tie, g_current_map_index);
             }
         }
         if (musicbox_found) { g_cached_musicbox_pos = musicbox_pos; g_has_cached_musicbox = true; }

@@ -54,6 +54,19 @@ Git commit: ff6784e
 - **LOCKED 评分纠正**: `g_current_map_index >= 0` 时若高分(≥65)指向不同地图 → 立即切换
 - 删除旧的 60帧/3秒 recheck 定时器
 
+## ★ v2.35-debug — 诊断版本 (2026-07-01 13:22)
+
+二进制: `E:\ImGuiOverlay\overlay-v2.35-debug` (MD5: 98faedc09362b1ae43abd2270f2c42d6)
+Git commit: 07dc6462
+
+### v2.35 新增
+- `TryAutoDetectMap` 全路径诊断日志 → `/data/local/bin/mapdetect.log`
+- 记录: 音乐盒检测、fp_candidates、best_fp 选择、g_mapidx_from_fp_id 映射、ExecuteMapSwitch 结果
+- 启动时 dump 完整 fp→g_all_maps 映射表
+- LOCKED 评分路径: 分数、fp_id、tgt、切换/跳过原因
+
+---
+
 ## ★ v2.16-stable — 当前稳定版 (2026-06-30 15:10)
 
 二进制: `E:\ImGuiOverlay\overlay-v2.16-stable` (MD5: b5575c306182e8e5ee74fda6d0082c9e)

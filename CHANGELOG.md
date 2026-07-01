@@ -1,24 +1,20 @@
 # 更新日志
 
-## [2026-07-01] — v2.35-debug: 音乐盒识别诊断日志
+## [2026-07-01] — v2.36-stable: 移除诊断日志，恢复干净版本
 
-### 🔍 诊断功能
-- 在 `TryAutoDetectMap` 中添加详细诊断日志，输出到 `/data/local/bin/mapdetect.log`
-- Tier 1 音乐盒检测全路径记录：检测→候选→匹配→映射→切换（或跳过原因）
-- LOCKED 评分路径记录：分数、fp_id、tgt 映射、切换决策
-- 启动时 dump `g_mapidx_from_fp_id` 完整映射表
-- 每 60 帧周期性输出状态摘要
-
-### 用法
-1. 启动 overlay → 进游戏 → 退出 overlay
-2. `adb pull /data/local/bin/mapdetect.log`
-3. 发给我分析
+### 🧹 清理
+- 移除 v2.35-debug 中添加的所有 `MD_LOG` 诊断代码
+- 删除手机上的 `mapdetect.log`
+- 用户已自行解决地图识别问题
 
 ### 二进制
-- **overlay-v2.35-debug**: MD5 `98faedc09362b1ae43abd2270f2c42d6`
+- **overlay-v2.36-stable**: MD5 `8c59c638d2d4c36c1d2291e5869e42ba`
 
 ---
 
+## [2026-07-01] — v2.35-debug: 音乐盒识别诊断日志（已清理）
+
+---
 ## [2026-07-01] — v2.34-stable: 修复"评分18却匹配地图1"的关键Bug
 
 ### 🔧 核心修复
