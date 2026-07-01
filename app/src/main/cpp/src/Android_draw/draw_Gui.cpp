@@ -1989,63 +1989,69 @@ void TryAutoDetectMap(const std::vector<DataStruct>& data) {
         }
     }
     
-    // ★★★ 音乐盒精确匹配 — 第一优先级，秒识别 ★★★
+    // ★★★ 音乐盒精确匹配 — 第一优先级 ★★★
+    // v2.34: 使用 g_fingerprint_db 搜索匹配指纹，通过 ExecuteMapSwitch() 正确解析 fp_id→g_all_maps
     if (musicbox_found && g_detected_musicbox_pos.X != 0) {
-        // 收集所有匹配的音乐盒 (XYZ三轴容差5)
-        std::vector<int> candidates;
-        for (auto& mb : g_musicbox_db) {
-            float dx = g_detected_musicbox_pos.X - mb.x;
-            float dy = g_detected_musicbox_pos.Y - mb.y;
-            float dz = g_detected_musicbox_pos.Z - mb.z;
+        // 收集所有匹配的指纹ID (XYZ三轴容差5)
+        struct FpCandidate { int fp_id; float dist; };
+        std::vector<FpCandidate> fp_candidates;
+        for (auto& fp : g_fingerprint_db) {
+            if (!fp.valid || fp.musicBox.X == 0.0f) continue;
+            float dx = g_detected_musicbox_pos.X - fp.musicBox.X;
+            float dy = g_detected_musicbox_pos.Y - fp.musicBox.Y;
+            float dz = g_detected_musicbox_pos.Z - fp.musicBox.Z;
             float d = sqrtf(dx*dx + dy*dy + dz*dz);
-            if (d < 5.0f) candidates.push_back(mb.mapIndex);
+            if (d < 5.0f) fp_candidates.push_back({fp.id, d});
         }
         
-        if (!candidates.empty()) {
-            int best_mi = -1;
-            if (candidates.size() == 1) {
-                // ★ 唯一音乐盒 — 直接命中
-                best_mi = candidates[0];
+        if (!fp_candidates.empty()) {
+            int best_fp = -1;
+            if (fp_candidates.size() == 1) {
+                // ★ 唯一指纹 — 直接命中
+                best_fp = fp_candidates[0].fp_id;
             } else {
-                // ★ 同名音乐盒多地图 — 用钢琴/凳子区分
-                // 优先钢琴精确匹配
+                // ★ 同名音乐盒多指纹 — 用钢琴/凳子区分
+                // 优先钢琴精确匹配（直接从指纹DB查询）
                 if (piano_found && g_detected_piano_pos.X != 0) {
-                    for (int mi : candidates) {
-                        for (auto& pk : g_piano_db) {
-                            if (pk.mapIndex == mi) {
-                                float d = sqrtf((g_detected_piano_pos.X - pk.x)*(g_detected_piano_pos.X - pk.x)
-                                              + (g_detected_piano_pos.Y - pk.y)*(g_detected_piano_pos.Y - pk.y));
-                                if (d < 5.0f) { best_mi = mi; break; }
+                    for (auto& fc : fp_candidates) {
+                        for (auto& fp2 : g_fingerprint_db) {
+                            if (fp2.id != fc.fp_id || !fp2.valid || fp2.pianos.empty()) continue;
+                            for (auto& pkpos : fp2.pianos) {
+                                float d = sqrtf((g_detected_piano_pos.X - pkpos.X)*(g_detected_piano_pos.X - pkpos.X)
+                                              + (g_detected_piano_pos.Y - pkpos.Y)*(g_detected_piano_pos.Y - pkpos.Y));
+                                if (d < 8.0f) { best_fp = fc.fp_id; break; }
                             }
+                            if (best_fp >= 0) break;
                         }
-                        if (best_mi >= 0) break;
+                        if (best_fp >= 0) break;
                     }
                 }
                 // 钢琴不匹配 → 用凳子数量匹配
-                if (best_mi < 0) {
+                if (best_fp < 0) {
                     int det_c = (int)g_detected_chairs.size();
-                    int best_c = 999;
-                    for (int mi : candidates) {
-                        for (auto& fp : g_fingerprint_db) {
-                            if (fp.mapIndex == mi && fp.valid) {
-                                int diff = abs((int)fp.stools.size() - det_c);
-                                if (diff < best_c) { best_c = diff; best_mi = mi; }
-                            }
+                    int best_diff = 999;
+                    for (auto& fc : fp_candidates) {
+                        for (auto& fp2 : g_fingerprint_db) {
+                            if (fp2.id != fc.fp_id || !fp2.valid) continue;
+                            int diff = abs((int)fp2.stools.size() - det_c);
+                            if (diff < best_diff) { best_diff = diff; best_fp = fc.fp_id; }
                         }
                     }
                 }
             }
             
-            if (best_mi >= 0 && best_mi < (int)g_all_maps.size() && best_mi != g_current_map_index) {
-                g_current_map_index = best_mi;
-                g_current_floor_index = SafeClampFloorIdx(best_mi, GetFloorFromPlayerZ(Z));
-                LoadMapTexture(g_current_map_index, g_current_floor_index);
-                g_detect_phase = MapDetectPhase::LOCKED;
-                snprintf(g_map_detect_debug, sizeof(g_map_detect_debug), "Musicbox: (%.0f,%.0f,%.0f) -> %s",
-                    g_detected_musicbox_pos.X, g_detected_musicbox_pos.Y, g_detected_musicbox_pos.Z,
-                    g_all_maps[best_mi][0].name);
-                AddNotification("Mbox→" + std::string(g_all_maps[best_mi][0].name), 1.5f, ImVec4(0.3f, 1.0f, 0.3f, 1.0f));
-                return;
+            if (best_fp >= 0) {
+                // 通过 ExecuteMapSwitch 正确解析 fp_id → g_all_maps
+                int tgt_check = (best_fp < (int)g_mapidx_from_fp_id.size()) ? g_mapidx_from_fp_id[best_fp] : -1;
+                if (tgt_check >= 0 && tgt_check < (int)g_all_maps.size() && tgt_check != g_current_map_index) {
+                    ExecuteMapSwitch(best_fp);
+                    g_detect_phase = MapDetectPhase::LOCKED;
+                    snprintf(g_map_detect_debug, sizeof(g_map_detect_debug), "Musicbox: (%.0f,%.0f,%.0f) fp=%d -> %s",
+                        g_detected_musicbox_pos.X, g_detected_musicbox_pos.Y, g_detected_musicbox_pos.Z,
+                        best_fp, g_all_maps[tgt_check][0].name);
+                    AddNotification("Mbox→" + std::string(g_all_maps[tgt_check][0].name), 1.5f, ImVec4(0.3f, 1.0f, 0.3f, 1.0f));
+                    return;
+                }
             }
         }
     }
@@ -2165,10 +2171,10 @@ void TryAutoDetectMap(const std::vector<DataStruct>& data) {
         MapScoreResult sr = ScoreMapFingerprints(musicbox_pos, musicbox_found, piano_pos, piano_found, g_detected_chairs);
         snprintf(g_score_debug_buf, sizeof(g_score_debug_buf), "%s", sr.debug_text.c_str());
         if (sr.fp_id >= 0 && sr.score >= 60.0f && !sr.is_tie) {
-            // ★ 首次检测：g_current_map_index == -1 时直接切换到正确地图
+            int tgt = (sr.fp_id < (int)g_mapidx_from_fp_id.size()) ? g_mapidx_from_fp_id[sr.fp_id] : -1;
+            
             if (g_current_map_index < 0) {
-                // 预检：fp_id 必须在映射表中有对应的 map_idx
-                int tgt = (sr.fp_id < (int)g_mapidx_from_fp_id.size()) ? g_mapidx_from_fp_id[sr.fp_id] : -1;
+                // ★ 首次检测：直接切换到正确地图
                 if (tgt >= 0 && tgt < (int)g_all_maps.size()) {
                     ExecuteMapSwitch(sr.fp_id);
                     g_detect_phase = MapDetectPhase::LOCKED;
@@ -2180,8 +2186,14 @@ void TryAutoDetectMap(const std::vector<DataStruct>& data) {
                     g_detect_phase = MapDetectPhase::LOW_CONFIDENCE;
                     g_low_confidence_counter = 0;
                 }
+            } else if (tgt >= 0 && tgt != g_current_map_index && sr.score >= 65.0f) {
+                // ★ v2.34: 评分高分指向不同地图 → 直接切换（解决"评分18却匹配1"的问题）
+                printf("[MapDetect] LOCKED评分纠正: fp=%d (%.0f分) → map[%d] (原map[%d])\n",
+                    sr.fp_id, sr.score, tgt, g_current_map_index);
+                ExecuteMapSwitch(sr.fp_id);
+                g_detect_phase = MapDetectPhase::LOCKED;
             } else {
-                // 已有地图，仅更新映射关系
+                // ★ 当前地图正确，仅更新映射关系
                 int cfp = (g_current_map_index < (int)g_fp_id_from_mapidx.size()) ? g_fp_id_from_mapidx[g_current_map_index] : -1;
                 if (cfp < 0 && g_current_map_index < (int)g_all_maps.size() && sr.fp_id < (int)g_mapidx_from_fp_id.size() && g_mapidx_from_fp_id[sr.fp_id] < 0) {
                     g_mapidx_from_fp_id[sr.fp_id] = g_current_map_index;
@@ -2189,31 +2201,7 @@ void TryAutoDetectMap(const std::vector<DataStruct>& data) {
                     g_fp_id_from_mapidx[g_current_map_index] = sr.fp_id;
                 }
             }
-            // ★ 首次检测时 ExecuteMapSwitch 已设楼层；每帧更新已移到 TryAutoDetectMap 末尾
-        }
-        // ★ LOCKED 定期重检：每60帧检查#1候选是否远超当前(+15分)且持续3秒
-        {
-            static int recheck_counter = 0;
-            static int recheck_confirm_count = 0;
-            recheck_counter++;
-            if (recheck_counter >= 60) {
-                recheck_counter = 0;
-                // 使用sr.second_score作为当前地图的近似参考
-                // 如果#1候选 ≥ 60分 且 远超第二名 ≥ 15分 → 说明当前地图不对劲
-                if (sr.fp_id >= 0 && sr.score >= 60.0f && !sr.is_tie
-                    && (sr.score - sr.second_score) >= 15.0f) {
-                    recheck_confirm_count++;
-                    if (recheck_confirm_count >= 3) {
-                        printf("[MapDetect] LOCKED重检: fp=%d (%.0f分) 远超第二名(%.0f分) 持续3秒\n",
-                            sr.fp_id, sr.score, sr.second_score);
-                        ExecuteMapSwitch(sr.fp_id);
-                        g_detect_phase = MapDetectPhase::LOCKED;
-                        recheck_confirm_count = 0;
-                    }
-                } else {
-                    recheck_confirm_count = 0;
-                }
-            }
+        // ★ 首次检测时 ExecuteMapSwitch 已设楼层；每帧更新已移到 TryAutoDetectMap 末尾
         }
         if (musicbox_found) { g_cached_musicbox_pos = musicbox_pos; g_has_cached_musicbox = true; }
         if (piano_found) { g_cached_piano_pos = piano_pos; g_has_cached_piano = true; }

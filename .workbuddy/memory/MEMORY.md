@@ -45,6 +45,15 @@ Git commit: ff6784e
 
 ---
 
+## ★ v2.34-stable — 修复"评分18却匹配地图1"Bug (2026-07-01 12:37)
+
+二进制: `E:\ImGuiOverlay\overlay-v2.34-stable` (MD5: 17caeb5bfd8e065ebafdda40db76ba51)
+
+### v2.34 关键修复
+- **Tier 1 音乐盒匹配** 改用 `g_fingerprint_db` 搜索 + `ExecuteMapSwitch(fp_id)` 解析，不再直接拿 `g_musicbox_db[].mapIndex`
+- **LOCKED 评分纠正**: `g_current_map_index >= 0` 时若高分(≥65)指向不同地图 → 立即切换
+- 删除旧的 60帧/3秒 recheck 定时器
+
 ## ★ v2.16-stable — 当前稳定版 (2026-06-30 15:10)
 
 二进制: `E:\ImGuiOverlay\overlay-v2.16-stable` (MD5: b5575c306182e8e5ee74fda6d0082c9e)

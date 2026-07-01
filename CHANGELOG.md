@@ -1,5 +1,19 @@
 # 更新日志
 
+## [2026-07-01] — v2.34-stable: 修复"评分18却匹配地图1"的关键Bug
+
+### 🔧 核心修复
+- **Tier 1 音乐盒匹配改用指纹数据库**（不再直接用 g_musicbox_db→g_all_maps）
+  - 旧逻辑：`g_musicbox_db[i].mapIndex` 直接映射到 g_all_maps 索引，映射可能不一致
+  - 新逻辑：搜 `g_fingerprint_db` 找匹配指纹，通过 `ExecuteMapSwitch(fp_id)` → `g_mapidx_from_fp_id` 正确解析
+  - 同名音乐盒多指纹时：优先用指纹DB中的钢琴坐标匹配，其次用凳子数量匹配
+- **LOCKED 评分纠正**：当 `g_current_map_index >= 0` 时，若评分高分（≥65分）指向不同地图，立即切换
+  - 删除了旧的 60帧/3秒 recheck 定时器（已被新逻辑替代）
+- **清除 CMake 缓存**：修复了 SDK 路径缓存导致的 `externalNativeBuildCleanDebug` 失败
+
+### 二进制
+- **overlay-v2.34-stable**: MD5 `17caeb5bfd8e065ebafdda40db76ba51`
+
 ## [2026-06-29] — v2.13-stable: 路径导入（攻略图→世界坐标导航线）
 
 ### 🗺️ 新增
