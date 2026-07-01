@@ -1989,7 +1989,68 @@ void TryAutoDetectMap(const std::vector<DataStruct>& data) {
         }
     }
     
-    // ★★★ 钢琴精确匹配 — 扫到钢琴直接匹配，秒识别 ★★★
+    // ★★★ 音乐盒精确匹配 — 第一优先级，秒识别 ★★★
+    if (musicbox_found && g_detected_musicbox_pos.X != 0) {
+        // 收集所有匹配的音乐盒 (XYZ三轴容差5)
+        std::vector<int> candidates;
+        for (auto& mb : g_musicbox_db) {
+            float dx = g_detected_musicbox_pos.X - mb.x;
+            float dy = g_detected_musicbox_pos.Y - mb.y;
+            float dz = g_detected_musicbox_pos.Z - mb.z;
+            float d = sqrtf(dx*dx + dy*dy + dz*dz);
+            if (d < 5.0f) candidates.push_back(mb.mapIndex);
+        }
+        
+        if (!candidates.empty()) {
+            int best_mi = -1;
+            if (candidates.size() == 1) {
+                // ★ 唯一音乐盒 — 直接命中
+                best_mi = candidates[0];
+            } else {
+                // ★ 同名音乐盒多地图 — 用钢琴/凳子区分
+                // 优先钢琴精确匹配
+                if (piano_found && g_detected_piano_pos.X != 0) {
+                    for (int mi : candidates) {
+                        for (auto& pk : g_piano_db) {
+                            if (pk.mapIndex == mi) {
+                                float d = sqrtf((g_detected_piano_pos.X - pk.x)*(g_detected_piano_pos.X - pk.x)
+                                              + (g_detected_piano_pos.Y - pk.y)*(g_detected_piano_pos.Y - pk.y));
+                                if (d < 5.0f) { best_mi = mi; break; }
+                            }
+                        }
+                        if (best_mi >= 0) break;
+                    }
+                }
+                // 钢琴不匹配 → 用凳子数量匹配
+                if (best_mi < 0) {
+                    int det_c = (int)g_detected_chairs.size();
+                    int best_c = 999;
+                    for (int mi : candidates) {
+                        for (auto& fp : g_fingerprint_db) {
+                            if (fp.mapIndex == mi && fp.valid) {
+                                int diff = abs((int)fp.stools.size() - det_c);
+                                if (diff < best_c) { best_c = diff; best_mi = mi; }
+                            }
+                        }
+                    }
+                }
+            }
+            
+            if (best_mi >= 0 && best_mi < (int)g_all_maps.size() && best_mi != g_current_map_index) {
+                g_current_map_index = best_mi;
+                g_current_floor_index = SafeClampFloorIdx(best_mi, GetFloorFromPlayerZ(Z));
+                LoadMapTexture(g_current_map_index, g_current_floor_index);
+                g_detect_phase = MapDetectPhase::LOCKED;
+                snprintf(g_map_detect_debug, sizeof(g_map_detect_debug), "Musicbox: (%.0f,%.0f,%.0f) -> %s",
+                    g_detected_musicbox_pos.X, g_detected_musicbox_pos.Y, g_detected_musicbox_pos.Z,
+                    g_all_maps[best_mi][0].name);
+                AddNotification("Mbox→" + std::string(g_all_maps[best_mi][0].name), 1.5f, ImVec4(0.3f, 1.0f, 0.3f, 1.0f));
+                return;
+            }
+        }
+    }
+    
+    // ★★★ 钢琴精确匹配 — 第二优先级（无音乐盒时兜底）★★★
     if (piano_found && g_detected_piano_pos.X != 0) {
         int best_mi = -1; float best_d = 10.0f;
         for (auto& pk : g_piano_db) {
