@@ -1962,6 +1962,26 @@ void TryAutoDetectMap(const std::vector<DataStruct>& data) {
         }
     }
     
+    // ★★★ 钢琴精确匹配 — 扫到钢琴直接匹配，秒识别 ★★★
+    if (piano_found && g_detected_piano_pos.X != 0) {
+        int best_mi = -1; float best_d = 10.0f;
+        for (auto& pk : g_piano_db) {
+            float d = sqrtf((g_detected_piano_pos.X - pk.x)*(g_detected_piano_pos.X - pk.x)
+                          + (g_detected_piano_pos.Y - pk.y)*(g_detected_piano_pos.Y - pk.y));
+            if (d < best_d) { best_d = d; best_mi = pk.mapIndex; }
+        }
+        if (best_mi >= 0 && best_mi < (int)g_all_maps.size() && best_mi != g_current_map_index) {
+            g_current_map_index = best_mi;
+            g_current_floor_index = SafeClampFloorIdx(best_mi, GetFloorFromPlayerZ(Z));
+            LoadMapTexture(g_current_map_index, g_current_floor_index);
+            g_detect_phase = MapDetectPhase::LOCKED;
+            snprintf(g_map_detect_debug, sizeof(g_map_detect_debug), "Piano: (%.0f,%.0f) -> %s",
+                g_detected_piano_pos.X, g_detected_piano_pos.Y, g_all_maps[best_mi][0].name);
+            AddNotification("已识别: " + std::string(g_all_maps[best_mi][0].name), 1.5f, ImVec4(0.3f, 1.0f, 0.3f, 1.0f));
+            return;
+        }
+    }
+    
     // Step2: 检测传送（瞬移重检）
     static int g_switch_cooldown = 0;
     if (g_switch_cooldown > 0) {
