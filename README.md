@@ -36,16 +36,24 @@ cd E:\ImGuiOverlay
 # 停止旧进程
 adb shell "su -c 'killall overlay'"
 
-# 推送二进制（两阶段：先到 /sdcard，再 su cp）
-adb push "app/build/intermediates/cxx/RelWithDebInfo/*/obj/arm64-v8a/overlay" /sdcard/overlay_tmp
-adb shell "su -c 'cp /sdcard/overlay_tmp /data/local/bin/overlay && chmod 777 /data/local/bin/overlay && rm /sdcard/overlay_tmp'"
+# 编译两个版本
+cd E:\ImGuiOverlay && .\gradlew.bat assembleRelease      # 开发版
+cd E:\ImGuiOverlay-User && .\gradlew.bat assembleRelease  # 用户版
 
-# 启动
-adb shell "su -c '/data/local/bin/overlay &'"
+# 推送两个版本（两阶段：先到 /sdcard，再 su cp）
+adb push "E:\ImGuiOverlay\app\build\...\overlay" /sdcard/overlay_dev
+adb push "E:\ImGuiOverlay-User\app\build\...\overlay_user" /sdcard/overlay_user_tmp
+adb shell "su -c 'cp /sdcard/overlay_dev /data/local/bin/overlay && chmod 777 /data/local/bin/overlay && rm /sdcard/overlay_dev'"
+adb shell "su -c 'cp /sdcard/overlay_user_tmp /data/local/bin/overlay_user && chmod 777 /data/local/bin/overlay_user && rm /sdcard/overlay_user_tmp'"
+
+# 启动两个版本（按需选择）
+adb shell "su -c '/data/local/bin/overlay &'"       # 开发版（无卡密）
+adb shell "su -c '/data/local/bin/overlay_user &'"  # 用户版（含卡密验证）
 ```
 
 **路径约定**：
-- 二进制：`/data/local/bin/overlay`（必须 chmod 777）
+- 开发版：`/data/local/bin/overlay`（必须 chmod 777）
+- 用户版：`/data/local/bin/overlay_user`（必须 chmod 777）
 - 数据目录：`/data/local/bin/maps/`
 - 配置文件：`/data/local/bin/overlay_config.txt`
 - 禁止使用 `/data/local/tmp/`（SELinux tmpfs:s0 阻止执行）

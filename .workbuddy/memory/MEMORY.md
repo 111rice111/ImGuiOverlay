@@ -1,11 +1,21 @@
 # ImGuiOverlay 项目记忆
 
+## ★ 开发版↔用户版 双版本架构 (2026-07-01)
+- **开发版** (`E:\ImGuiOverlay`): 无联网控制，main.cpp 不含 AUTH_SERVER，CMake target: overlay
+- **用户版** (`E:\ImGuiOverlay-User`): 含卡密系统（AUTH_SERVER + backend/ + license.enc + deploy.sh），CMake target: overlay_user
+- **同步流程**: 开发版 push GitHub → 用户版 git pull → 冲突时保留用户版 main.cpp/CMakeLists.txt
+- **禁止**: 把用户版卡密系统合并到开发版
+- **公共文件**: draw_Gui.cpp / Structs.h / 千叶.h 等两个版本一致
+
 ## ★ 部署路径约定 (2026-06-29)
-- **二进制**: `/data/local/bin/overlay`（chmod 777）
-- **编译产物路径**: `E:\ImGuiOverlay\app\build\intermediates\cxx\RelWithDebInfo\6u3a2a4x\obj\arm64-v8a\overlay`（native ELF，不是 APK！）
+- **开发版二进制**: `/data/local/bin/overlay`（chmod 777）
+- **用户版二进制**: `/data/local/bin/overlay_user`（chmod 777）
+- **开发版编译产物路径**: `E:\ImGuiOverlay\app\build\intermediates\cxx\RelWithDebInfo\6u3a2a4x\obj\arm64-v8a\overlay`
+- **用户版编译产物路径**: `E:\ImGuiOverlay-User\app\build\intermediates\cxx\RelWithDebInfo\6u3a2a4x\obj\arm64-v8a\overlay_user`
 - **数据目录**: `/data/local/bin/maps/`
 - **配置**: `/data/local/bin/overlay_config.txt`
-- **推送方式**: `adb push → /sdcard/overlay_tmp → su cp → /data/local/bin/`（/data/local/bin/ 不能直接 adb push）
+- **推送方式**: `adb push → /sdcard/ → su cp → /data/local/bin/`（/data/local/bin/ 不能直接 adb push）
+- **★ 每次推送必须推送两个版本**: overlay + overlay_user
 - **禁令**: 禁止使用 `/data/local/tmp/`（SELinux tmpfs:s0 阻止执行，且反作弊高频命中）
 - **⚠️ 禁止推送 APK**: `app-release-unsigned.apk` 是 ZIP 包不能执行，必须推送 `cxx/.../obj/arm64-v8a/overlay`
 
@@ -54,7 +64,19 @@ Git commit: ff6784e
 - **LOCKED 评分纠正**: `g_current_map_index >= 0` 时若高分(≥65)指向不同地图 → 立即切换
 - 删除旧的 60帧/3秒 recheck 定时器
 
-## ★ v2.35-debug — 诊断版本 (2026-07-01 13:22)
+## ★ v2.36-stable — 当前稳定版 (2026-07-01 13:52)
+
+二进制: `E:\ImGuiOverlay\overlay-v2.36-stable` (MD5: 8c59c638d2d4c36c1d2291e5869e42ba)
+Git commit: 8fd445b0
+
+### v2.36 变更
+- 移除 v2.35-debug 所有 MD_LOG 诊断代码
+- 删除手机 mapdetect.log
+- 代码恢复干净（与 v2.34 功能一致）
+
+---
+
+## ★ v2.35-debug — 诊断版本 (2026-07-01 13:22)（已废弃）
 
 二进制: `E:\ImGuiOverlay\overlay-v2.35-debug` (MD5: 98faedc09362b1ae43abd2270f2c42d6)
 Git commit: 07dc6462
