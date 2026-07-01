@@ -134,6 +134,7 @@ static int g_last_paths_floor_idx = -1;
 // ★ P2 路径顶点缓存
 static std::vector<std::vector<ImVec2>> g_path_vertex_cache;
 static bool g_path_cache_dirty = true;
+static float g_last_cache_map_pos_x = -1, g_last_cache_map_pos_y = -1, g_last_cache_map_size = -1;
 static int g_path_edit_mode = 0;
 // 手动确认保存
 static std::vector<Vector3A> g_pending_path;
@@ -1251,13 +1252,17 @@ void SavePlayerPathsToJSON(int mapIdx, int floorIdx) {
 
 
 // ========== 保存场景物体（钢琴+凳子）到 JSON ==========
-void SaveSceneObjectsToJSON(int mapIdx, int floorIdx) {
+// ★ 同步结果结构体 — 用于详细通知
+struct SyncResult { int musicbox = 0; int piano = 0; int chairs = 0; };
+
+SyncResult SaveSceneObjectsToJSON(int mapIdx, int floorIdx) {
+    SyncResult sr;
     std::string json_path = MAPS_ROOT "map_config.json";
     std::ifstream ifs(json_path);
     json j;
-    if (ifs) ifs >> j; else return;
+    if (ifs) ifs >> j; else return sr;
 
-    if (!j.contains("maps")) return;
+    if (!j.contains("maps")) return sr;
 
     for (auto& m : j["maps"]) {
         int mf = m.value("floor", 0);
@@ -1268,17 +1273,28 @@ void SaveSceneObjectsToJSON(int mapIdx, int floorIdx) {
             }
         }
         if (mi == mapIdx && mf == floorIdx) {
+            // ★ 音乐盒
+            if (g_detected_musicbox_pos.X != 0.0f || g_detected_musicbox_pos.Y != 0.0f) {
+                m["musicbox_x"] = g_detected_musicbox_pos.X;
+                m["musicbox_y"] = g_detected_musicbox_pos.Y;
+                m["musicbox_z"] = g_detected_musicbox_pos.Z;
+                sr.musicbox = 1;
+            }
+            // ★ 钢琴
             if (g_detected_piano_pos.X != 0.0f || g_detected_piano_pos.Y != 0.0f) {
                 m["piano_x"] = g_detected_piano_pos.X;
                 m["piano_y"] = g_detected_piano_pos.Y;
                 m["piano_z"] = g_detected_piano_pos.Z;
+                sr.piano = 1;
             }
+            // ★ 凳子
             m["chairs"] = json::array();
             for (auto& chair : g_detected_chairs) {
                 json c;
                 c["x"] = chair.X; c["y"] = chair.Y; c["z"] = chair.Z;
                 m["chairs"].push_back(c);
             }
+            sr.chairs = (int)g_detected_chairs.size();
             break;
         }
     }
@@ -1288,6 +1304,7 @@ void SaveSceneObjectsToJSON(int mapIdx, int floorIdx) {
     // 重新加载数据库
     g_piano_db.clear();
     g_chair_db.clear();
+    g_musicbox_db.clear();
     for (auto& m : j["maps"]) {
         int mi = -1;
         for (int i = 0; i < (int)g_all_maps.size(); i++) {
@@ -1296,12 +1313,21 @@ void SaveSceneObjectsToJSON(int mapIdx, int floorIdx) {
             }
         }
         if (mi < 0) continue;
+        // 音乐盒
+        if (m.contains("musicbox_x") && m.contains("musicbox_y")) {
+            MusicboxKey mb;
+            mb.x = m["musicbox_x"]; mb.y = m["musicbox_y"];
+            mb.z = m.value("musicbox_z", 0.0f); mb.mapIndex = mi;
+            g_musicbox_db.push_back(mb);
+        }
+        // 钢琴
         if (m.contains("piano_x") && m.contains("piano_y")) {
             PianoKey pk;
             pk.x = m["piano_x"]; pk.y = m["piano_y"];
             pk.z = m.value("piano_z", 0.0f); pk.mapIndex = mi;
             g_piano_db.push_back(pk);
         }
+        // 凳子
         if (m.contains("chairs")) {
             for (auto& c : m["chairs"]) {
                 ChairKey ck;
@@ -1311,6 +1337,7 @@ void SaveSceneObjectsToJSON(int mapIdx, int floorIdx) {
             }
         }
     }
+    return sr;
 }
 
 static std::unordered_map<std::string, bool> skipClassCache;
@@ -3166,8 +3193,10 @@ void Draw_MapOverlay(ImDrawList* Draw, const std::vector<DataStruct>& data) {
 
     // ========== 已保存路径绘制（带开关控制 + 选中高亮 + 顶点缓存P2优化） ==========
     if (g_show_saved_paths) {
-        // ★ P2+P5: 顶点缓存 — 仅在脏时重建，同时合并近距离点
-        if (g_path_cache_dirty || g_saved_paths.size() != g_path_vertex_cache.size()) {
+        // ★ P2+P5: 顶点缓存 — 地图拖动/缩放/路径变化时自动重建
+        if (g_path_cache_dirty || g_saved_paths.size() != g_path_vertex_cache.size()
+            || g_map_pos_x != g_last_cache_map_pos_x || g_map_pos_y != g_last_cache_map_pos_y
+            || g_map_display_size != g_last_cache_map_size) {
             g_path_vertex_cache.resize(g_saved_paths.size());
             for (size_t pi = 0; pi < g_saved_paths.size(); pi++) {
                 auto& src = g_saved_paths[pi];
@@ -3184,6 +3213,9 @@ void Draw_MapOverlay(ImDrawList* Draw, const std::vector<DataStruct>& data) {
                 }
             }
             g_path_cache_dirty = false;
+            g_last_cache_map_pos_x = g_map_pos_x;
+            g_last_cache_map_pos_y = g_map_pos_y;
+            g_last_cache_map_size = g_map_display_size;
         }
         for (size_t pi = 0; pi < g_saved_paths.size(); pi++) {
             if (pi < g_path_visible.size() && !g_path_visible[pi]) continue;
@@ -7001,16 +7033,30 @@ void Layout_tick_UI(bool *main_thread_flag) {
                             ImGui::Separator();
                         }
 
-                        // === 同步场景物体到当前地图（钢琴+凳子）===
-                        ImGui::TextColored(g_theme.text_muted, "[P][C] 钢琴:%s | 凳子:%zu",
+                        // === 同步场景物体到当前地图（音乐盒+钢琴+凳子）===
+                        ImGui::TextColored(g_theme.text_muted, "[M][P][C] 音乐盒:%s | 钢琴:%s | 凳子:%zu",
+                            (g_detected_musicbox_pos.X != 0.0f ? "OK" : "--"),
                             (g_detected_piano_pos.X != 0.0f ? "OK" : "--"),
                             g_detected_chairs.size());
                         ImGui::SameLine();
                         if (StyledButton("[同步] 物体到当前地图", ButtonVariant::Primary, ImVec2(0,0), g_density)) {
-                            SaveSceneObjectsToJSON(g_current_map_index, g_current_floor_index);
-                            AddNotification("已同步: 钢琴 + " + std::to_string(g_detected_chairs.size()) + "个凳子",
-                                3.0f, ImVec4(0.3f, 1.0f, 0.3f, 1.0f));
-                            MarkExitsDirty(); // 场景物体也走脏标记刷写
+                            SyncResult sr = SaveSceneObjectsToJSON(g_current_map_index, g_current_floor_index);
+                            // ★ 详细通知: 地图名 + 索引 + 各类型数量
+                            const char* mapName = g_all_maps[g_current_map_index][g_current_floor_index].name;
+                            char syncMsg[256];
+                            snprintf(syncMsg, sizeof(syncMsg),
+                                "同步到: %s[%d楼] | 音乐盒:%d 钢琴:%d 凳子:%d",
+                                mapName, g_current_floor_index + 1,
+                                sr.musicbox, sr.piano, sr.chairs);
+                            AddNotification(syncMsg, 4.0f, ImVec4(0.3f, 1.0f, 0.3f, 1.0f));
+                            // 指纹数据库也刷新
+                            LoadFingerprintDB(); RebuildFingerprintMapping();
+                            MarkExitsDirty();
+                        }
+                        // ★ 手动模式提示
+                        if (!g_map_auto_detect) {
+                            ImGui::SameLine();
+                            ImGui::TextColored(g_theme.warning, "(手动地图)");
                         }
                     } else {
                         ImGui::TextColored(g_theme.danger, "地图索引无效");
