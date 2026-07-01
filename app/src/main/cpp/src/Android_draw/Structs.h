@@ -55,8 +55,16 @@ struct ChairKey {
 struct MapFingerprint {
     int id = -1;
     Vector3A musicBox;
+    Vector3A piano;            // ★ 钢琴坐标(用于精确匹配)
     std::vector<Vector3A> stools;
     std::vector<Vector3A> pianos;
+    // ★ v2.28 复合指纹: 物体数量用于快速预筛
+    int chairCount = 0;
+    int coreDoorCount = 0;
+    int outdoorDoorCount = 0;
+    int propDoorCount = 0;
+    int woodplaneCount = 0;
+    int mapIndex = -1;         // ★ 关联到 g_all_maps 索引
     bool valid = false;
 };
 

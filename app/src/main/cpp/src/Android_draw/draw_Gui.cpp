@@ -2437,112 +2437,148 @@ static void LoadMapConfigFromJSON() {
 // 加载地图指纹数据库 (v3.0)
 // 从 JSON 文件中解析每张地图的音乐盒、凳子、钢琴坐标
 // =============================================================
+// =============================================================
+// 加载地图指纹数据库 (v4.0 — 复合指纹)
+// 优先加载 enhanced_fingerprints.json (日志自动生成), 兜底 musicbox_stools.json
+// =============================================================
 static void LoadFingerprintDB() {
-    const std::string fp_path = MAPS_ROOT "musicbox_stools.json";
-    std::ifstream ifs(fp_path);
-    if (!ifs) {
-        // 兼容旧路径
-        const std::string fp_path2 = "/sdcard/map_fingerprints.json";
-        ifs.open(fp_path2);
-    }
-    if (!ifs) {
-        printf("[MapDetect] 指纹文件不存在，跳过加载 (尝试路径: %s)\n", fp_path.c_str());
-        return;
-    }
+    g_fingerprint_db.clear();
+    g_mapidx_from_fp_id.clear();
+
+    // ── 尝试路径列表 ──
+    const std::vector<std::string> paths = {
+        MAPS_ROOT "enhanced_fingerprints.json",  // ★ 新: 日志自动生成
+        MAPS_ROOT "musicbox_stools.json",        // 旧: 兼容
+        "/sdcard/map_fingerprints.json",          // 更旧: 兼容
+    };
+
+    std::ifstream ifs;
+    std::string loaded_path;
+    for (const auto& p : paths) { ifs.open(p); if (ifs) { loaded_path = p; break; } }
+    if (!ifs) { printf("[MapDetect] 指纹文件不存在\n"); return; }
 
     try {
-        json j;
-        ifs >> j;
-        ifs.close();
+        json root;
+        ifs >> root; ifs.close();
+        printf("[MapDetect] 加载: %s\n", loaded_path.c_str());
 
-        if (!j.is_array()) {
-            printf("[MapDetect] 指纹JSON格式错误：不是数组\n");
-            return;
+        // 判断格式: enhanced_fingerprints.json 是对象 { fingerprints: [...] }
+        json fp_array;
+        bool is_enhanced = false;
+        if (root.is_object() && root.contains("fingerprints")) {
+            fp_array = root["fingerprints"];
+            is_enhanced = true;
+        } else if (root.is_array()) {
+            fp_array = root;
+        } else {
+            printf("[MapDetect] 未知指纹格式\n"); return;
         }
 
-        g_fingerprint_db.clear();
-        g_mapidx_from_fp_id.clear();
-        // g_fp_id_from_mapidx 初始化为全 -1（在 LoadMapConfigFromJSON 后重建）
-
-        for (const auto& entry : j) {
+        for (const auto& entry : fp_array) {
             if (!entry.contains("id")) continue;
-
             MapFingerprint fp;
             fp.id = entry["id"];
 
-            // 解析音乐盒
-            if (entry.contains("music_box") && entry["music_box"].is_array() && entry["music_box"].size() >= 3) {
-                fp.musicBox.X = entry["music_box"][0];
-                fp.musicBox.Y = entry["music_box"][1];
-                fp.musicBox.Z = entry["music_box"][2];
-            }
+            // ── 增强格式 (v4.0): 含钢琴/音乐盒坐标 + 物体计数 ──
+            if (is_enhanced) {
+                fp.piano.X = entry.value("piano_x", 0.0f);
+                fp.piano.Y = entry.value("piano_y", 0.0f);
+                fp.piano.Z = entry.value("piano_z", 0.0f);
+                fp.musicBox.X = entry.value("musicbox_x", 0.0f);
+                fp.musicBox.Y = entry.value("musicbox_y", 0.0f);
+                fp.musicBox.Z = entry.value("musicbox_z", 0.0f);
+                fp.chairCount = entry.value("chair_count", 0);
+                fp.coreDoorCount = entry.value("core_door_count", 0);
+                fp.outdoorDoorCount = entry.value("outdoor_door_count", 0);
+                fp.propDoorCount = entry.value("prop_door_count", 0);
+                fp.woodplaneCount = entry.value("woodplane_count", 0);
 
-            // 解析凳子
-            if (entry.contains("stools") && entry["stools"].is_array()) {
-                for (const auto& stool : entry["stools"]) {
-                    if (stool.is_array() && stool.size() >= 3) {
+                // 凳子
+                if (entry.contains("chairs") && entry["chairs"].is_array()) {
+                    for (const auto& c : entry["chairs"]) {
                         Vector3A s;
-                        s.X = stool[0]; s.Y = stool[1]; s.Z = stool[2];
+                        s.X = c.value("x", 0.0f); s.Y = c.value("y", 0.0f); s.Z = c.value("z", 0.0f);
                         fp.stools.push_back(s);
                     }
                 }
-            }
-
-            // 解析钢琴
-            if (entry.contains("pianos") && entry["pianos"].is_array()) {
-                for (const auto& piano : entry["pianos"]) {
-                    if (piano.is_array() && piano.size() >= 3) {
-                        Vector3A p;
-                        p.X = piano[0]; p.Y = piano[1]; p.Z = piano[2];
-                        fp.pianos.push_back(p);
+                // 钢琴存入 pianos 数组(兼容旧评分)
+                if (fp.piano.X != 0 || fp.piano.Y != 0) fp.pianos.push_back(fp.piano);
+            } else {
+                // ── 旧格式 ──
+                if (entry.contains("music_box") && entry["music_box"].is_array() && entry["music_box"].size() >= 3) {
+                    fp.musicBox.X = entry["music_box"][0]; fp.musicBox.Y = entry["music_box"][1]; fp.musicBox.Z = entry["music_box"][2];
+                }
+                if (entry.contains("stools") && entry["stools"].is_array()) {
+                    for (const auto& s : entry["stools"]) {
+                        if (s.is_array() && s.size() >= 3) {
+                            Vector3A v; v.X = s[0]; v.Y = s[1]; v.Z = s[2]; fp.stools.push_back(v);
+                        }
                     }
                 }
+                if (entry.contains("pianos") && entry["pianos"].is_array()) {
+                    for (const auto& p : entry["pianos"]) {
+                        if (p.is_array() && p.size() >= 3) {
+                            Vector3A v; v.X = p[0]; v.Y = p[1]; v.Z = p[2]; fp.pianos.push_back(v);
+                        }
+                    }
+                }
+                fp.chairCount = (int)fp.stools.size();
+                fp.piano = fp.pianos.empty() ? Vector3A{} : fp.pianos[0];
             }
 
             fp.valid = true;
             g_fingerprint_db.push_back(fp);
         }
 
-        printf("[MapDetect] 成功加载 %zu 张地图指纹\n", g_fingerprint_db.size());
+        printf("[MapDetect] 加载 %zu 指纹%s\n", g_fingerprint_db.size(), is_enhanced ? " (增强复合指纹)" : "");
 
-        // 重建映射：确保 g_mapidx_from_fp_id 有足够空间
+        // ── 重建 g_mapidx_from_fp_id ──
         int max_fp_id = 0;
-        for (auto& fp : g_fingerprint_db) {
-            if (fp.id > max_fp_id) max_fp_id = fp.id;
-        }
+        for (auto& fp : g_fingerprint_db) if (fp.id > max_fp_id) max_fp_id = fp.id;
         g_mapidx_from_fp_id.assign(max_fp_id + 1, -1);
 
-        // 尝试自动关联：按 g_all_maps 的顺序匹配指纹
-        for (int mi = 0; mi < (int)g_all_maps.size(); mi++) {
-            if (g_all_maps[mi].empty()) continue;
-            // 尝试按名字中的数字匹配："地图5 一楼" → 5
-            const char* name = g_all_maps[mi][0].name;
-            if (name && strncmp(name, "地图", 6) == 0) {
-                int map_num = atoi(name + 6);
-                for (auto& fp : g_fingerprint_db) {
-                    if (fp.id == map_num) {
-                        int fp_id = fp.id;
-                        // ★ 只取首次匹配（优先一楼），防止"地图N 二楼"覆盖"地图N 一楼"
-                        if (fp_id < (int)g_mapidx_from_fp_id.size() && g_mapidx_from_fp_id[fp_id] < 0) {
-                            g_mapidx_from_fp_id[fp_id] = mi;
-                        }
-                        break;
+        for (auto& fp : g_fingerprint_db) {
+            // ★ v4.0: 优先用钢琴坐标匹配到 g_all_maps 索引
+            if ((fp.piano.X != 0 || fp.piano.Y != 0) && !g_piano_db.empty()) {
+                for (auto& pk : g_piano_db) {
+                    float d = sqrtf((fp.piano.X - pk.x)*(fp.piano.X - pk.x)
+                                  + (fp.piano.Y - pk.y)*(fp.piano.Y - pk.y));
+                    if (d < 5.0f) { fp.mapIndex = pk.mapIndex; break; }
+                }
+            }
+            // 其次用音乐盒坐标匹配
+            if (fp.mapIndex < 0 && (fp.musicBox.X != 0 || fp.musicBox.Y != 0) && !g_musicbox_db.empty()) {
+                for (auto& mb : g_musicbox_db) {
+                    float d = sqrtf((fp.musicBox.X - mb.x)*(fp.musicBox.X - mb.x)
+                                  + (fp.musicBox.Y - mb.y)*(fp.musicBox.Y - mb.y));
+                    if (d < 5.0f) { fp.mapIndex = mb.mapIndex; break; }
+                }
+            }
+            // 最后回退到按名字数字匹配
+            if (fp.mapIndex < 0) {
+                for (int mi = 0; mi < (int)g_all_maps.size(); mi++) {
+                    if (g_all_maps[mi].empty()) continue;
+                    const char* name = g_all_maps[mi][0].name;
+                    if (name && strncmp(name, "地图", 6) == 0 && atoi(name + 6) == fp.id) {
+                        fp.mapIndex = mi; break;
                     }
                 }
             }
+            // 记录到 g_mapidx_from_fp_id
+            if (fp.mapIndex >= 0 && fp.id < (int)g_mapidx_from_fp_id.size())
+                g_mapidx_from_fp_id[fp.id] = fp.mapIndex;
         }
 
         // 重建反向映射
         g_fp_id_from_mapidx.assign(g_all_maps.size(), -1);
         for (int fp_id = 0; fp_id < (int)g_mapidx_from_fp_id.size(); fp_id++) {
             int mi = g_mapidx_from_fp_id[fp_id];
-            if (mi >= 0 && mi < (int)g_fp_id_from_mapidx.size()) {
+            if (mi >= 0 && mi < (int)g_fp_id_from_mapidx.size())
                 g_fp_id_from_mapidx[mi] = fp_id;
-            }
         }
 
     } catch (const std::exception& e) {
-        printf("[MapDetect] 指纹文件加载异常: %s\n", e.what());
+        printf("[MapDetect] 指纹加载异常: %s\n", e.what());
     }
 }
 
@@ -2563,8 +2599,8 @@ static void RebuildFingerprintMapping() {
 }
 
 // =============================================================
-// 新架构核心：地图评分函数 (v3.0)
-// 使用指纹数据库 + 当前帧检测到的物体做 120 分制评分
+// 新架构核心：地图评分函数 (v4.0 — 杂交匹配)
+// Tier 2: 椅子数量快速预筛 → Tier 3: 坐标精确评分
 // 返回最佳匹配的指纹 ID（-1 表示无匹配）
 // =============================================================
 static MapScoreResult ScoreMapFingerprints(
@@ -2575,6 +2611,24 @@ static MapScoreResult ScoreMapFingerprints(
     MapScoreResult result;
     if (g_fingerprint_db.empty()) return result;
 
+    int detected_count = (int)detected_chairs.size();
+
+    // ★ Tier 2: 椅子数量快速预筛 — O(n) 整数比较，筛掉大部分候选
+    std::vector<int> candidates;
+    for (size_t fi = 0; fi < g_fingerprint_db.size(); fi++) {
+        auto& fp = g_fingerprint_db[fi];
+        if (!fp.valid) continue;
+        // 椅子数量差 ≤ 2 才进候选（宽松容忍+多椅场景）
+        int diff = abs(fp.chairCount - detected_count);
+        if (diff <= 2) candidates.push_back((int)fi);
+    }
+
+    // 如果没有候选（极少发生）, 放宽到全部
+    if (candidates.empty()) {
+        for (size_t fi = 0; fi < g_fingerprint_db.size(); fi++)
+            if (g_fingerprint_db[fi].valid) candidates.push_back((int)fi);
+    }
+
     struct FpScored {
         int fp_id;
         float total;
@@ -2584,37 +2638,34 @@ static MapScoreResult ScoreMapFingerprints(
         float ps;  // piano score
     };
     std::vector<FpScored> scored_list;
+    scored_list.reserve(candidates.size());
 
-    for (auto& fp : g_fingerprint_db) {
-        if (!fp.valid) continue;
+    for (int fi : candidates) {
+        auto& fp = g_fingerprint_db[fi];
 
         float musicBoxScore = 0.0f;
         float stoolCountScore = 0.0f;
         float stoolPosScore = 0.0f;
         float pianoScore = 0.0f;
 
-        // 1) 音乐盒匹配 (0~40)——容差5单位吸收波动，>25不计数
+        // 1) 音乐盒匹配 (0~40)
         if (musicbox_found && fp.musicBox.X != 0.0f) {
             float dx = musicbox_pos.X - fp.musicBox.X;
             float dy = musicbox_pos.Y - fp.musicBox.Y;
             float dist = sqrtf(dx*dx + dy*dy);
             if (dist <= 5.0f) musicBoxScore = 40.0f;
             else if (dist < 25.0f) musicBoxScore = 40.0f - (dist - 5.0f) * 2.0f;
-            // dist >= 25 → 0
         }
 
-        // 2) 凳子数量匹配 (0~10)——只占10分，容忍±1浮动
-        int known_count = (int)fp.stools.size();
-        int detected_count = (int)detected_chairs.size();
-        if (known_count == detected_count) stoolCountScore = 10.0f;
-        else if (abs(known_count - detected_count) <= 1) stoolCountScore = 5.0f;
-        // 差距 ≥2 → 0
+        // 2) 凳子数量匹配 (0~10)——考虑到预筛已过，这里加分更精确
+        if (fp.chairCount == detected_count) stoolCountScore = 10.0f;
+        else if (abs(fp.chairCount - detected_count) == 1) stoolCountScore = 5.0f;
 
         // 3) ★ 凳子位置重合度 (0~50)——决胜关键，阈值<4.0
         if (fp.stools.empty() && detected_chairs.empty()) {
-            stoolPosScore = 50.0f;  // 都没凳子
+            stoolPosScore = 50.0f;
         } else if (fp.stools.empty() || detected_chairs.empty()) {
-            stoolPosScore = 0.0f;   // 一个有但另一个没有
+            stoolPosScore = 0.0f;
         } else {
             int matched = 0;
             for (auto& d : detected_chairs) {

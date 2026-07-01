@@ -1,0 +1,1201 @@
+{
+  "version": "2.0",
+  "total_fingerprints": 23,
+  "description": "从日志自动生成的地图指纹数据库 — 用于杂交匹配识别",
+  "fingerprints": [
+    {
+      "id": 1,
+      "piano_x": 3961,
+      "piano_y": 1016,
+      "piano_z": 207,
+      "musicbox_x": 4412,
+      "musicbox_y": 577,
+      "musicbox_z": 161,
+      "chair_count": 9,
+      "core_door_count": 6,
+      "outdoor_door_count": 1,
+      "prop_door_count": 45,
+      "woodplane_count": 10,
+      "chairs": [
+        {
+          "x": 3809,
+          "y": 1118,
+          "z": 134
+        },
+        {
+          "x": 3558,
+          "y": 1489,
+          "z": 133
+        },
+        {
+          "x": 3670,
+          "y": 1339,
+          "z": 203
+        },
+        {
+          "x": 4180,
+          "y": 916,
+          "z": 204
+        },
+        {
+          "x": 4210,
+          "y": 1230,
+          "z": 203
+        },
+        {
+          "x": 4590,
+          "y": 1010,
+          "z": 203
+        },
+        {
+          "x": 3838,
+          "y": 1728,
+          "z": 203
+        },
+        {
+          "x": 4590,
+          "y": 1270,
+          "z": 133
+        },
+        {
+          "x": 4876,
+          "y": 1220,
+          "z": 204
+        }
+      ],
+      "source_logs": [
+        "16",
+        "18",
+        "5",
+        "9",
+        "51"
+      ],
+      "is_dup": false
+    },
+    {
+      "id": 2,
+      "piano_x": 3724,
+      "piano_y": 1441,
+      "piano_z": 137,
+      "musicbox_x": 4348,
+      "musicbox_y": 1823,
+      "musicbox_z": 161,
+      "chair_count": 5,
+      "core_door_count": 6,
+      "outdoor_door_count": 1,
+      "prop_door_count": 25,
+      "woodplane_count": 9,
+      "chairs": [
+        {
+          "x": 4210,
+          "y": 630,
+          "z": 133
+        },
+        {
+          "x": 3884,
+          "y": 1300,
+          "z": 204
+        },
+        {
+          "x": 3550,
+          "y": 1699,
+          "z": 133
+        },
+        {
+          "x": 4728,
+          "y": 842,
+          "z": 203
+        },
+        {
+          "x": 4424,
+          "y": 1540,
+          "z": 134
+        }
+      ],
+      "source_logs": [
+        "17",
+        "43",
+        "debug_13"
+      ],
+      "is_dup": false
+    },
+    {
+      "id": 3,
+      "piano_x": 0.0,
+      "piano_y": 0.0,
+      "piano_z": 0.0,
+      "musicbox_x": 3517,
+      "musicbox_y": 1228,
+      "musicbox_z": 161,
+      "chair_count": 7,
+      "core_door_count": 5,
+      "outdoor_door_count": 1,
+      "prop_door_count": 29,
+      "woodplane_count": 10,
+      "chairs": [
+        {
+          "x": 3701,
+          "y": 490,
+          "z": 133
+        },
+        {
+          "x": 4370,
+          "y": 1050,
+          "z": 133
+        },
+        {
+          "x": 3611,
+          "y": 1698,
+          "z": 133
+        },
+        {
+          "x": 4730,
+          "y": 761,
+          "z": 203
+        },
+        {
+          "x": 4420,
+          "y": 1276,
+          "z": 134
+        },
+        {
+          "x": 4516,
+          "y": 1160,
+          "z": 204
+        },
+        {
+          "x": 4330,
+          "y": 1410,
+          "z": 133
+        }
+      ],
+      "source_logs": [
+        "19",
+        "12",
+        "debug_10",
+        "debug_11"
+      ],
+      "is_dup": false
+    },
+    {
+      "id": 4,
+      "piano_x": 3904,
+      "piano_y": 781,
+      "piano_z": 137,
+      "musicbox_x": 4888,
+      "musicbox_y": 1043,
+      "musicbox_z": 161,
+      "chair_count": 8,
+      "core_door_count": 5,
+      "outdoor_door_count": 1,
+      "prop_door_count": 33,
+      "woodplane_count": 10,
+      "chairs": [
+        {
+          "x": 3344,
+          "y": 1360,
+          "z": 204
+        },
+        {
+          "x": 3730,
+          "y": 1039,
+          "z": 133
+        },
+        {
+          "x": 4490,
+          "y": 701,
+          "z": 203
+        },
+        {
+          "x": 4382,
+          "y": 972,
+          "z": 133
+        },
+        {
+          "x": 4090,
+          "y": 1110,
+          "z": 203
+        },
+        {
+          "x": 3973,
+          "y": 1541,
+          "z": 203
+        },
+        {
+          "x": 3933,
+          "y": 1544,
+          "z": 203
+        },
+        {
+          "x": 5299,
+          "y": 1190,
+          "z": 133
+        }
+      ],
+      "source_logs": [
+        "20",
+        "8",
+        "debug_1",
+        "47"
+      ],
+      "is_dup": false
+    },
+    {
+      "id": 5,
+      "piano_x": 4139,
+      "piano_y": 2044,
+      "piano_z": 137,
+      "musicbox_x": 4528,
+      "musicbox_y": 1763,
+      "musicbox_z": 161,
+      "chair_count": 7,
+      "core_door_count": 5,
+      "outdoor_door_count": 1,
+      "prop_door_count": 41,
+      "woodplane_count": 10,
+      "chairs": [
+        {
+          "x": 3560,
+          "y": 944,
+          "z": 204
+        },
+        {
+          "x": 3584,
+          "y": 1360,
+          "z": 134
+        },
+        {
+          "x": 4550,
+          "y": 521,
+          "z": 133
+        },
+        {
+          "x": 4276,
+          "y": 1160,
+          "z": 134
+        },
+        {
+          "x": 4970,
+          "y": 821,
+          "z": 203
+        },
+        {
+          "x": 4724,
+          "y": 1420,
+          "z": 134
+        },
+        {
+          "x": 5232,
+          "y": 1258,
+          "z": 203
+        }
+      ],
+      "source_logs": [
+        "21",
+        "1",
+        "debug_0 (2)"
+      ],
+      "is_dup": false
+    },
+    {
+      "id": 6,
+      "piano_x": 4441,
+      "piano_y": 476,
+      "piano_z": 137,
+      "musicbox_x": 4168,
+      "musicbox_y": 1703,
+      "musicbox_z": 161,
+      "chair_count": 6,
+      "core_door_count": 5,
+      "outdoor_door_count": 1,
+      "prop_door_count": 42,
+      "woodplane_count": 10,
+      "chairs": [
+        {
+          "x": 3498,
+          "y": 769,
+          "z": 133
+        },
+        {
+          "x": 3250,
+          "y": 1339,
+          "z": 203
+        },
+        {
+          "x": 3560,
+          "y": 1004,
+          "z": 204
+        },
+        {
+          "x": 3680,
+          "y": 1064,
+          "z": 134
+        },
+        {
+          "x": 3790,
+          "y": 1579,
+          "z": 133
+        },
+        {
+          "x": 4410,
+          "y": 1070,
+          "z": 203
+        }
+      ],
+      "source_logs": [
+        "6",
+        "7",
+        "debug_2 (1)"
+      ],
+      "is_dup": false
+    },
+    {
+      "id": 7,
+      "piano_x": 0.0,
+      "piano_y": 0.0,
+      "piano_z": 0.0,
+      "musicbox_x": 4768,
+      "musicbox_y": 1583,
+      "musicbox_z": 161,
+      "chair_count": 5,
+      "core_door_count": 5,
+      "outdoor_door_count": 1,
+      "prop_door_count": 54,
+      "woodplane_count": 10,
+      "chairs": [
+        {
+          "x": 3341,
+          "y": 490,
+          "z": 203
+        },
+        {
+          "x": 3527,
+          "y": 799,
+          "z": 203
+        },
+        {
+          "x": 3567,
+          "y": 796,
+          "z": 203
+        },
+        {
+          "x": 4361,
+          "y": 430,
+          "z": 203
+        },
+        {
+          "x": 5116,
+          "y": 980,
+          "z": 134
+        }
+      ],
+      "source_logs": [
+        "10",
+        "29",
+        "32",
+        "45",
+        "46",
+        "48",
+        "52",
+        "debug_0 (1)",
+        "debug_3 (1)"
+      ],
+      "is_dup": false
+    },
+    {
+      "id": 8,
+      "piano_x": 4924,
+      "piano_y": 1141,
+      "piano_z": 137,
+      "musicbox_x": 3683,
+      "musicbox_y": 752,
+      "musicbox_z": 161,
+      "chair_count": 9,
+      "core_door_count": 4,
+      "outdoor_door_count": 1,
+      "prop_door_count": 46,
+      "woodplane_count": 10,
+      "chairs": [
+        {
+          "x": 3224,
+          "y": 880,
+          "z": 204
+        },
+        {
+          "x": 3799,
+          "y": 470,
+          "z": 203
+        },
+        {
+          "x": 3562,
+          "y": 1469,
+          "z": 204
+        },
+        {
+          "x": 4150,
+          "y": 1039,
+          "z": 133
+        },
+        {
+          "x": 4218,
+          "y": 1069,
+          "z": 203
+        },
+        {
+          "x": 4513,
+          "y": 701,
+          "z": 203
+        },
+        {
+          "x": 4473,
+          "y": 704,
+          "z": 203
+        },
+        {
+          "x": 4460,
+          "y": 644,
+          "z": 134
+        },
+        {
+          "x": 4510,
+          "y": 990,
+          "z": 133
+        }
+      ],
+      "source_logs": [
+        "11",
+        "38",
+        "26",
+        "debug_9",
+        "debug_1 (2)"
+      ],
+      "is_dup": false
+    },
+    {
+      "id": 9,
+      "piano_x": 0.0,
+      "piano_y": 0.0,
+      "piano_z": 0.0,
+      "musicbox_x": 4048,
+      "musicbox_y": 1883,
+      "musicbox_z": 161,
+      "chair_count": 9,
+      "core_door_count": 5,
+      "outdoor_door_count": 1,
+      "prop_door_count": 39,
+      "woodplane_count": 10,
+      "chairs": [
+        {
+          "x": 3521,
+          "y": 490,
+          "z": 133
+        },
+        {
+          "x": 3701,
+          "y": 790,
+          "z": 203
+        },
+        {
+          "x": 4156,
+          "y": 680,
+          "z": 134
+        },
+        {
+          "x": 4067,
+          "y": 919,
+          "z": 133
+        },
+        {
+          "x": 4107,
+          "y": 916,
+          "z": 133
+        },
+        {
+          "x": 3910,
+          "y": 1519,
+          "z": 133
+        },
+        {
+          "x": 3782,
+          "y": 1812,
+          "z": 133
+        },
+        {
+          "x": 4350,
+          "y": 1370,
+          "z": 203
+        },
+        {
+          "x": 5022,
+          "y": 791,
+          "z": 203
+        }
+      ],
+      "source_logs": [
+        "13",
+        "14",
+        "2"
+      ],
+      "is_dup": false
+    },
+    {
+      "id": 10,
+      "piano_x": 4444,
+      "piano_y": 1621,
+      "piano_z": 137,
+      "musicbox_x": 4943,
+      "musicbox_y": 1352,
+      "musicbox_z": 161,
+      "chair_count": 6,
+      "core_door_count": 6,
+      "outdoor_door_count": 1,
+      "prop_door_count": 41,
+      "woodplane_count": 10,
+      "chairs": [
+        {
+          "x": 3230,
+          "y": 1230,
+          "z": 203
+        },
+        {
+          "x": 3370,
+          "y": 1699,
+          "z": 203
+        },
+        {
+          "x": 4302,
+          "y": 731,
+          "z": 133
+        },
+        {
+          "x": 4428,
+          "y": 1022,
+          "z": 203
+        },
+        {
+          "x": 4607,
+          "y": 1339,
+          "z": 133
+        },
+        {
+          "x": 4647,
+          "y": 1336,
+          "z": 133
+        }
+      ],
+      "source_logs": [
+        "15",
+        "49",
+        "41",
+        "debug_4",
+        "debug_5",
+        "debug_7",
+        "debug_8"
+      ],
+      "is_dup": false
+    },
+    {
+      "id": 11,
+      "piano_x": 4499,
+      "piano_y": 2104,
+      "piano_z": 137,
+      "musicbox_x": 4763,
+      "musicbox_y": 1352,
+      "musicbox_z": 161,
+      "chair_count": 10,
+      "core_door_count": 5,
+      "outdoor_door_count": 1,
+      "prop_door_count": 40,
+      "woodplane_count": 10,
+      "chairs": [
+        {
+          "x": 3190,
+          "y": 1099,
+          "z": 203
+        },
+        {
+          "x": 4229,
+          "y": 998,
+          "z": 204
+        },
+        {
+          "x": 4230,
+          "y": 970,
+          "z": 133
+        },
+        {
+          "x": 4541,
+          "y": 767,
+          "z": 133
+        },
+        {
+          "x": 4544,
+          "y": 807,
+          "z": 133
+        },
+        {
+          "x": 4690,
+          "y": 750,
+          "z": 133
+        },
+        {
+          "x": 4699,
+          "y": 853,
+          "z": 203
+        },
+        {
+          "x": 4696,
+          "y": 813,
+          "z": 203
+        },
+        {
+          "x": 5232,
+          "y": 1258,
+          "z": 203
+        },
+        {
+          "x": 4480,
+          "y": 2236,
+          "z": 204
+        }
+      ],
+      "source_logs": [
+        "22"
+      ],
+      "is_dup": false
+    },
+    {
+      "id": 12,
+      "piano_x": 3536,
+      "piano_y": 239,
+      "piano_z": 67,
+      "musicbox_x": 4228,
+      "musicbox_y": 1283,
+      "musicbox_z": 91,
+      "chair_count": 2,
+      "core_door_count": 1,
+      "outdoor_door_count": 1,
+      "prop_door_count": 8,
+      "woodplane_count": 4,
+      "chairs": [
+        {
+          "x": 3550,
+          "y": 1159,
+          "z": 63
+        },
+        {
+          "x": 3870,
+          "y": 1070,
+          "z": 63
+        }
+      ],
+      "source_logs": [
+        "23",
+        "27"
+      ],
+      "is_dup": false
+    },
+    {
+      "id": 13,
+      "piano_x": 3776,
+      "piano_y": 839,
+      "piano_z": 137,
+      "musicbox_x": 4288,
+      "musicbox_y": 1583,
+      "musicbox_z": 161,
+      "chair_count": 3,
+      "core_door_count": 2,
+      "outdoor_door_count": 1,
+      "prop_door_count": 6,
+      "woodplane_count": 4,
+      "chairs": [
+        {
+          "x": 4150,
+          "y": 1039,
+          "z": 133
+        },
+        {
+          "x": 4010,
+          "y": 1181,
+          "z": 133
+        },
+        {
+          "x": 4510,
+          "y": 990,
+          "z": 133
+        }
+      ],
+      "source_logs": [
+        "24"
+      ],
+      "is_dup": false
+    },
+    {
+      "id": 14,
+      "piano_x": 3599,
+      "piano_y": 1624,
+      "piano_z": 137,
+      "musicbox_x": 3752,
+      "musicbox_y": 637,
+      "musicbox_z": 231,
+      "chair_count": 8,
+      "core_door_count": 4,
+      "outdoor_door_count": 1,
+      "prop_door_count": 54,
+      "woodplane_count": 10,
+      "chairs": [
+        {
+          "x": 3284,
+          "y": 1060,
+          "z": 204
+        },
+        {
+          "x": 3461,
+          "y": 910,
+          "z": 133
+        },
+        {
+          "x": 3590,
+          "y": 1110,
+          "z": 203
+        },
+        {
+          "x": 3630,
+          "y": 1330,
+          "z": 203
+        },
+        {
+          "x": 4049,
+          "y": 1178,
+          "z": 204
+        },
+        {
+          "x": 4572,
+          "y": 1018,
+          "z": 203
+        },
+        {
+          "x": 4213,
+          "y": 1661,
+          "z": 133
+        },
+        {
+          "x": 4173,
+          "y": 1664,
+          "z": 133
+        }
+      ],
+      "source_logs": [
+        "28",
+        "50"
+      ],
+      "is_dup": false
+    },
+    {
+      "id": 15,
+      "piano_x": 4141,
+      "piano_y": 476,
+      "piano_z": 207,
+      "musicbox_x": 4652,
+      "musicbox_y": 877,
+      "musicbox_z": 161,
+      "chair_count": 7,
+      "core_door_count": 5,
+      "outdoor_door_count": 1,
+      "prop_door_count": 41,
+      "woodplane_count": 10,
+      "chairs": [
+        {
+          "x": 3670,
+          "y": 1219,
+          "z": 133
+        },
+        {
+          "x": 4247,
+          "y": 559,
+          "z": 133
+        },
+        {
+          "x": 4287,
+          "y": 556,
+          "z": 133
+        },
+        {
+          "x": 4216,
+          "y": 800,
+          "z": 204
+        },
+        {
+          "x": 3578,
+          "y": 1531,
+          "z": 134
+        },
+        {
+          "x": 3430,
+          "y": 1699,
+          "z": 203
+        },
+        {
+          "x": 4530,
+          "y": 590,
+          "z": 133
+        }
+      ],
+      "source_logs": [
+        "30",
+        "3",
+        "debug_12"
+      ],
+      "is_dup": false
+    },
+    {
+      "id": 16,
+      "piano_x": 4864,
+      "piano_y": 1681,
+      "piano_z": 137,
+      "musicbox_x": 4408,
+      "musicbox_y": 1703,
+      "musicbox_z": 161,
+      "chair_count": 7,
+      "core_door_count": 5,
+      "outdoor_door_count": 1,
+      "prop_door_count": 35,
+      "woodplane_count": 10,
+      "chairs": [
+        {
+          "x": 3678,
+          "y": 1249,
+          "z": 203
+        },
+        {
+          "x": 3902,
+          "y": 1212,
+          "z": 203
+        },
+        {
+          "x": 4031,
+          "y": 1278,
+          "z": 133
+        },
+        {
+          "x": 4484,
+          "y": 1060,
+          "z": 134
+        },
+        {
+          "x": 3922,
+          "y": 1829,
+          "z": 204
+        },
+        {
+          "x": 4759,
+          "y": 1130,
+          "z": 133
+        },
+        {
+          "x": 4699,
+          "y": 1490,
+          "z": 203
+        }
+      ],
+      "source_logs": [
+        "33",
+        "debug_3"
+      ],
+      "is_dup": false
+    },
+    {
+      "id": 17,
+      "piano_x": 0.0,
+      "piano_y": 0.0,
+      "piano_z": 0.0,
+      "musicbox_x": 4763,
+      "musicbox_y": 1292,
+      "musicbox_z": 21,
+      "chair_count": 3,
+      "core_door_count": 2,
+      "outdoor_door_count": 1,
+      "prop_door_count": 11,
+      "woodplane_count": 4,
+      "chairs": [
+        {
+          "x": 3950,
+          "y": 810,
+          "z": -7
+        },
+        {
+          "x": 4361,
+          "y": 370,
+          "z": -7
+        },
+        {
+          "x": 4301,
+          "y": 1030,
+          "z": -7
+        }
+      ],
+      "source_logs": [
+        "36",
+        "39"
+      ],
+      "is_dup": false
+    },
+    {
+      "id": 18,
+      "piano_x": 0.0,
+      "piano_y": 0.0,
+      "piano_z": 0.0,
+      "musicbox_x": 4583,
+      "musicbox_y": 1292,
+      "musicbox_z": 161,
+      "chair_count": 3,
+      "core_door_count": 3,
+      "outdoor_door_count": 1,
+      "prop_door_count": 15,
+      "woodplane_count": 6,
+      "chairs": [
+        {
+          "x": 3761,
+          "y": 1487,
+          "z": 203
+        },
+        {
+          "x": 3764,
+          "y": 1527,
+          "z": 203
+        },
+        {
+          "x": 4530,
+          "y": 770,
+          "z": 133
+        }
+      ],
+      "source_logs": [
+        "37",
+        "40"
+      ],
+      "is_dup": false
+    },
+    {
+      "id": 19,
+      "piano_x": 3716,
+      "piano_y": 899,
+      "piano_z": 67,
+      "musicbox_x": 4763,
+      "musicbox_y": 1292,
+      "musicbox_z": 21,
+      "chair_count": 7,
+      "core_door_count": 4,
+      "outdoor_door_count": 1,
+      "prop_door_count": 25,
+      "woodplane_count": 6,
+      "chairs": [
+        {
+          "x": 3950,
+          "y": 810,
+          "z": -7
+        },
+        {
+          "x": 4361,
+          "y": 370,
+          "z": -7
+        },
+        {
+          "x": 4590,
+          "y": 670,
+          "z": 63
+        },
+        {
+          "x": 4850,
+          "y": 281,
+          "z": 63
+        },
+        {
+          "x": 4121,
+          "y": 1367,
+          "z": 63
+        },
+        {
+          "x": 4124,
+          "y": 1407,
+          "z": 63
+        },
+        {
+          "x": 4301,
+          "y": 1030,
+          "z": -7
+        }
+      ],
+      "source_logs": [
+        "42",
+        "31"
+      ],
+      "is_dup": false
+    },
+    {
+      "id": 20,
+      "piano_x": 4984,
+      "piano_y": 781,
+      "piano_z": 67,
+      "musicbox_x": 4288,
+      "musicbox_y": 1343,
+      "musicbox_z": 91,
+      "chair_count": 4,
+      "core_door_count": 1,
+      "outdoor_door_count": 1,
+      "prop_door_count": 3,
+      "woodplane_count": 4,
+      "chairs": [
+        {
+          "x": 3950,
+          "y": 450,
+          "z": 63
+        },
+        {
+          "x": 4610,
+          "y": 161,
+          "z": 63
+        },
+        {
+          "x": 4190,
+          "y": 761,
+          "z": 63
+        },
+        {
+          "x": 4009,
+          "y": 1062,
+          "z": 63
+        }
+      ],
+      "source_logs": [
+        "debug_0"
+      ],
+      "is_dup": false
+    },
+    {
+      "id": 21,
+      "piano_x": 3181,
+      "piano_y": 1136,
+      "piano_z": 207,
+      "musicbox_x": 4103,
+      "musicbox_y": 1712,
+      "musicbox_z": 161,
+      "chair_count": 7,
+      "core_door_count": 5,
+      "outdoor_door_count": 1,
+      "prop_door_count": 44,
+      "woodplane_count": 10,
+      "chairs": [
+        {
+          "x": 4061,
+          "y": 670,
+          "z": 133
+        },
+        {
+          "x": 3499,
+          "y": 1453,
+          "z": 133
+        },
+        {
+          "x": 3496,
+          "y": 1413,
+          "z": 133
+        },
+        {
+          "x": 4520,
+          "y": 464,
+          "z": 134
+        },
+        {
+          "x": 4127,
+          "y": 1099,
+          "z": 133
+        },
+        {
+          "x": 4167,
+          "y": 1096,
+          "z": 133
+        },
+        {
+          "x": 4396,
+          "y": 1400,
+          "z": 204
+        }
+      ],
+      "source_logs": [
+        "34",
+        "35",
+        "debug_2",
+        "4",
+        "debug_1 (1)",
+        "debug_6"
+      ],
+      "is_dup": false
+    },
+    {
+      "id": 22,
+      "piano_x": 3896,
+      "piano_y": 959,
+      "piano_z": 137,
+      "musicbox_x": 4048,
+      "musicbox_y": 1883,
+      "musicbox_z": 161,
+      "chair_count": 1,
+      "core_door_count": 2,
+      "outdoor_door_count": 1,
+      "prop_door_count": 16,
+      "woodplane_count": 3,
+      "chairs": [
+        {
+          "x": 3524,
+          "y": 1240,
+          "z": 134
+        }
+      ],
+      "source_logs": [
+        "44"
+      ],
+      "is_dup": false
+    },
+    {
+      "id": 23,
+      "piano_x": 0.0,
+      "piano_y": 0.0,
+      "piano_z": 0.0,
+      "musicbox_x": 4763,
+      "musicbox_y": 1232,
+      "musicbox_z": 161,
+      "chair_count": 4,
+      "core_door_count": 2,
+      "outdoor_door_count": 1,
+      "prop_door_count": 9,
+      "woodplane_count": 5,
+      "chairs": [
+        {
+          "x": 4099,
+          "y": 1010,
+          "z": 133
+        },
+        {
+          "x": 3990,
+          "y": 1310,
+          "z": 133
+        },
+        {
+          "x": 4790,
+          "y": 461,
+          "z": 203
+        },
+        {
+          "x": 4340,
+          "y": 1064,
+          "z": 204
+        }
+      ],
+      "source_logs": [
+        "25"
+      ],
+      "is_dup": false
+    }
+  ]
+}
