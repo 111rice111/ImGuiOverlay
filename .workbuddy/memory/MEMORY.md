@@ -45,7 +45,47 @@ Git commit: ff6784e
 
 ---
 
-## ★ v2.9-stable — 当前稳定版 (2026-06-27 18:47)
+## ★ v2.34-stable — 修复"评分18却匹配地图1"Bug (2026-07-01 12:37)
+
+二进制: `E:\ImGuiOverlay\overlay-v2.34-stable` (MD5: 17caeb5bfd8e065ebafdda40db76ba51)
+
+### v2.34 关键修复
+- **Tier 1 音乐盒匹配** 改用 `g_fingerprint_db` 搜索 + `ExecuteMapSwitch(fp_id)` 解析，不再直接拿 `g_musicbox_db[].mapIndex`
+- **LOCKED 评分纠正**: `g_current_map_index >= 0` 时若高分(≥65)指向不同地图 → 立即切换
+- 删除旧的 60帧/3秒 recheck 定时器
+
+## ★ v2.35-debug — 诊断版本 (2026-07-01 13:22)
+
+二进制: `E:\ImGuiOverlay\overlay-v2.35-debug` (MD5: 98faedc09362b1ae43abd2270f2c42d6)
+Git commit: 07dc6462
+
+### v2.35 新增
+- `TryAutoDetectMap` 全路径诊断日志 → `/data/local/bin/mapdetect.log`
+- 记录: 音乐盒检测、fp_candidates、best_fp 选择、g_mapidx_from_fp_id 映射、ExecuteMapSwitch 结果
+- 启动时 dump 完整 fp→g_all_maps 映射表
+- LOCKED 评分路径: 分数、fp_id、tgt、切换/跳过原因
+
+---
+
+## ★ v2.16-stable — 当前稳定版 (2026-06-30 15:10)
+
+二进制: `E:\ImGuiOverlay\overlay-v2.16-stable` (MD5: b5575c306182e8e5ee74fda6d0082c9e)
+Git commit: c36341de, tag: v2.16-stable
+
+### v2.16 vs v2.9 差异
+| 修复 | 说明 |
+|------|------|
+| 板子扫描 | `is_woodplane` 加回主过滤器 + 独立分支 |
+| 自身检测 | 绕过 `self_is_survivor`（GM::自身指向错误对象） |
+| 触摸校准 | A=1.00334,B=0,C=-1.67,D=0,E=-1,F=2400 |
+| 判定框 | 钻石切面: 极淡银白+三层光晕+银边+四角亮点 |
+| 诊断面板 | 实时显示监管者/板子/判区/冷却 |
+
+### v2.16 已知问题
+- GlobalMemory::自身 指向错误对象（self_is_survivor 已注释）
+- 诊断面板需正式发布前隐藏
+
+## ★ v2.9-stable — 上一稳定版 (2026-06-27 18:47)
 
 二进制: `E:\ImGuiOverlay\overlay-v2.9-stable` (MD5: 6425eaa414dc76d6fad72c662d599400)
 源码备份: `E:\ImGuiOverlay\draw_Gui.cpp-v2.9-backup`

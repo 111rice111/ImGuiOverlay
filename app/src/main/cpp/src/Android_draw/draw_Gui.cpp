@@ -17,8 +17,10 @@
 #include <sys/ioctl.h>
 #include <sys/stat.h>
 #include <linux/input.h>
+#include <linux/uinput.h>
 #include <cstring>
 #include <linux/input.h>
+#include <linux/uinput.h>
 #include <mutex>
 #include <sched.h>
 #include <string>
@@ -129,6 +131,10 @@ static std::vector<ImU32> g_path_colors;              // 每条路径颜色
 static std::vector<std::vector<std::vector<std::vector<Vector3A>>>> g_saved_paths_by_map;
 static int g_last_paths_map_idx = -1;
 static int g_last_paths_floor_idx = -1;
+// ★ P2 路径顶点缓存
+static std::vector<std::vector<ImVec2>> g_path_vertex_cache;
+static bool g_path_cache_dirty = true;
+static float g_last_cache_map_pos_x = -1, g_last_cache_map_pos_y = -1, g_last_cache_map_size = -1;
 static int g_path_edit_mode = 0;
 // 手动确认保存
 static std::vector<Vector3A> g_pending_path;
@@ -167,7 +173,7 @@ static const int DIRTY_FLUSH_INTERVAL = 1800; // 每30秒(@60fps)强制刷写一
 // 标记出口数据为脏
 static void MarkExitsDirty() { g_dirty_exits = true; g_dirty_flush_counter = DIRTY_FLUSH_INTERVAL; }
 // 标记路径数据为脏
-static void MarkPathsDirty() { g_dirty_paths = true; g_dirty_flush_counter = DIRTY_FLUSH_INTERVAL; }
+static void MarkPathsDirty() { g_dirty_paths = true; g_dirty_flush_counter = DIRTY_FLUSH_INTERVAL; g_path_cache_dirty = true; }
 static void FlushDirtyData();  // 前向声明，函数体在 g_current_map_index 之后
 
 struct Notification {
@@ -452,6 +458,7 @@ bool g_map_enabled = false;
 float g_map_display_size = 800.0f;
 
 static bool  g_use_calib = true;
+static bool  g_show_map_status = true;       // 地图识别状态浮窗开关
 static std::string g_save_notification;
 static float g_notification_timer = 0.0f;
 
@@ -482,7 +489,14 @@ static const MapConfig& GetActiveMapConfig() {
     static MapConfig s_fallback;
     if (g_current_map_index >= 0 && g_current_map_index < (int)g_all_maps.size() &&
         g_current_floor_index >= 0 && g_current_floor_index < (int)g_all_maps[g_current_map_index].size()) {
-        return g_all_maps[g_current_map_index][g_current_floor_index];
+        auto& cfg = g_all_maps[g_current_map_index][g_current_floor_index];
+        float ww = cfg.maxX - cfg.minX, wh = cfg.maxY - cfg.minY;
+        // ★ P1 防卡死: 二楼未校准时(min==max 或范围极小)回退到一楼配置
+        if ((ww < 10.0f || wh < 10.0f) && g_current_floor_index > 0) {
+            auto& f0 = g_all_maps[g_current_map_index][0];
+            if (f0.maxX - f0.minX >= 10.0f) return f0;
+        }
+        return cfg;
     }
     s_fallback = MapConfig{};
     s_fallback.scaleX = g_map_scale_x; s_fallback.scaleY = g_map_scale_y;
@@ -582,7 +596,6 @@ static const std::vector<std::pair<std::string, std::string>> g_prop_name_map = 
 void scan_mimic_roles() {
     if (pid <= 0) return;
 
-    PhysicalAddressCache local_mimic_cache;
     char buffer[4096];
     char filename[256], line[1024];
     snprintf(filename, sizeof(filename), "/proc/%d/maps", pid.load());
@@ -603,7 +616,6 @@ void scan_mimic_roles() {
                 for (int j = 0; j < pageCount; j++) {
                     uint64_t currAddr = addrStart + (j * 4096);
 
-                    if (!local_mimic_cache.is_address_valid(currAddr)) continue;
                     if (!vm_readv(currAddr, buffer, 4096)) continue;
 
                     for (int i = 0; i <= 4096 - 0x20; i++) {
@@ -661,16 +673,37 @@ void AutoWoodCheck();
 static bool wood_enabled = false;
 static float wood_touch_x = 2450.0f;
 static float wood_touch_y = 1050.0f;
+static float wood_offset_x = 0.0f;
+static float wood_offset_y = 0.0f;
 static float wood_length = 18.0f;
 static float wood_width  = 12.0f;
+static bool  wood_show_params = false;
+static bool  show_wood_rect = false;
+static Vector3A g_wood_viz_pos;
+static float g_wood_viz_angle = 0;
+static bool  g_wood_viz_valid = false;
 static float wood_trigger_dist = 25.0f;
+static float wood_cooldown_dur = 1.0f;
+static bool  g_was_hunter_inside = false;
+static float g_wood_cooldown = 0.0f;
 static bool show_touch_point = false;
+static bool g_show_wood_diag = false;       // 木诊断浮窗开关
+static float g_last_touch_x = 0, g_last_touch_y = 0;
+static float g_last_touch_time = 0;
 static bool g_MimicModeEnabled = false;
 
 static int   g_touch_max_x = 23999;
 static int   g_touch_max_y = 33919;
 static char  g_touch_path[128] = {0};
 static bool  g_touch_ready = false;
+
+// 四点校准: 屏幕四角注入触摸, 用户输入指针位置坐标
+static int   g_calib_step = 0;
+static float g_calib_inj[4][2];
+static float g_calib_obs_buf[4][2];
+static bool  g_calib_done = true;  // 硬编码校准值
+static float g_calib_A=1.00334f,g_calib_B=0,g_calib_C=-1.67224f;
+static float g_calib_D=0,g_calib_E=-1,g_calib_F=2400;
 
 static ImColor g_BoxColor_Survivor = ImColor(50, 255, 50, 255);
 static ImColor g_BoxColor_Hunter   = ImColor(255, 50, 50, 255);
@@ -902,12 +935,20 @@ static void LoadConfig() {
 
     // Tab 2: 自动盖板
     getBool("wood_enabled", wood_enabled);
+    getBool("show_wood_diag", g_show_wood_diag);
     getBool("show_touch_point", show_touch_point);
     getFloat("wood_touch_x", wood_touch_x);
     getFloat("wood_touch_y", wood_touch_y);
     getFloat("wood_trigger_dist", wood_trigger_dist);
+    getFloat("wood_cooldown_dur", wood_cooldown_dur);
     getFloat("wood_length", wood_length);
     getFloat("wood_width", wood_width);
+    getBool("wood_show_params", wood_show_params);
+    getBool("show_wood_rect", show_wood_rect);
+    getFloat("wood_offset_x", wood_offset_x); getFloat("wood_offset_y", wood_offset_y);
+    getFloat("calib_A", g_calib_A); getFloat("calib_B", g_calib_B); getFloat("calib_C", g_calib_C);
+    getFloat("calib_D", g_calib_D); getFloat("calib_E", g_calib_E); getFloat("calib_F", g_calib_F);
+    getBool("calib_done", g_calib_done);
 
     // Tab 3: 模仿者
     getBool("show_mimic_overlay", show_mimic_overlay);
@@ -922,6 +963,7 @@ static void LoadConfig() {
     getFloat("g_saved_path_opacity", g_saved_path_opacity);
     getFloat("g_path_fade_dist", g_path_fade_dist);
     getBool("g_use_calib", g_use_calib);
+    getBool("g_show_map_status", g_show_map_status);
     getBool("g_map_flip_x", g_map_flip_x);
     getBool("g_map_flip_y", g_map_flip_y);
 
@@ -1035,10 +1077,22 @@ static void SaveConfig() {
 
     // Tab 2: 自动盖板
     file << "wood_enabled=" << wood_enabled << "\n";
+    file << "show_wood_diag=" << g_show_wood_diag << "\n";
     file << "show_touch_point=" << show_touch_point << "\n";
     file << "wood_touch_x=" << wood_touch_x << "\n";
     file << "wood_touch_y=" << wood_touch_y << "\n";
     file << "wood_trigger_dist=" << wood_trigger_dist << "\n";
+    file << "wood_cooldown_dur=" << wood_cooldown_dur << "\n";
+    file << "wood_length=" << wood_length << "\n";
+    file << "wood_width=" << wood_width << "\n";
+    file << "wood_show_params=" << wood_show_params << "\n";
+    file << "show_wood_rect=" << show_wood_rect << "\n";
+    file << "wood_offset_x=" << wood_offset_x << "\n";
+    file << "wood_offset_y=" << wood_offset_y << "\n";
+    file << "calib_A=" << g_calib_A << "\n"; file << "calib_B=" << g_calib_B << "\n";
+    file << "calib_C=" << g_calib_C << "\n"; file << "calib_D=" << g_calib_D << "\n";
+    file << "calib_E=" << g_calib_E << "\n"; file << "calib_F=" << g_calib_F << "\n";
+    file << "calib_done=" << g_calib_done << "\n";
     file << "wood_length=" << wood_length << "\n";
     file << "wood_width=" << wood_width << "\n";
 
@@ -1055,6 +1109,7 @@ static void SaveConfig() {
     file << "g_saved_path_opacity=" << g_saved_path_opacity << "\n";
     file << "g_path_fade_dist=" << g_path_fade_dist << "\n";
     file << "g_use_calib=" << g_use_calib << "\n";
+    file << "g_show_map_status=" << g_show_map_status << "\n";
     file << "g_map_flip_x=" << g_map_flip_x << "\n";
     file << "g_map_flip_y=" << g_map_flip_y << "\n";
 
@@ -1197,13 +1252,17 @@ void SavePlayerPathsToJSON(int mapIdx, int floorIdx) {
 
 
 // ========== 保存场景物体（钢琴+凳子）到 JSON ==========
-void SaveSceneObjectsToJSON(int mapIdx, int floorIdx) {
+// ★ 同步结果结构体 — 用于详细通知
+struct SyncResult { int musicbox = 0; int piano = 0; int chairs = 0; };
+
+SyncResult SaveSceneObjectsToJSON(int mapIdx, int floorIdx) {
+    SyncResult sr;
     std::string json_path = MAPS_ROOT "map_config.json";
     std::ifstream ifs(json_path);
     json j;
-    if (ifs) ifs >> j; else return;
+    if (ifs) ifs >> j; else return sr;
 
-    if (!j.contains("maps")) return;
+    if (!j.contains("maps")) return sr;
 
     for (auto& m : j["maps"]) {
         int mf = m.value("floor", 0);
@@ -1214,17 +1273,28 @@ void SaveSceneObjectsToJSON(int mapIdx, int floorIdx) {
             }
         }
         if (mi == mapIdx && mf == floorIdx) {
+            // ★ 音乐盒
+            if (g_detected_musicbox_pos.X != 0.0f || g_detected_musicbox_pos.Y != 0.0f) {
+                m["musicbox_x"] = g_detected_musicbox_pos.X;
+                m["musicbox_y"] = g_detected_musicbox_pos.Y;
+                m["musicbox_z"] = g_detected_musicbox_pos.Z;
+                sr.musicbox = 1;
+            }
+            // ★ 钢琴
             if (g_detected_piano_pos.X != 0.0f || g_detected_piano_pos.Y != 0.0f) {
                 m["piano_x"] = g_detected_piano_pos.X;
                 m["piano_y"] = g_detected_piano_pos.Y;
                 m["piano_z"] = g_detected_piano_pos.Z;
+                sr.piano = 1;
             }
+            // ★ 凳子
             m["chairs"] = json::array();
             for (auto& chair : g_detected_chairs) {
                 json c;
                 c["x"] = chair.X; c["y"] = chair.Y; c["z"] = chair.Z;
                 m["chairs"].push_back(c);
             }
+            sr.chairs = (int)g_detected_chairs.size();
             break;
         }
     }
@@ -1234,6 +1304,7 @@ void SaveSceneObjectsToJSON(int mapIdx, int floorIdx) {
     // 重新加载数据库
     g_piano_db.clear();
     g_chair_db.clear();
+    g_musicbox_db.clear();
     for (auto& m : j["maps"]) {
         int mi = -1;
         for (int i = 0; i < (int)g_all_maps.size(); i++) {
@@ -1242,12 +1313,21 @@ void SaveSceneObjectsToJSON(int mapIdx, int floorIdx) {
             }
         }
         if (mi < 0) continue;
+        // 音乐盒
+        if (m.contains("musicbox_x") && m.contains("musicbox_y")) {
+            MusicboxKey mb;
+            mb.x = m["musicbox_x"]; mb.y = m["musicbox_y"];
+            mb.z = m.value("musicbox_z", 0.0f); mb.mapIndex = mi;
+            g_musicbox_db.push_back(mb);
+        }
+        // 钢琴
         if (m.contains("piano_x") && m.contains("piano_y")) {
             PianoKey pk;
             pk.x = m["piano_x"]; pk.y = m["piano_y"];
             pk.z = m.value("piano_z", 0.0f); pk.mapIndex = mi;
             g_piano_db.push_back(pk);
         }
+        // 凳子
         if (m.contains("chairs")) {
             for (auto& c : m["chairs"]) {
                 ChairKey ck;
@@ -1257,6 +1337,7 @@ void SaveSceneObjectsToJSON(int mapIdx, int floorIdx) {
             }
         }
     }
+    return sr;
 }
 
 static std::unordered_map<std::string, bool> skipClassCache;
@@ -1739,6 +1820,9 @@ void UpdateCurrentFloor() {
     auto& floors = g_all_maps[g_current_map_index];
     if (floors.empty()) return;
 
+    // 手动模式下不自动切换楼层，尊重用户的手动选择
+    if (!g_map_auto_detect) return;
+
     int targetFloor = GetFloorFromPlayerZ(Z);
 
     if (targetFloor >= (int)floors.size()) return;
@@ -1758,11 +1842,14 @@ void UpdateCurrentFloor() {
     }
 }
 // ========== 异步纹理加载 ==========
-struct PendingTex { int map, floor; unsigned char* px; int w, h; bool ready, fail, uploaded; };
+struct PendingTex { int map, floor; unsigned char* px; int w, h; bool ready, fail, uploaded; GLuint tex; int upload_row; };
 static std::vector<PendingTex> g_pending;
 static std::mutex g_pending_mtx;
 static std::thread g_loader;
 static bool g_loader_on = false;
+
+// ★ P3: 纹理分帧上传 — 每帧最多上传 N 行，避免单个大纹理上传导致卡顿
+static const int TEX_UPLOAD_ROWS_PER_FRAME = 256;
 
 static void LoaderLoop() {
     while (g_loader_on) {
@@ -1794,18 +1881,39 @@ static void FlushTextures() {
     std::lock_guard<std::mutex> lk(g_pending_mtx);
     for (size_t i = 0; i < g_pending.size(); ) {
         auto& t = g_pending[i]; if (!t.ready) { i++; continue; }
-        if (g_map_textures[t.map][t.floor]) { glDeleteTextures(1, &g_map_textures[t.map][t.floor]); g_map_textures[t.map][t.floor] = 0; }
-        GLuint tex = 0; glGenTextures(1, &tex);
-        if (!tex) { t.fail = true; i++; continue; }
-        glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, tex);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, t.w, t.h, 0, GL_RGBA, GL_UNSIGNED_BYTE, t.px);
-        if (glGetError() != GL_NO_ERROR) { glDeleteTextures(1, &tex); stbi_image_free(t.px); t.fail = true; i++; continue; }
-        g_map_textures[t.map][t.floor] = tex;
-        g_map_texture_w[t.map][t.floor] = t.w;
-        g_map_texture_h[t.map][t.floor] = t.h;
-        stbi_image_free(t.px); t.ready = false; t.uploaded = true; i++;
+        // ★ P3: 大纹理分帧上传，每帧256行，避免单帧卡顿
+        if (t.w > 1024 || t.h > 1024) {
+            if (t.upload_row == 0) {
+                if (g_map_textures[t.map][t.floor]) { glDeleteTextures(1, &g_map_textures[t.map][t.floor]); g_map_textures[t.map][t.floor] = 0; }
+                glGenTextures(1, &t.tex);
+                if (!t.tex) { t.fail = true; i++; continue; }
+                glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, t.tex);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, t.w, t.h, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+            }
+            int end = std::min(t.upload_row + 256, t.h);
+            glBindTexture(GL_TEXTURE_2D, t.tex);
+            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, t.upload_row, t.w, end - t.upload_row, GL_RGBA, GL_UNSIGNED_BYTE, t.px + t.upload_row * t.w * 4);
+            t.upload_row = end;
+            if (t.upload_row >= t.h) {
+                g_map_textures[t.map][t.floor] = t.tex;
+                g_map_texture_w[t.map][t.floor] = t.w; g_map_texture_h[t.map][t.floor] = t.h;
+                stbi_image_free(t.px); t.px = nullptr; t.uploaded = true;
+            } else { i++; continue; }
+        } else {
+            if (g_map_textures[t.map][t.floor]) { glDeleteTextures(1, &g_map_textures[t.map][t.floor]); g_map_textures[t.map][t.floor] = 0; }
+            GLuint tex = 0; glGenTextures(1, &tex);
+            if (!tex) { t.fail = true; i++; continue; }
+            glActiveTexture(GL_TEXTURE0); glBindTexture(GL_TEXTURE_2D, tex);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, t.w, t.h, 0, GL_RGBA, GL_UNSIGNED_BYTE, t.px);
+            if (glGetError() != GL_NO_ERROR) { glDeleteTextures(1, &tex); stbi_image_free(t.px); t.fail = true; i++; continue; }
+            g_map_textures[t.map][t.floor] = tex; g_map_texture_w[t.map][t.floor] = t.w; g_map_texture_h[t.map][t.floor] = t.h;
+            stbi_image_free(t.px); t.px = nullptr; t.uploaded = true;
+        }
+        i++;
     }
     g_pending.erase(std::remove_if(g_pending.begin(), g_pending.end(), [](const PendingTex& t) { return t.uploaded || t.fail; }), g_pending.end());
 }
@@ -1878,6 +1986,93 @@ void TryAutoDetectMap(const std::vector<DataStruct>& data) {
                 Vector3A cp = getObjectCoordinates(item.objcoor, false);
                 if (isValidCoordinate(cp) && (fabsf(cp.X) > 1.0f || fabsf(cp.Y) > 1.0f)) g_detected_chairs.push_back(cp);
             }
+        }
+    }
+    
+    // ★★★ 音乐盒精确匹配 — 第一优先级 ★★★
+    // v2.34: 使用 g_fingerprint_db 搜索匹配指纹，通过 ExecuteMapSwitch() 正确解析 fp_id→g_all_maps
+    if (musicbox_found && g_detected_musicbox_pos.X != 0) {
+        // 收集所有匹配的指纹ID (XYZ三轴容差5)
+        struct FpCandidate { int fp_id; float dist; };
+        std::vector<FpCandidate> fp_candidates;
+        for (auto& fp : g_fingerprint_db) {
+            if (!fp.valid || fp.musicBox.X == 0.0f) continue;
+            float dx = g_detected_musicbox_pos.X - fp.musicBox.X;
+            float dy = g_detected_musicbox_pos.Y - fp.musicBox.Y;
+            float dz = g_detected_musicbox_pos.Z - fp.musicBox.Z;
+            float d = sqrtf(dx*dx + dy*dy + dz*dz);
+            if (d < 5.0f) fp_candidates.push_back({fp.id, d});
+        }
+        
+        if (!fp_candidates.empty()) {
+            int best_fp = -1;
+            if (fp_candidates.size() == 1) {
+                // ★ 唯一指纹 — 直接命中
+                best_fp = fp_candidates[0].fp_id;
+            } else {
+                // ★ 同名音乐盒多指纹 — 用钢琴/凳子区分
+                // 优先钢琴精确匹配（直接从指纹DB查询）
+                if (piano_found && g_detected_piano_pos.X != 0) {
+                    for (auto& fc : fp_candidates) {
+                        for (auto& fp2 : g_fingerprint_db) {
+                            if (fp2.id != fc.fp_id || !fp2.valid || fp2.pianos.empty()) continue;
+                            for (auto& pkpos : fp2.pianos) {
+                                float d = sqrtf((g_detected_piano_pos.X - pkpos.X)*(g_detected_piano_pos.X - pkpos.X)
+                                              + (g_detected_piano_pos.Y - pkpos.Y)*(g_detected_piano_pos.Y - pkpos.Y));
+                                if (d < 8.0f) { best_fp = fc.fp_id; break; }
+                            }
+                            if (best_fp >= 0) break;
+                        }
+                        if (best_fp >= 0) break;
+                    }
+                }
+                // 钢琴不匹配 → 用凳子数量匹配
+                if (best_fp < 0) {
+                    int det_c = (int)g_detected_chairs.size();
+                    int best_diff = 999;
+                    for (auto& fc : fp_candidates) {
+                        for (auto& fp2 : g_fingerprint_db) {
+                            if (fp2.id != fc.fp_id || !fp2.valid) continue;
+                            int diff = abs((int)fp2.stools.size() - det_c);
+                            if (diff < best_diff) { best_diff = diff; best_fp = fc.fp_id; }
+                        }
+                    }
+                }
+            }
+            
+            if (best_fp >= 0) {
+                // 通过 ExecuteMapSwitch 正确解析 fp_id → g_all_maps
+                int tgt_check = (best_fp < (int)g_mapidx_from_fp_id.size()) ? g_mapidx_from_fp_id[best_fp] : -1;
+                if (tgt_check >= 0 && tgt_check < (int)g_all_maps.size() && tgt_check != g_current_map_index) {
+                    ExecuteMapSwitch(best_fp);
+                    g_detect_phase = MapDetectPhase::LOCKED;
+                    snprintf(g_map_detect_debug, sizeof(g_map_detect_debug), "Musicbox: (%.0f,%.0f,%.0f) fp=%d -> %s",
+                        g_detected_musicbox_pos.X, g_detected_musicbox_pos.Y, g_detected_musicbox_pos.Z,
+                        best_fp, g_all_maps[tgt_check][0].name);
+                    AddNotification("Mbox→" + std::string(g_all_maps[tgt_check][0].name), 1.5f, ImVec4(0.3f, 1.0f, 0.3f, 1.0f));
+                    return;
+                }
+            }
+        }
+    }
+    
+    // ★★★ 钢琴精确匹配 — 第二优先级（无音乐盒时兜底）★★★
+    if (piano_found && g_detected_piano_pos.X != 0) {
+        int best_mi = -1; float best_d = 10.0f;
+        for (auto& pk : g_piano_db) {
+            float d = sqrtf((g_detected_piano_pos.X - pk.x)*(g_detected_piano_pos.X - pk.x)
+                          + (g_detected_piano_pos.Y - pk.y)*(g_detected_piano_pos.Y - pk.y));
+            if (d < best_d) { best_d = d; best_mi = pk.mapIndex; }
+        }
+        if (best_mi >= 0 && best_mi < (int)g_all_maps.size() && best_mi != g_current_map_index) {
+            g_current_map_index = best_mi;
+            g_current_floor_index = SafeClampFloorIdx(best_mi, GetFloorFromPlayerZ(Z));
+            LoadMapTexture(g_current_map_index, g_current_floor_index);
+            g_detect_phase = MapDetectPhase::LOCKED;
+            snprintf(g_map_detect_debug, sizeof(g_map_detect_debug), "Piano: (%.0f,%.0f) -> %s",
+                g_detected_piano_pos.X, g_detected_piano_pos.Y, g_all_maps[best_mi][0].name);
+            AddNotification("已识别: " + std::string(g_all_maps[best_mi][0].name), 1.5f, ImVec4(0.3f, 1.0f, 0.3f, 1.0f));
+            return;
         }
     }
     
@@ -1976,10 +2171,10 @@ void TryAutoDetectMap(const std::vector<DataStruct>& data) {
         MapScoreResult sr = ScoreMapFingerprints(musicbox_pos, musicbox_found, piano_pos, piano_found, g_detected_chairs);
         snprintf(g_score_debug_buf, sizeof(g_score_debug_buf), "%s", sr.debug_text.c_str());
         if (sr.fp_id >= 0 && sr.score >= 60.0f && !sr.is_tie) {
-            // ★ 首次检测：g_current_map_index == -1 时直接切换到正确地图
+            int tgt = (sr.fp_id < (int)g_mapidx_from_fp_id.size()) ? g_mapidx_from_fp_id[sr.fp_id] : -1;
+            
             if (g_current_map_index < 0) {
-                // 预检：fp_id 必须在映射表中有对应的 map_idx
-                int tgt = (sr.fp_id < (int)g_mapidx_from_fp_id.size()) ? g_mapidx_from_fp_id[sr.fp_id] : -1;
+                // ★ 首次检测：直接切换到正确地图
                 if (tgt >= 0 && tgt < (int)g_all_maps.size()) {
                     ExecuteMapSwitch(sr.fp_id);
                     g_detect_phase = MapDetectPhase::LOCKED;
@@ -1991,38 +2186,19 @@ void TryAutoDetectMap(const std::vector<DataStruct>& data) {
                     g_detect_phase = MapDetectPhase::LOW_CONFIDENCE;
                     g_low_confidence_counter = 0;
                 }
+            } else if (tgt >= 0 && tgt != g_current_map_index && sr.score >= 65.0f) {
+                // ★ v2.34: 评分高分指向不同地图 → 直接切换（解决"评分18却匹配1"的问题）
+                printf("[MapDetect] LOCKED评分纠正: fp=%d (%.0f分) → map[%d] (原map[%d])\n",
+                    sr.fp_id, sr.score, tgt, g_current_map_index);
+                ExecuteMapSwitch(sr.fp_id);
+                g_detect_phase = MapDetectPhase::LOCKED;
             } else {
-                // 已有地图，仅更新映射关系
+                // ★ 当前地图正确，仅更新映射关系
                 int cfp = (g_current_map_index < (int)g_fp_id_from_mapidx.size()) ? g_fp_id_from_mapidx[g_current_map_index] : -1;
                 if (cfp < 0 && g_current_map_index < (int)g_all_maps.size() && sr.fp_id < (int)g_mapidx_from_fp_id.size() && g_mapidx_from_fp_id[sr.fp_id] < 0) {
                     g_mapidx_from_fp_id[sr.fp_id] = g_current_map_index;
                     if (g_current_map_index >= (int)g_fp_id_from_mapidx.size()) g_fp_id_from_mapidx.resize(g_current_map_index+1, -1);
                     g_fp_id_from_mapidx[g_current_map_index] = sr.fp_id;
-                }
-            }
-            // ★ 首次检测时 ExecuteMapSwitch 已设楼层；每帧更新已移到 TryAutoDetectMap 末尾
-        }
-        // ★ LOCKED 定期重检：每60帧检查#1候选是否远超当前(+15分)且持续3秒
-        {
-            static int recheck_counter = 0;
-            static int recheck_confirm_count = 0;
-            recheck_counter++;
-            if (recheck_counter >= 60) {
-                recheck_counter = 0;
-                // 使用sr.second_score作为当前地图的近似参考
-                // 如果#1候选 ≥ 60分 且 远超第二名 ≥ 15分 → 说明当前地图不对劲
-                if (sr.fp_id >= 0 && sr.score >= 60.0f && !sr.is_tie
-                    && (sr.score - sr.second_score) >= 15.0f) {
-                    recheck_confirm_count++;
-                    if (recheck_confirm_count >= 3) {
-                        printf("[MapDetect] LOCKED重检: fp=%d (%.0f分) 远超第二名(%.0f分) 持续3秒\n",
-                            sr.fp_id, sr.score, sr.second_score);
-                        ExecuteMapSwitch(sr.fp_id);
-                        g_detect_phase = MapDetectPhase::LOCKED;
-                        recheck_confirm_count = 0;
-                    }
-                } else {
-                    recheck_confirm_count = 0;
                 }
             }
         }
@@ -2309,112 +2485,147 @@ static void LoadMapConfigFromJSON() {
 // 加载地图指纹数据库 (v3.0)
 // 从 JSON 文件中解析每张地图的音乐盒、凳子、钢琴坐标
 // =============================================================
+// =============================================================
+// 加载地图指纹数据库 (v4.0 — 复合指纹)
+// 优先加载 enhanced_fingerprints.json (日志自动生成), 兜底 musicbox_stools.json
+// =============================================================
 static void LoadFingerprintDB() {
-    const std::string fp_path = MAPS_ROOT "musicbox_stools.json";
-    std::ifstream ifs(fp_path);
-    if (!ifs) {
-        // 兼容旧路径
-        const std::string fp_path2 = "/sdcard/map_fingerprints.json";
-        ifs.open(fp_path2);
-    }
-    if (!ifs) {
-        printf("[MapDetect] 指纹文件不存在，跳过加载 (尝试路径: %s)\n", fp_path.c_str());
-        return;
-    }
+    g_fingerprint_db.clear();
+    g_mapidx_from_fp_id.clear();
+
+    // ── 尝试路径列表 ──
+    const std::vector<std::string> paths = {
+        MAPS_ROOT "musicbox_stools.json",        // 主: 音乐盒+凳子指纹
+        "/sdcard/map_fingerprints.json",          // 兼容旧版
+    };
+
+    std::ifstream ifs;
+    std::string loaded_path;
+    for (const auto& p : paths) { ifs.open(p); if (ifs) { loaded_path = p; break; } }
+    if (!ifs) { printf("[MapDetect] 指纹文件不存在\n"); return; }
 
     try {
-        json j;
-        ifs >> j;
-        ifs.close();
+        json root;
+        ifs >> root; ifs.close();
+        printf("[MapDetect] 加载: %s\n", loaded_path.c_str());
 
-        if (!j.is_array()) {
-            printf("[MapDetect] 指纹JSON格式错误：不是数组\n");
-            return;
+        // 判断格式: enhanced_fingerprints.json 是对象 { fingerprints: [...] }
+        json fp_array;
+        bool is_enhanced = false;
+        if (root.is_object() && root.contains("fingerprints")) {
+            fp_array = root["fingerprints"];
+            is_enhanced = true;
+        } else if (root.is_array()) {
+            fp_array = root;
+        } else {
+            printf("[MapDetect] 未知指纹格式\n"); return;
         }
 
-        g_fingerprint_db.clear();
-        g_mapidx_from_fp_id.clear();
-        // g_fp_id_from_mapidx 初始化为全 -1（在 LoadMapConfigFromJSON 后重建）
-
-        for (const auto& entry : j) {
+        for (const auto& entry : fp_array) {
             if (!entry.contains("id")) continue;
-
             MapFingerprint fp;
             fp.id = entry["id"];
 
-            // 解析音乐盒
-            if (entry.contains("music_box") && entry["music_box"].is_array() && entry["music_box"].size() >= 3) {
-                fp.musicBox.X = entry["music_box"][0];
-                fp.musicBox.Y = entry["music_box"][1];
-                fp.musicBox.Z = entry["music_box"][2];
-            }
+            // ── 增强格式 (v4.0): 含钢琴/音乐盒坐标 + 物体计数 ──
+            if (is_enhanced) {
+                fp.piano.X = entry.value("piano_x", 0.0f);
+                fp.piano.Y = entry.value("piano_y", 0.0f);
+                fp.piano.Z = entry.value("piano_z", 0.0f);
+                fp.musicBox.X = entry.value("musicbox_x", 0.0f);
+                fp.musicBox.Y = entry.value("musicbox_y", 0.0f);
+                fp.musicBox.Z = entry.value("musicbox_z", 0.0f);
+                fp.chairCount = entry.value("chair_count", 0);
+                fp.coreDoorCount = entry.value("core_door_count", 0);
+                fp.outdoorDoorCount = entry.value("outdoor_door_count", 0);
+                fp.propDoorCount = entry.value("prop_door_count", 0);
+                fp.woodplaneCount = entry.value("woodplane_count", 0);
 
-            // 解析凳子
-            if (entry.contains("stools") && entry["stools"].is_array()) {
-                for (const auto& stool : entry["stools"]) {
-                    if (stool.is_array() && stool.size() >= 3) {
+                // 凳子
+                if (entry.contains("chairs") && entry["chairs"].is_array()) {
+                    for (const auto& c : entry["chairs"]) {
                         Vector3A s;
-                        s.X = stool[0]; s.Y = stool[1]; s.Z = stool[2];
+                        s.X = c.value("x", 0.0f); s.Y = c.value("y", 0.0f); s.Z = c.value("z", 0.0f);
                         fp.stools.push_back(s);
                     }
                 }
-            }
-
-            // 解析钢琴
-            if (entry.contains("pianos") && entry["pianos"].is_array()) {
-                for (const auto& piano : entry["pianos"]) {
-                    if (piano.is_array() && piano.size() >= 3) {
-                        Vector3A p;
-                        p.X = piano[0]; p.Y = piano[1]; p.Z = piano[2];
-                        fp.pianos.push_back(p);
+                // 钢琴存入 pianos 数组(兼容旧评分)
+                if (fp.piano.X != 0 || fp.piano.Y != 0) fp.pianos.push_back(fp.piano);
+            } else {
+                // ── 旧格式 ──
+                if (entry.contains("music_box") && entry["music_box"].is_array() && entry["music_box"].size() >= 3) {
+                    fp.musicBox.X = entry["music_box"][0]; fp.musicBox.Y = entry["music_box"][1]; fp.musicBox.Z = entry["music_box"][2];
+                }
+                if (entry.contains("stools") && entry["stools"].is_array()) {
+                    for (const auto& s : entry["stools"]) {
+                        if (s.is_array() && s.size() >= 3) {
+                            Vector3A v; v.X = s[0]; v.Y = s[1]; v.Z = s[2]; fp.stools.push_back(v);
+                        }
                     }
                 }
+                if (entry.contains("pianos") && entry["pianos"].is_array()) {
+                    for (const auto& p : entry["pianos"]) {
+                        if (p.is_array() && p.size() >= 3) {
+                            Vector3A v; v.X = p[0]; v.Y = p[1]; v.Z = p[2]; fp.pianos.push_back(v);
+                        }
+                    }
+                }
+                fp.chairCount = (int)fp.stools.size();
+                fp.piano = fp.pianos.empty() ? Vector3A{} : fp.pianos[0];
             }
 
             fp.valid = true;
             g_fingerprint_db.push_back(fp);
         }
 
-        printf("[MapDetect] 成功加载 %zu 张地图指纹\n", g_fingerprint_db.size());
+        printf("[MapDetect] 加载 %zu 指纹%s\n", g_fingerprint_db.size(), is_enhanced ? " (增强复合指纹)" : "");
 
-        // 重建映射：确保 g_mapidx_from_fp_id 有足够空间
+        // ── 重建 g_mapidx_from_fp_id ──
         int max_fp_id = 0;
-        for (auto& fp : g_fingerprint_db) {
-            if (fp.id > max_fp_id) max_fp_id = fp.id;
-        }
+        for (auto& fp : g_fingerprint_db) if (fp.id > max_fp_id) max_fp_id = fp.id;
         g_mapidx_from_fp_id.assign(max_fp_id + 1, -1);
 
-        // 尝试自动关联：按 g_all_maps 的顺序匹配指纹
-        for (int mi = 0; mi < (int)g_all_maps.size(); mi++) {
-            if (g_all_maps[mi].empty()) continue;
-            // 尝试按名字中的数字匹配："地图5 一楼" → 5
-            const char* name = g_all_maps[mi][0].name;
-            if (name && strncmp(name, "地图", 6) == 0) {
-                int map_num = atoi(name + 6);
-                for (auto& fp : g_fingerprint_db) {
-                    if (fp.id == map_num) {
-                        int fp_id = fp.id;
-                        // ★ 只取首次匹配（优先一楼），防止"地图N 二楼"覆盖"地图N 一楼"
-                        if (fp_id < (int)g_mapidx_from_fp_id.size() && g_mapidx_from_fp_id[fp_id] < 0) {
-                            g_mapidx_from_fp_id[fp_id] = mi;
-                        }
-                        break;
+        for (auto& fp : g_fingerprint_db) {
+            // ★ v4.0: 优先用钢琴坐标匹配到 g_all_maps 索引
+            if ((fp.piano.X != 0 || fp.piano.Y != 0) && !g_piano_db.empty()) {
+                for (auto& pk : g_piano_db) {
+                    float d = sqrtf((fp.piano.X - pk.x)*(fp.piano.X - pk.x)
+                                  + (fp.piano.Y - pk.y)*(fp.piano.Y - pk.y));
+                    if (d < 5.0f) { fp.mapIndex = pk.mapIndex; break; }
+                }
+            }
+            // 其次用音乐盒坐标匹配
+            if (fp.mapIndex < 0 && (fp.musicBox.X != 0 || fp.musicBox.Y != 0) && !g_musicbox_db.empty()) {
+                for (auto& mb : g_musicbox_db) {
+                    float d = sqrtf((fp.musicBox.X - mb.x)*(fp.musicBox.X - mb.x)
+                                  + (fp.musicBox.Y - mb.y)*(fp.musicBox.Y - mb.y));
+                    if (d < 5.0f) { fp.mapIndex = mb.mapIndex; break; }
+                }
+            }
+            // 最后回退到按名字数字匹配
+            if (fp.mapIndex < 0) {
+                for (int mi = 0; mi < (int)g_all_maps.size(); mi++) {
+                    if (g_all_maps[mi].empty()) continue;
+                    const char* name = g_all_maps[mi][0].name;
+                    if (name && strncmp(name, "地图", 6) == 0 && atoi(name + 6) == fp.id) {
+                        fp.mapIndex = mi; break;
                     }
                 }
             }
+            // 记录到 g_mapidx_from_fp_id
+            if (fp.mapIndex >= 0 && fp.id < (int)g_mapidx_from_fp_id.size())
+                g_mapidx_from_fp_id[fp.id] = fp.mapIndex;
         }
 
         // 重建反向映射
         g_fp_id_from_mapidx.assign(g_all_maps.size(), -1);
         for (int fp_id = 0; fp_id < (int)g_mapidx_from_fp_id.size(); fp_id++) {
             int mi = g_mapidx_from_fp_id[fp_id];
-            if (mi >= 0 && mi < (int)g_fp_id_from_mapidx.size()) {
+            if (mi >= 0 && mi < (int)g_fp_id_from_mapidx.size())
                 g_fp_id_from_mapidx[mi] = fp_id;
-            }
         }
 
     } catch (const std::exception& e) {
-        printf("[MapDetect] 指纹文件加载异常: %s\n", e.what());
+        printf("[MapDetect] 指纹加载异常: %s\n", e.what());
     }
 }
 
@@ -2435,9 +2646,8 @@ static void RebuildFingerprintMapping() {
 }
 
 // =============================================================
-// 新架构核心：地图评分函数 (v3.0)
-// 使用指纹数据库 + 当前帧检测到的物体做 120 分制评分
-// 返回最佳匹配的指纹 ID（-1 表示无匹配）
+// 地图评分函数 (v3.0)
+// 全量指纹评分: 音乐盒(XY+Z) + 凳子位置重合度
 // =============================================================
 static MapScoreResult ScoreMapFingerprints(
     const Vector3A& musicbox_pos, bool musicbox_found,
@@ -2446,6 +2656,8 @@ static MapScoreResult ScoreMapFingerprints(
 {
     MapScoreResult result;
     if (g_fingerprint_db.empty()) return result;
+
+    int detected_count = (int)detected_chairs.size();
 
     struct FpScored {
         int fp_id;
@@ -2457,7 +2669,9 @@ static MapScoreResult ScoreMapFingerprints(
     };
     std::vector<FpScored> scored_list;
 
-    for (auto& fp : g_fingerprint_db) {
+    // ★ 全量评分 (无预筛, 23张地图每帧都跑也是毫秒级)
+    for (size_t fi = 0; fi < g_fingerprint_db.size(); fi++) {
+        auto& fp = g_fingerprint_db[fi];
         if (!fp.valid) continue;
 
         float musicBoxScore = 0.0f;
@@ -2465,28 +2679,25 @@ static MapScoreResult ScoreMapFingerprints(
         float stoolPosScore = 0.0f;
         float pianoScore = 0.0f;
 
-        // 1) 音乐盒匹配 (0~40)——容差5单位吸收波动，>25不计数
+        // 1) 音乐盒匹配 (0~40)——加入Z轴, 容差5单位吸收波动, >25不计数
         if (musicbox_found && fp.musicBox.X != 0.0f) {
             float dx = musicbox_pos.X - fp.musicBox.X;
             float dy = musicbox_pos.Y - fp.musicBox.Y;
-            float dist = sqrtf(dx*dx + dy*dy);
+            float dz = musicbox_pos.Z - fp.musicBox.Z;
+            float dist = sqrtf(dx*dx + dy*dy + dz*dz);
             if (dist <= 5.0f) musicBoxScore = 40.0f;
             else if (dist < 25.0f) musicBoxScore = 40.0f - (dist - 5.0f) * 2.0f;
-            // dist >= 25 → 0
         }
 
-        // 2) 凳子数量匹配 (0~10)——只占10分，容忍±1浮动
-        int known_count = (int)fp.stools.size();
-        int detected_count = (int)detected_chairs.size();
-        if (known_count == detected_count) stoolCountScore = 10.0f;
-        else if (abs(known_count - detected_count) <= 1) stoolCountScore = 5.0f;
-        // 差距 ≥2 → 0
+        // 2) 凳子数量匹配 (0~10)——考虑到预筛已过，这里加分更精确
+        if (fp.chairCount == detected_count) stoolCountScore = 10.0f;
+        else if (abs(fp.chairCount - detected_count) == 1) stoolCountScore = 5.0f;
 
         // 3) ★ 凳子位置重合度 (0~50)——决胜关键，阈值<4.0
         if (fp.stools.empty() && detected_chairs.empty()) {
-            stoolPosScore = 50.0f;  // 都没凳子
+            stoolPosScore = 50.0f;
         } else if (fp.stools.empty() || detected_chairs.empty()) {
-            stoolPosScore = 0.0f;   // 一个有但另一个没有
+            stoolPosScore = 0.0f;
         } else {
             int matched = 0;
             for (auto& d : detected_chairs) {
@@ -2966,6 +3177,7 @@ void Draw_MapOverlay(ImDrawList* Draw, const std::vector<DataStruct>& data) {
         }
         g_last_paths_map_idx = g_current_map_index;
         g_last_paths_floor_idx = g_current_floor_index;
+        g_path_cache_dirty = true;  // ★ P2: 地图/楼层切换时重建顶点缓存
     }
 
     // 绘制自身位置 + 手电筒光锥朝向
@@ -3062,13 +3274,36 @@ void Draw_MapOverlay(ImDrawList* Draw, const std::vector<DataStruct>& data) {
         }
     }
 
-    // ========== 已保存路径绘制（带开关控制 + 选中高亮） ==========
+    // ========== 已保存路径绘制（带开关控制 + 选中高亮 + 顶点缓存P2优化） ==========
     if (g_show_saved_paths) {
+        // ★ P2+P5: 顶点缓存 — 地图拖动/缩放/路径变化时自动重建
+        if (g_path_cache_dirty || g_saved_paths.size() != g_path_vertex_cache.size()
+            || g_map_pos_x != g_last_cache_map_pos_x || g_map_pos_y != g_last_cache_map_pos_y
+            || g_map_display_size != g_last_cache_map_size) {
+            g_path_vertex_cache.resize(g_saved_paths.size());
+            for (size_t pi = 0; pi < g_saved_paths.size(); pi++) {
+                auto& src = g_saved_paths[pi];
+                auto& dst = g_path_vertex_cache[pi];
+                dst.clear(); dst.reserve(src.size());
+                ImVec2 last(-99999, -99999);
+                for (size_t i = 0; i < src.size(); i++) {
+                    ImVec2 p = ToMap(src[i]);
+                    float dx = p.x - last.x, dy = p.y - last.y;
+                    // ★ P5: 5px 内合并，保留最后一个点
+                    if (dst.empty() || dx*dx + dy*dy > 25.0f || i == src.size() - 1) {
+                        dst.push_back(p); last = p;
+                    } else { dst.back() = p; }
+                }
+            }
+            g_path_cache_dirty = false;
+            g_last_cache_map_pos_x = g_map_pos_x;
+            g_last_cache_map_pos_y = g_map_pos_y;
+            g_last_cache_map_size = g_map_display_size;
+        }
         for (size_t pi = 0; pi < g_saved_paths.size(); pi++) {
             if (pi < g_path_visible.size() && !g_path_visible[pi]) continue;
-            // ★ 目的地导航: 2D只显示导航路径
             if (g_show_nav_line && !g_nav_render_path.empty() && g_dest_world_x != 0) continue;
-            auto& path = g_saved_paths[pi];
+            auto& path = g_path_vertex_cache[pi];
             if (path.size() < 2) continue;
 
             bool isSelected = (pi == g_selected_path_index);
@@ -3083,13 +3318,13 @@ void Draw_MapOverlay(ImDrawList* Draw, const std::vector<DataStruct>& data) {
             float inner_width = isSelected ? 5.0f : 3.0f;
 
             for (size_t i = 1; i < path.size(); i++) {
-                ImVec2 p1 = ToMap(path[i-1]);
-                ImVec2 p2 = ToMap(path[i]);
+                ImVec2 p1 = path[i-1];
+                ImVec2 p2 = path[i];
                 Draw->AddLine(p1, p2, color_outer, outer_width);
                 Draw->AddLine(p1, p2, color_inner, inner_width);
             }
-            ImVec2 start = ToMap(path.front());
-            ImVec2 end = ToMap(path.back());
+            ImVec2 start = path.front();
+            ImVec2 end = path.back();
             Draw->AddCircleFilled(start, isSelected ? 7.0f : 5.0f,
                 isSelected ? IM_COL32(255, 255, 0, 255) : IM_COL32(0, 255, 0, 200));
             Draw->AddCircleFilled(end, isSelected ? 7.0f : 5.0f,
@@ -4605,14 +4840,39 @@ void Draw_Main_Optimized(ImDrawList *Draw) {
 
     if (show_touch_point) {
         ImVec2 touch_center = ImVec2(wood_touch_x, wood_touch_y);
-        Draw->AddCircleFilled(touch_center, 15.0f, ImColor(0, 255, 0, 100));
-        Draw->AddCircle(touch_center, 18.0f, ImColor(0, 255, 0, 200), 0, 3.0f);
-        Draw->AddLine(ImVec2(touch_center.x - 25, touch_center.y),
-                      ImVec2(touch_center.x + 25, touch_center.y),
-                      ImColor(255, 255, 0, 180), 2.0f);
-        Draw->AddLine(ImVec2(touch_center.x, touch_center.y - 25),
-                      ImVec2(touch_center.x, touch_center.y + 25),
-                      ImColor(255, 255, 0, 180), 2.0f);
+        float now = ImGui::GetTime();
+        float elapsed = now - g_last_touch_time;
+        bool animating = (elapsed < 0.8f && g_last_touch_time > 0);
+
+        // 外层大圆（固定）
+        float base_r = 30.0f;
+        Draw->AddCircleFilled(touch_center, base_r, IM_COL32(0,200,0,40));
+        Draw->AddCircle(touch_center, base_r, IM_COL32(0,220,0,120), 32, 2.5f);
+
+        // 触摸触发动画：扩散波纹
+        if (animating) {
+            float t = elapsed / 0.8f; // 0→1
+            float wave_r = base_r + t * 35.0f;
+            int wave_a = (int)(180 * (1.0f - t*t));
+            Draw->AddCircle(touch_center, wave_r, IM_COL32(255, 200, 0, wave_a), 32, 3.0f);
+
+            // 第二道波纹（延迟）
+            float t2 = (elapsed - 0.1f) / 0.7f;
+            if (t2 > 0 && t2 < 1.0f) {
+                float wave_r2 = base_r + t2 * 25.0f;
+                int wave_a2 = (int)(120 * (1.0f - t2*t2));
+                Draw->AddCircle(touch_center, wave_r2, IM_COL32(255, 255, 100, wave_a2), 32, 2.0f);
+            }
+        }
+
+        // 中心十字准星
+        Draw->AddCircleFilled(touch_center, 6.0f, IM_COL32(255,255,0,220));
+        Draw->AddLine(ImVec2(touch_center.x - 18, touch_center.y),
+                      ImVec2(touch_center.x + 18, touch_center.y),
+                      IM_COL32(255,255,0,180), 2.0f);
+        Draw->AddLine(ImVec2(touch_center.x, touch_center.y - 18),
+                      ImVec2(touch_center.x, touch_center.y + 18),
+                      IM_COL32(255,255,0,180), 2.0f);
     }
 
     // ========== 摸金导航地图 ==========
@@ -4625,8 +4885,8 @@ void Draw_Main_Optimized(ImDrawList *Draw) {
             LoadMapTexture(0, 0);
         }
         TryAutoDetectMap(current_data);
-        // ★ 楼层自动检测（防抖：Z 持续在对面 30 帧才切换，避免楼梯抖动/瞬移误触）
-        if (g_current_map_index >= 0) {
+        // ★ 楼层自动检测（防抖：仅自动识别模式下启用，手动模式下不覆盖用户选择）
+        if (g_current_map_index >= 0 && g_map_auto_detect) {
             static int g_floor_debounce = 0;
             static int g_floor_target = -1;
             int rawFloor = GetFloorFromPlayerZ(Z);
@@ -4795,8 +5055,7 @@ void Draw_Main_Optimized(ImDrawList *Draw) {
     }
 
     // ========== 地图识别状态 & 新地图提示 ==========
-    // 在左上角显示识别状态
-    {
+    if (g_show_map_status) {
         ImVec2 st_pos(20, displayInfo.height * 0.12f);
         ImU32 st_col = IM_COL32(255, 255, 255, 220);
         const char* phase_str = "?";
@@ -5171,6 +5430,7 @@ void read_thread(long int 状态数值, long int PD2, long int PD3) {
                 if (std::strstr(cls, "player") || std::strstr(cls, "boss") ||
                     状态数值 == 450.0f || std::strstr(cls, "scene") ||
                     std::strstr(cls, "prop") || std::strstr(cls, "mirror") || Debugging ||
+                    is_woodplane ||
                     disable_skip_filter ||
                     MjSubsystem::IsMjSpecialClass(cls) ||
                     MjSubsystem::IsMjPropClass(cls) || std::strstr(cls, "monster")) {
@@ -5221,6 +5481,9 @@ void read_thread(long int 状态数值, long int PD2, long int PD3) {
                         std::strcpy(item.str, getplayer(cls));
                         item.阵营 = 2;
                         item.sub_type = ObjSubClass::Player;
+                    } else if (is_woodplane) {
+                        item.阵营 = 3;
+                        item.sub_type = ObjSubClass::Pallet;
                     } else if (std::strstr(cls, "scene") && !std::strstr(cls, "prop") && !std::strstr(cls, "rd") && !MjSubsystem::IsMjSpecialClass(cls) && !std::strstr(cls, "monster")) {
                         std::strcpy(item.str, getscene(cls));
                         item.阵营 = 3;
@@ -5386,10 +5649,29 @@ void SimulateClick(int x, int y) {
     if (!g_touch_ready) {
         if (!InitTouch()) return;
     }
-    int raw_x = (int)((float)x / displayInfo.width * g_touch_max_x);
-    int raw_y = (int)((float)y / displayInfo.height * g_touch_max_y);
+    // 应用校准
+    float sx = x + wood_offset_x;
+    float sy = y + wood_offset_y;
+    int tx, ty;
+    if (g_calib_done) {
+        float dx = sx - g_calib_C;
+        float dy = sy - g_calib_F;
+        float det = g_calib_A * g_calib_E - g_calib_B * g_calib_D;
+        if (fabsf(det) < 0.01f) { tx = (int)sx; ty = (int)sy; }
+        else {
+            tx = (int)(( g_calib_E * dx - g_calib_B * dy) / det);
+            ty = (int)((-g_calib_D * dx + g_calib_A * dy) / det);
+        }
+    } else {
+        tx = (int)sx; ty = (int)sy;
+    }
+    g_last_touch_x = sx;
+    g_last_touch_y = sy;
+    g_last_touch_time = ImGui::GetTime();
     int fd = open(g_touch_path, O_RDWR);
     if (fd < 0) return;
+    int raw_x = (int)((float)tx / displayInfo.width * g_touch_max_x);
+    int raw_y = (int)((float)ty / displayInfo.height * g_touch_max_y);
     struct input_event ev;
     memset(&ev, 0, sizeof(ev));
     ev.type = EV_ABS; ev.code = ABS_MT_SLOT; ev.value = 0; write(fd, &ev, sizeof(ev));
@@ -5413,6 +5695,21 @@ void SimulateClick(int x, int y) {
 void AutoWoodCheck() {
     if (!wood_enabled) return;
     const auto& current_data = data_buffers[front_buffer_idx.load(std::memory_order_acquire)];
+
+    // ★ 监管者自动关闭：玩家坐标与任意阵营1实体距离<3米则关闭盖板
+    if (Z.X != 0 || Z.Y != 0) {
+        for (const auto& item : current_data) {
+            if (item.阵营 != 1 || item.is_ghost) continue;
+            Vector3A hp = getObjectCoordinates(item.objcoor, false);
+            if (!isValidCoordinate(hp)) continue;
+            float dx = hp.X - Z.X, dy = hp.Y - Z.Y;
+            if (sqrtf(dx*dx + dy*dy) < 300.0f) {  // <3米(300cm世界单位)
+                wood_enabled = false;
+                return;
+            }
+        }
+    }
+
     bool self_is_survivor = false;
     for (const auto& item : current_data) {
         if (item.obj == GlobalMemory::自身) {
@@ -5420,7 +5717,8 @@ void AutoWoodCheck() {
             break;
         }
     }
-    if (!self_is_survivor) return;
+    // 跳过 self_is_survivor 检查: GlobalMemory::自身 可能指向错误对象
+    // if (!self_is_survivor) return;
     if (GlobalMemory::自身 == 0) return;
 
     float minHunterDist = 9999.0f;
@@ -5460,6 +5758,10 @@ void AutoWoodCheck() {
     float dy = getFloat(nearest_wood->objcoor + 0xC0);
     float angle = atan2f(dy, dx);
 
+    g_wood_viz_pos = woodPos;
+    g_wood_viz_angle = angle;
+    g_wood_viz_valid = true;
+
     float x[4], y[4];
     x[0] = woodPos.X + (wood_length / 2) * cosf(angle) + (wood_width / 2) * cosf(angle + M_PI_2);
     y[0] = woodPos.Y + (wood_length / 2) * sinf(angle) + (wood_width / 2) * sinf(angle + M_PI_2);
@@ -5486,6 +5788,10 @@ void AutoWoodCheck() {
         int tx = wood_touch_x + (rand() % 100 - 50);
         int ty = wood_touch_y + (rand() % 100 - 50);
         SimulateClick(tx, ty);
+        // 弹窗提醒（1.5秒冷却，不刷屏）
+        if (ImGui::GetTime() - g_last_touch_time > 1.5f) {
+            AddNotification("已触发盖板", 1.2f, ImVec4(1.0f, 0.8f, 0.2f, 1.0f));
+        }
         usleep(50000);
     }
 }
@@ -5997,6 +6303,57 @@ void Layout_tick_UI(bool *main_thread_flag) {
     Draw_Main_Optimized(ImGui::GetForegroundDrawList());
     AutoWoodCheck();
 
+    // 诊断: 显示板子/监管者检测状态
+    if (g_show_wood_diag) {
+        static int dbg_hunter_cnt = 0, dbg_wood_cnt = 0;
+        const auto& cd = data_buffers[front_buffer_idx.load(std::memory_order_acquire)];
+        dbg_hunter_cnt = 0; dbg_wood_cnt = 0;
+        for (const auto& it : cd) {
+            if (it.阵营 == 1 && !it.is_ghost) dbg_hunter_cnt++;
+            if (it.sub_type == ObjSubClass::Pallet) dbg_wood_cnt++;
+        }
+        ImGui::SetNextWindowBgAlpha(0.5f);
+        ImGui::Begin("木诊断", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoInputs);
+        ImGui::Text("监管者:%d 板子:%d 判区:%s 冷却:%.1f", dbg_hunter_cnt, dbg_wood_cnt,
+            g_wood_viz_valid ? "OK" : "无", g_wood_cooldown);
+        ImGui::End();
+    }
+
+    // 判定范围可视化 — 钻石切面风格
+    if (show_wood_rect && g_wood_viz_valid && wood_enabled) {
+        float ca = cosf(g_wood_viz_angle), sa = sinf(g_wood_viz_angle);
+        float hw = wood_width * 0.5f, hl = wood_length * 0.5f;
+        Vector3A wc[4] = {
+            {g_wood_viz_pos.X + hl*ca + hw*(-sa), g_wood_viz_pos.Y + hl*sa + hw*ca, g_wood_viz_pos.Z},
+            {g_wood_viz_pos.X + hl*ca - hw*(-sa), g_wood_viz_pos.Y + hl*sa - hw*ca, g_wood_viz_pos.Z},
+            {g_wood_viz_pos.X - hl*ca - hw*(-sa), g_wood_viz_pos.Y - hl*sa - hw*ca, g_wood_viz_pos.Z},
+            {g_wood_viz_pos.X - hl*ca + hw*(-sa), g_wood_viz_pos.Y - hl*sa + hw*ca, g_wood_viz_pos.Z}
+        };
+        ImVec2 sc[4]; int valid = 0;
+        for (int k = 0; k < 4; k++) {
+            float sx, sy, sw;
+            if (optimizedWorldToScreen(wc[k], matrix, px, py, sx, sy, sw)) { sc[k] = ImVec2(sx, sy); valid++; }
+        }
+        if (valid >= 3) {
+            ImDrawList* fg = ImGui::GetForegroundDrawList();
+            // 内填: 极淡银白
+            fg->AddQuadFilled(sc[0], sc[1], sc[2], sc[3], IM_COL32(255,255,255,8));
+            // 三层银白光晕 (1.02x / 1.04x / 1.07x)
+            ImVec2 ctr = {(sc[0].x+sc[1].x+sc[2].x+sc[3].x)*0.25f, (sc[0].y+sc[1].y+sc[2].y+sc[3].y)*0.25f};
+            float glow_r[3] = {1.02f, 1.04f, 1.07f};
+            int   glow_a[3] = {8, 5, 3};
+            for (int g = 0; g < 3; g++) {
+                ImVec2 gl[4];
+                for (int k = 0; k < 4; k++) { gl[k].x = ctr.x + (sc[k].x - ctr.x)*glow_r[g]; gl[k].y = ctr.y + (sc[k].y - ctr.y)*glow_r[g]; }
+                fg->AddQuadFilled(gl[0], gl[1], gl[2], gl[3], IM_COL32(224, 224, 232, glow_a[g]));
+            }
+            // 边框: 银白 1.5px
+            fg->AddQuad(sc[0], sc[1], sc[2], sc[3], IM_COL32(232, 232, 238, 100), 1.5f);
+            // 四角亮点
+            for (int k = 0; k < 4; k++) fg->AddCircleFilled(sc[k], 2.5f, IM_COL32(232, 232, 238, 102));
+        }
+    }
+
     // 延迟写 JSON：脏标记倒计时刷写
     if (g_dirty_flush_counter > 0) {
         g_dirty_flush_counter--;
@@ -6323,15 +6680,86 @@ void Layout_tick_UI(bool *main_thread_flag) {
                 ImGui::Checkbox("启用自动盖板", &wood_enabled); ImGui::SameLine();
                 if (StyledButton("测试触摸", ButtonVariant::Secondary, ImVec2(0,0), g_density)) { SimulateClick(wood_touch_x, wood_touch_y); }
                 ImGui::SameLine(); ImGui::Checkbox("显示触摸点", &show_touch_point);
+                ImGui::SameLine(); ImGui::Checkbox("显示诊断", &g_show_wood_diag);
                 ImGui::Spacing();
                 ImGui::TextColored(g_theme.text_muted, "交互键坐标");
                 ImGui::SliderFloat("X 坐标", &wood_touch_x, 0.0f, (float)displayInfo.width);
                 ImGui::SliderFloat("Y 坐标", &wood_touch_y, 0.0f, (float)displayInfo.height);
                 ImGui::Spacing();
+                ImGui::TextColored(g_theme.text_muted, "微调偏移 (粗定后精调)");
+                ImGui::InputFloat("X 偏移", &wood_offset_x, 1.0f, 10.0f, "%.0f");
+                ImGui::InputFloat("Y 偏移", &wood_offset_y, 1.0f, 10.0f, "%.0f");
+                if (StyledButton("归零偏移", ButtonVariant::Secondary, ImVec2(0,0), g_density)) {
+                    wood_offset_x = 0.0f; wood_offset_y = 0.0f;
+                }
+                ImGui::SameLine();
+                if (g_calib_done) ImGui::TextColored(g_theme.success, "已校准");
+                ImGui::Spacing();
+                // 四点校准
+                if (g_calib_step == 0) {
+                    if (StyledButton("四点校准(重置)", ButtonVariant::Primary, ImVec2(0,0), g_density)) {
+                        g_calib_done = false;
+                        float w = displayInfo.width, h = displayInfo.height;
+                        g_calib_inj[0][0]=500;     g_calib_inj[0][1]=500;
+                        g_calib_inj[1][0]=w-500;   g_calib_inj[1][1]=500;
+                        g_calib_inj[2][0]=w-500;   g_calib_inj[2][1]=h-500;
+                        g_calib_inj[3][0]=500;     g_calib_inj[3][1]=h-500;
+                        g_calib_step = 1;
+                        SimulateClick((int)g_calib_inj[0][0], (int)g_calib_inj[0][1]);
+                    }
+                    ImGui::TextColored(g_theme.text_muted, "开启指针位置→四点校准→输入观察坐标");
+                } else {
+                    int s = g_calib_step - 1;
+                    const char* cn[4]={"左上","右上","右下","左下"};
+                    ImGui::TextColored(g_theme.warning, "校准 %d/4: %s 注入(%.0f,%.0f)",
+                        g_calib_step, cn[s], g_calib_inj[s][0], g_calib_inj[s][1]);
+                    ImGui::TextColored(g_theme.text_muted, "查看指针位置坐标, 输入观察到的X/Y:");
+                    ImGui::InputFloat("观察X", &g_calib_obs_buf[s][0], 100.0f, 1000.0f, "%.0f");
+                    ImGui::InputFloat("观察Y", &g_calib_obs_buf[s][1], 100.0f, 1000.0f, "%.0f");
+                    if (StyledButton("重新注入此点", ButtonVariant::Secondary, ImVec2(0,0), g_density)) {
+                        SimulateClick((int)g_calib_inj[s][0], (int)g_calib_inj[s][1]);
+                    }
+                    ImGui::SameLine();
+                    if (StyledButton("确认此点", ButtonVariant::Secondary, ImVec2(0,0), g_density)) {
+                        if (g_calib_step >= 4) {
+                            float x1=g_calib_inj[0][0],y1=g_calib_inj[0][1];
+                            float X1=g_calib_obs_buf[0][0],Y1=g_calib_obs_buf[0][1];
+                            float x2=g_calib_inj[1][0],y2=g_calib_inj[1][1];
+                            float X2=g_calib_obs_buf[1][0],Y2=g_calib_obs_buf[1][1];
+                            float x3=g_calib_inj[2][0],y3=g_calib_inj[2][1];
+                            float X3=g_calib_obs_buf[2][0],Y3=g_calib_obs_buf[2][1];
+                            float det3 = x1*(y2-y3) + x2*(y3-y1) + x3*(y1-y2);
+                            if (fabsf(det3) > 0.01f) {
+                                g_calib_A = (X1*(y2-y3) + X2*(y3-y1) + X3*(y1-y2)) / det3;
+                                g_calib_B = (x1*(X2-X3) + x2*(X3-X1) + x3*(X1-X2)) / det3;
+                                g_calib_C = (x1*(y2*X3-y3*X2)+x2*(y3*X1-y1*X3)+x3*(y1*X2-y2*X1)) / det3;
+                                g_calib_D = (Y1*(y2-y3) + Y2*(y3-y1) + Y3*(y1-y2)) / det3;
+                                g_calib_E = (x1*(Y2-Y3) + x2*(Y3-Y1) + x3*(Y1-Y2)) / det3;
+                                g_calib_F = (x1*(y2*Y3-y3*Y2)+x2*(y3*Y1-y1*Y3)+x3*(y1*Y2-y2*Y1)) / det3;
+                                g_calib_done = true;
+                            }
+                            g_calib_step = 0;
+                        } else {
+                            g_calib_step++;
+                            SimulateClick((int)g_calib_inj[g_calib_step-1][0],
+                                          (int)g_calib_inj[g_calib_step-1][1]);
+                        }
+                    }
+                    ImGui::SameLine();
+                    if (StyledButton("取消", ButtonVariant::Danger, ImVec2(0,0), g_density)) {
+                        g_calib_step = 0;
+                    }
+                }
+                ImGui::Spacing();
                 ImGui::TextColored(g_theme.text_muted, "判定参数");
                 ImGui::SliderFloat("触发距离(米)", &wood_trigger_dist, 5.0f, 40.0f);
-                ImGui::SliderFloat("判定长度", &wood_length, 5.0f, 30.0f);
-                ImGui::SliderFloat("判定宽度", &wood_width, 3.0f, 20.0f);
+                ImGui::SliderFloat("冷却时间(秒)", &wood_cooldown_dur, 0.5f, 5.0f);
+                ImGui::Checkbox("显示判定尺寸", &wood_show_params);
+                if (wood_show_params) {
+                    ImGui::SliderFloat("判定长度", &wood_length, 5.0f, 30.0f);
+                    ImGui::SliderFloat("判定宽度", &wood_width, 3.0f, 20.0f);
+                }
+                ImGui::Checkbox("显示判定范围", &show_wood_rect);
                 ImGui::Spacing();
                 ImGui::TextColored(g_theme.warning, "提示：先测试触摸，确认交互键有反应后再开启");
                 break;
@@ -6496,6 +6924,8 @@ void Layout_tick_UI(bool *main_thread_flag) {
                 ImGui::Checkbox("自动识别", &g_map_auto_detect);
                 ImGui::SameLine();
                 ImGui::Checkbox("路线规划", &g_show_nav_line);
+                ImGui::SameLine();
+                ImGui::Checkbox("显示识别状态", &g_show_map_status);
 
                 ImGui::Checkbox("3D立体路径", &g_show_3d_paths);
                 if (g_show_3d_paths) {
@@ -6522,8 +6952,9 @@ void Layout_tick_UI(bool *main_thread_flag) {
                     }
                 }
 
-                // ★ 手动选择地图（始终可见）
+                // ★ 手动选择地图 + 楼层（始终可见）
                 {
+                    // ── 地图下拉 ──
                     std::vector<const char*> manual_names;
                     std::vector<int> manual_indices;
                     for (int i = 0; i < (int)g_all_maps.size(); i++) {
@@ -6534,7 +6965,7 @@ void Layout_tick_UI(bool *main_thread_flag) {
                     }
                     if (!manual_names.empty()) {
                         ImGui::SameLine();
-                        ImGui::SetNextItemWidth(140);
+                        ImGui::SetNextItemWidth(130);
                         int combo_idx = 0;
                         for (int i = 0; i < (int)manual_indices.size(); i++) {
                             if (manual_indices[i] == g_current_map_index) { combo_idx = i; break; }
@@ -6548,7 +6979,41 @@ void Layout_tick_UI(bool *main_thread_flag) {
                                 g_detect_debounce_frames = 0; g_detect_best_fp_id = -1; g_locked_stable_frames = 0;
                                 g_map_auto_detect = false;
                                 LoadMapTexture(new_idx, g_current_floor_index);
-                                AddNotification("已切换到手动地图", 2.0f, ImVec4(0.3f,1.0f,0.3f,1.0f));
+                                AddNotification("已切换地图", 1.5f, ImVec4(0.3f,1.0f,0.3f,1.0f));
+                            }
+                        }
+
+                        // ── 楼层下拉（仅当前地图有 ≥2 层时显示）──
+                        if (g_current_map_index >= 0 && g_current_map_index < (int)g_all_maps.size()) {
+                            int nFloors = (int)g_all_maps[g_current_map_index].size();
+                            if (nFloors >= 2) {
+                                ImGui::SameLine();
+                                ImGui::SetNextItemWidth(70);
+                                int curF = g_current_floor_index;
+                                if (curF < 0) curF = 0;
+                                if (curF >= nFloors) curF = nFloors - 1;
+                                // 构建楼层名列表
+                                std::vector<const char*> floor_names;
+                                std::vector<int> floor_vals;
+                                static std::list<std::string> floor_name_buf;
+                                for (int f = 0; f < nFloors; f++) {
+                                    floor_name_buf.push_back(std::to_string(f + 1) + "楼");
+                                    floor_names.push_back(floor_name_buf.back().c_str());
+                                    floor_vals.push_back(f);
+                                }
+                                int fl_combo = 0;
+                                for (int f = 0; f < nFloors; f++) {
+                                    if (f == curF) { fl_combo = f; break; }
+                                }
+                                if (ImGui::Combo("楼层", &fl_combo, floor_names.data(), nFloors)) {
+                                    g_current_floor_index = SafeClampFloorIdx(g_current_map_index, fl_combo);
+                                    g_detect_phase = MapDetectPhase::LOCKED;
+                                    g_map_auto_detect = false;
+                                    LoadMapTexture(g_current_map_index, g_current_floor_index);
+                                    AddNotification("已切换楼层", 1.5f, ImVec4(0.3f,1.0f,0.3f,1.0f));
+                                }
+                                // 清理临时字符串（每帧重建但没问题）
+                                floor_name_buf.clear();
                             }
                         }
                     }
@@ -6651,16 +7116,30 @@ void Layout_tick_UI(bool *main_thread_flag) {
                             ImGui::Separator();
                         }
 
-                        // === 同步场景物体到当前地图（钢琴+凳子）===
-                        ImGui::TextColored(g_theme.text_muted, "[P][C] 钢琴:%s | 凳子:%zu",
+                        // === 同步场景物体到当前地图（音乐盒+钢琴+凳子）===
+                        ImGui::TextColored(g_theme.text_muted, "[M][P][C] 音乐盒:%s | 钢琴:%s | 凳子:%zu",
+                            (g_detected_musicbox_pos.X != 0.0f ? "OK" : "--"),
                             (g_detected_piano_pos.X != 0.0f ? "OK" : "--"),
                             g_detected_chairs.size());
                         ImGui::SameLine();
                         if (StyledButton("[同步] 物体到当前地图", ButtonVariant::Primary, ImVec2(0,0), g_density)) {
-                            SaveSceneObjectsToJSON(g_current_map_index, g_current_floor_index);
-                            AddNotification("已同步: 钢琴 + " + std::to_string(g_detected_chairs.size()) + "个凳子",
-                                3.0f, ImVec4(0.3f, 1.0f, 0.3f, 1.0f));
-                            MarkExitsDirty(); // 场景物体也走脏标记刷写
+                            SyncResult sr = SaveSceneObjectsToJSON(g_current_map_index, g_current_floor_index);
+                            // ★ 详细通知: 地图名 + 索引 + 各类型数量
+                            const char* mapName = g_all_maps[g_current_map_index][g_current_floor_index].name;
+                            char syncMsg[256];
+                            snprintf(syncMsg, sizeof(syncMsg),
+                                "同步到: %s[%d楼] | 音乐盒:%d 钢琴:%d 凳子:%d",
+                                mapName, g_current_floor_index + 1,
+                                sr.musicbox, sr.piano, sr.chairs);
+                            AddNotification(syncMsg, 4.0f, ImVec4(0.3f, 1.0f, 0.3f, 1.0f));
+                            // 指纹数据库也刷新
+                            LoadFingerprintDB(); RebuildFingerprintMapping();
+                            MarkExitsDirty();
+                        }
+                        // ★ 手动模式提示
+                        if (!g_map_auto_detect) {
+                            ImGui::SameLine();
+                            ImGui::TextColored(g_theme.warning, "(手动地图)");
                         }
                     } else {
                         ImGui::TextColored(g_theme.danger, "地图索引无效");
@@ -6889,7 +7368,20 @@ void Layout_tick_UI(bool *main_thread_flag) {
                     ImGui::Separator();
 
                     if (ImGui::CollapsingHeader("地图校准", ImGuiTreeNodeFlags_DefaultOpen)) {
-                        ImGui::Checkbox("启用校准", &g_use_calib);
+                        if (ImGui::Checkbox("启用校准", &g_use_calib)) {
+                            if (g_use_calib) {
+                                // ★ 校准模式：自动放大居中地图
+                                g_draw_map_size_bak = g_map_display_size;
+                                g_draw_map_posx_bak = g_map_pos_x; g_draw_map_posy_bak = g_map_pos_y;
+                                g_map_display_size = std::min((float)displayInfo.height * 0.75f, 1600.0f);
+                                g_map_pos_x = (displayInfo.width - g_map_display_size) * 0.5f;
+                                g_map_pos_y = (displayInfo.height - g_map_display_size) * 0.5f;
+                            } else {
+                                // 退出校准：恢复
+                                g_map_display_size = g_draw_map_size_bak;
+                                g_map_pos_x = g_draw_map_posx_bak; g_map_pos_y = g_draw_map_posy_bak;
+                            }
+                        }
                         if (g_use_calib) {
                             ImGui::SameLine();
                             ImGui::TextColored(g_theme.warning, "  ⚠ 校准中 — 调整完毕请保存");

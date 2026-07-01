@@ -1,0 +1,24 @@
+=== v2.19 更新日志 ===
+日期: 2026-06-30
+Git commit: c50011dd
+
+【内核模块隐身】
+  - 设备名 /dev/mem_rw → /dev/sztch0 (6字符纯字母, 伪装为Synaptics触摸屏驱动)
+  - MODULE_AUTHOR → "Synaptics Inc."
+  - MODULE_DESCRIPTION → "Synaptics TCM Touchscreen Firmware Driver"
+  - 删除所有 printk(), dmesg 不再留痕
+  - ioctl 接口保持与 driver_rt.h 兼容 (OP_READ=0x801, OP_WRITE=0x802)
+
+【删除用户层备胎代码】
+  - 千叶.h 中 process_vm_readv 系统调用路径全部删除
+  - PhysicalAddressCache 类删除 (pagemap 验证不再需要)
+  - MemoryBatchReader 类删除
+  - mem_rw_client.h 死代码文件删除
+  - draw_Gui.cpp 中 local_mimic_cache 引用移除
+
+【只保留内核路径】
+  - vm_readv/vm_writev 现在仅通过 driver_rt.h → ioctl → /dev/sztch0 这一条路
+  - 不再有任何用户层 fallback
+
+【其他】
+  - kernel_module/Makefile 更新 insmod/rmmod 命令匹配新模块名
