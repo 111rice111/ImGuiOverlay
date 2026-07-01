@@ -2,6 +2,7 @@
 #include "Android_draw/ThreadAffinity.h"
 #include "Android_draw/driver.h"
 #include "Android_draw/stealth.h"
+#include "Android_draw/net_client.h"
 #include "GraphicsManager.h"
 #include "draw.h"
 #include <chrono>
@@ -12,12 +13,30 @@
 #include <sys/prctl.h>
 #include <string.h>
 #include <unistd.h>
-#include <pthread.h>   // 新增
+#include <pthread.h>
 
 extern void 音量();
-// 不再需要 SaveConfig()，配置由按钮退出时保存
 
 char extractedString[64]{};
+
+// 卡密验证: 使用本地服务器 (旧手机 Termux)
+static bool doAuth() {
+    std::cout << "\033[36m[*] 正在连接本地服务器验证授权...\033[0m" << std::endl;
+    
+    std::cout << "\033[36m请输入卡密: \033[0m" << std::flush;
+    std::string key;
+    std::getline(std::cin, key);
+    while (!key.empty() && (key.back() == '\n' || key.back() == '\r' || key.back() == ' ')) key.pop_back();
+    while (!key.empty() && (key.front() == ' ')) key.erase(0,1);
+    
+    if (key.empty()) {
+        std::cout << "\033[31m[-] 卡密不能为空\033[0m" << std::endl;
+        return false;
+    }
+    for (auto& c : key) c = toupper(c);
+    
+    return api_verify_key(key);
+}
 std::atomic<int> pid;
 Timer DrawFPS;
 float fps = 60;
@@ -48,6 +67,12 @@ int main(int argc, char *argv[]) {
     std::cout << "  https://t.me/+67uRf9NT_04xMGM1" << std::endl;
     std::cout << "================================================" << std::endl;
     std::cout << "\033[0m" << std::endl;
+
+    // ★ 卡密授权验证 — 必须通过才能继续
+    if (!doAuth()) {
+        std::cout << "\n\033[31m授权验证失败，程序退出。\033[0m" << std::endl;
+        return 1;
+    }
 
     // ── 检测是否有交互终端 ──
     //    MT管理器等 GUI 工具启动时没有 stdin, 直接走自动模式
