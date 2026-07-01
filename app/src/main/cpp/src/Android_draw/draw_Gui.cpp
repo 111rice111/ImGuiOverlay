@@ -2100,8 +2100,7 @@ void TryAutoDetectMap(const std::vector<DataStruct>& data) {
         return;
     }
     // LOCKED: 常规验证
-    // ★ 无信号源时不做评分匹配，避免误识别
-    if (musicbox_found || piano_found || g_detected_chairs.size() >= 3) {
+    if (musicbox_found || piano_found || !g_detected_chairs.empty()) {
         MapScoreResult sr = ScoreMapFingerprints(musicbox_pos, musicbox_found, piano_pos, piano_found, g_detected_chairs);
         snprintf(g_score_debug_buf, sizeof(g_score_debug_buf), "%s", sr.debug_text.c_str());
         if (sr.fp_id >= 0 && sr.score >= 60.0f && !sr.is_tie) {
@@ -2448,9 +2447,8 @@ static void LoadFingerprintDB() {
 
     // ── 尝试路径列表 ──
     const std::vector<std::string> paths = {
-        MAPS_ROOT "enhanced_fingerprints.json",  // ★ 新: 日志自动生成
-        MAPS_ROOT "musicbox_stools.json",        // 旧: 兼容
-        "/sdcard/map_fingerprints.json",          // 更旧: 兼容
+        MAPS_ROOT "musicbox_stools.json",        // 主: 音乐盒+凳子指纹
+        "/sdcard/map_fingerprints.json",          // 兼容旧版
     };
 
     std::ifstream ifs;
@@ -2600,9 +2598,8 @@ static void RebuildFingerprintMapping() {
 }
 
 // =============================================================
-// 新架构核心：地图评分函数 (v4.0 — 杂交匹配)
-// Tier 2: 椅子数量快速预筛 → Tier 3: 坐标精确评分
-// 返回最佳匹配的指纹 ID（-1 表示无匹配）
+// 地图评分函数 (v3.0)
+// 全量指纹评分: 音乐盒(XY+Z) + 凳子位置重合度
 // =============================================================
 static MapScoreResult ScoreMapFingerprints(
     const Vector3A& musicbox_pos, bool musicbox_found,
@@ -2614,27 +2611,6 @@ static MapScoreResult ScoreMapFingerprints(
 
     int detected_count = (int)detected_chairs.size();
 
-    // ★ Tier 2: 椅子数量快速预筛 — O(n) 整数比较，筛掉大部分候选
-    std::vector<int> candidates;
-    for (size_t fi = 0; fi < g_fingerprint_db.size(); fi++) {
-        auto& fp = g_fingerprint_db[fi];
-        if (!fp.valid) continue;
-        // ★ 椅子数预筛: 仅在扫到 ≥3 个凳子时启用（少量凳子不可靠, 可能还未扫全）
-        if (detected_count >= 3) {
-            int diff = abs(fp.chairCount - detected_count);
-            // 扩展容忍: diff≤3 覆盖"扫到5个但DB有8个"的情况
-            if (diff > 3) continue;
-        }
-        candidates.push_back((int)fi);
-    }
-
-    // 如果预筛后候选 < 2 个，放弃预筛, 全量评分 (防误杀正确地图)
-    if (candidates.size() < 2) {
-        candidates.clear();
-        for (size_t fi = 0; fi < g_fingerprint_db.size(); fi++)
-            if (g_fingerprint_db[fi].valid) candidates.push_back((int)fi);
-    }
-
     struct FpScored {
         int fp_id;
         float total;
@@ -2644,21 +2620,23 @@ static MapScoreResult ScoreMapFingerprints(
         float ps;  // piano score
     };
     std::vector<FpScored> scored_list;
-    scored_list.reserve(candidates.size());
 
-    for (int fi : candidates) {
+    // ★ 全量评分 (无预筛, 23张地图每帧都跑也是毫秒级)
+    for (size_t fi = 0; fi < g_fingerprint_db.size(); fi++) {
         auto& fp = g_fingerprint_db[fi];
+        if (!fp.valid) continue;
 
         float musicBoxScore = 0.0f;
         float stoolCountScore = 0.0f;
         float stoolPosScore = 0.0f;
         float pianoScore = 0.0f;
 
-        // 1) 音乐盒匹配 (0~40)
+        // 1) 音乐盒匹配 (0~40)——加入Z轴, 容差5单位吸收波动, >25不计数
         if (musicbox_found && fp.musicBox.X != 0.0f) {
             float dx = musicbox_pos.X - fp.musicBox.X;
             float dy = musicbox_pos.Y - fp.musicBox.Y;
-            float dist = sqrtf(dx*dx + dy*dy);
+            float dz = musicbox_pos.Z - fp.musicBox.Z;
+            float dist = sqrtf(dx*dx + dy*dy + dz*dz);
             if (dist <= 5.0f) musicBoxScore = 40.0f;
             else if (dist < 25.0f) musicBoxScore = 40.0f - (dist - 5.0f) * 2.0f;
         }
