@@ -178,15 +178,61 @@ ImGuiOverlay/
 
 ---
 
-## 用户版本 vs 开发者版本
+## 开发版 ↔ 用户版 同步流程
 
-| | 开发者版本 | 用户版本 |
-|---|---|---|
-| 目录 | `E:\ImGuiOverlay` | `E:\ImGuiOverlay-User` |
-| 二进制 | `overlay` | `overlay_user` |
-| 用途 | 开发调试 | 发布给用户 |
+### 架构概览
 
-编译命令相同，仅目录不同。
+```
+开发版 (E:\ImGuiOverlay)              用户版 (E:\ImGuiOverlay-User)
+┌─────────────────────────┐          ┌─────────────────────────────┐
+│ 无联网控制              │  同步→   │ 卡密授权系统                 │
+│ 无 license.enc          │          │ main.cpp: AUTH_SERVER        │
+│ CMakeLists: overlay     │          │ CMakeLists: overlay_user     │
+│ 二进制名: overlay       │          │ 二进制名: overlay_user       │
+└─────────────────────────┘          │ backend/ (server.py+数据库)  │
+                                     │ license.enc + deploy.sh     │
+                                     └─────────────────────────────┘
+```
+
+### 两个版本的差异
+
+| 文件 | 开发版 | 用户版 |
+|------|--------|--------|
+| `main.cpp` | 无卡密逻辑 | 含 AUTH_SERVER + HTTP 验证 |
+| `CMakeLists.txt` | target: overlay | target: overlay_user + curl/openssl |
+| `backend/` | 不存在 | 服务端 PHP/Python + 数据库 |
+| `license.enc` | 不存在 | 加密许可证 |
+| `deploy.sh` | 不存在 | 自动化部署脚本 |
+| `overlay.db` | 不存在 | 本地卡密数据库 |
+| 其他所有文件 | **完全相同** | **从开发版同步** |
+
+### 同步步骤（每次开发版更新后执行）
+
+```bash
+# 1. 开发版提交并推送 GitHub
+cd E:\ImGuiOverlay
+git add -A && git commit -m "描述改动"
+git push origin main
+
+# 2. 用户版拉取合并
+cd E:\ImGuiOverlay-User
+git pull --no-rebase origin main
+
+# 3. 如果 main.cpp / CMakeLists.txt 有冲突 → 保留用户版（含卡密系统）
+#    README.md 等文档冲突 → 用开发版（更新更全）
+
+# 4. 编译用户版
+.\gradlew.bat assembleRelease
+
+# 5. 推送用户版、部署
+```
+
+### ⚠️ 关键规则
+
+1. **开发版不需要联网控制** — main.cpp 中不应包含 AUTH_SERVER 代码
+2. **用户版必须保留卡密系统** — 同步时绝不能覆盖 main.cpp / CMakeLists.txt / backend/
+3. **大部分文件（draw_Gui.cpp、Structs.h、千叶.h 等）应保持一致** — 这些是公共代码
+4. **开发版是唯一修改源** — 所有新功能先在开发版实现，再同步到用户版
 
 ---
 
@@ -207,8 +253,8 @@ A: JSON 中每个地图不应有多个独立条目，多楼层应合并在一个
 
 详见 [CHANGELOG.md](CHANGELOG.md)
 
-当前稳定版：**v2.16-stable**（2026-06-30）
-- 复四点触摸校准硬编码
-- 修复板子扫描（is_woodplane 过滤补回）
-- 钻石切面判定框
-- 自我检测绕过
+当前稳定版：**v2.36-stable**（2026-07-01）
+- 地图识别重构（32 张指纹库 + 音乐盒/钢琴/凳子匹配）
+- 纹理分帧上传 + 近点合并（性能大幅提升）
+- 内核模块隐身（伪装 Synaptics 驱动）
+- 钻石切面判定框 + 触摸校准硬编码
