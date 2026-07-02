@@ -682,6 +682,7 @@ static bool  show_wood_rect = false;
 static Vector3A g_wood_viz_pos;
 static float g_wood_viz_angle = 0;
 static bool  g_wood_viz_valid = false;
+static Vector3A g_wood_viz_pos_prev = {0,0,0};  // 帧间防抖
 static float wood_trigger_dist = 25.0f;
 static float wood_cooldown_dur = 1.0f;
 static bool  g_was_hunter_inside = false;
@@ -5706,7 +5707,7 @@ void AutoWoodCheck() {
     }
     // 跳过 self_is_survivor 检查: GlobalMemory::自身 可能指向错误对象
     // if (!self_is_survivor) return;
-    if (GlobalMemory::自身 == 0) return;
+    if (GlobalMemory::自身 == 0) { g_wood_viz_valid = false; return; }
 
     float minHunterDist = 9999.0f;
     const DataStruct* nearest_hunter = nullptr;
@@ -5722,7 +5723,7 @@ void AutoWoodCheck() {
             hunterPos = pos;
         }
     }
-    if (!nearest_hunter) return;
+    if (!nearest_hunter) { g_wood_viz_valid = false; return; }
 
     float minWoodDist = 9999.0f;
     const DataStruct* nearest_wood = nullptr;
@@ -5739,15 +5740,23 @@ void AutoWoodCheck() {
             woodPos = pos;
         }
     }
-    if (!nearest_wood) return;
+    if (!nearest_wood) { g_wood_viz_valid = false; return; }
 
     float dx = getFloat(nearest_wood->objcoor + 0xB8);
     float dy = getFloat(nearest_wood->objcoor + 0xC0);
     float angle = atan2f(dy, dx);
 
+    // ★ 帧间距离验证: 新位置与上一帧差距>500单位 → 拒绝(防悬空指针抽风)
+    if (g_wood_viz_valid) {
+        float jump = sqrtf((woodPos.X - g_wood_viz_pos_prev.X) * (woodPos.X - g_wood_viz_pos_prev.X) +
+                          (woodPos.Y - g_wood_viz_pos_prev.Y) * (woodPos.Y - g_wood_viz_pos_prev.Y));
+        if (jump > 500.0f) return;  // 正常木板不会瞬移, 跳过此帧
+    }
+
     g_wood_viz_pos = woodPos;
     g_wood_viz_angle = angle;
     g_wood_viz_valid = true;
+    g_wood_viz_pos_prev = woodPos;
 
     float x[4], y[4];
     x[0] = woodPos.X + (wood_length / 2) * cosf(angle) + (wood_width / 2) * cosf(angle + M_PI_2);
