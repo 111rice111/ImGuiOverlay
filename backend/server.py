@@ -8,6 +8,12 @@ ImGuiOverlay 卡密验证服务端 (Python + SQLite)
 import sqlite3, json, time, secrets, hashlib, struct
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from datetime import datetime, timedelta
+from health_monitor import (
+    start_monitor, run_full_diagnostic, get_current_metrics,
+    get_recent_diagnostics, get_alert_history, get_metrics_history,
+    get_announcements, add_announcement, del_announcement,
+    get_force_version, set_force_version, MANUAL_TROUBLESHOOTING
+)
 
 # ========== XOR-CBC 加密 (与客户端 crypto.h 同步) ==========
 XOR_KEY = b'ImGuiOverlay2026'  # 16字节密钥, 需与客户端一致
@@ -134,8 +140,35 @@ class APIHandler(BaseHTTPRequestHandler):
         self.wfile.write(body.encode())
 
     def do_GET(self):
-        if self.path == "/admin" or self.path == "/admin/":
+        path = self.path.split("?")[0]
+        # 管理后台页面
+        if path == "/admin" or path == "/admin/":
             return self._html(ADMIN_HTML)
+        # 诊断仪表盘
+        if path == "/diag" or path == "/diag/":
+            return self._html(DIAG_HTML)
+        # 公开健康检查
+        if path == "/api/status":
+            return self._json(ok=True, msg="running", version="2.38")
+        # 诊断数据 API (GET)
+        if path == "/api/diag/now":
+            return self._json(ok=True, report=run_full_diagnostic())
+        if path == "/api/diag/metrics":
+            return self._json(ok=True, metrics=get_current_metrics())
+        if path == "/api/diag/alerts":
+            return self._json(ok=True, alerts=get_alert_history(50))
+        if path == "/api/diag/manual":
+            return self._json(ok=True, guide=MANUAL_TROUBLESHOOTING)
+        # 公告查询
+        if path == "/api/ann/list":
+            return self._json(ok=True, announcements=get_announcements())
+        if path == "/api/update/get":
+            return self._json(ok=True, version=get_force_version())
+        # 客户端: 检查强制更新 + 获取公告
+        if path == "/api/check":
+            ver = get_force_version()
+            ann = get_announcements()
+            return self._json(ok=True, force_version=ver, announcements=ann)
         self._respond(False, "not found")
 
     def do_POST(self):
@@ -180,6 +213,50 @@ class APIHandler(BaseHTTPRequestHandler):
                 print(f"[ADMIN] {action} card #{card_id}")
                 return self._json(ok=True)
             return self._respond(False, "unknown admin path")
+
+        # ── 诊断 API (明文, 浏览器调用) ──
+        if path.startswith("/api/diag/"):
+            try: data = json.loads(body) if body else {}
+            except: return self._json(ok=False, msg="json error")
+            if path == "/api/diag/now":
+                return self._json(ok=True, report=run_full_diagnostic())
+            elif path == "/api/diag/metrics":
+                return self._json(ok=True, metrics=get_current_metrics())
+            elif path == "/api/diag/history":
+                return self._json(ok=True, history=get_recent_diagnostics(30))
+            elif path == "/api/diag/alerts":
+                return self._json(ok=True, alerts=get_alert_history(50))
+            elif path == "/api/diag/charts":
+                hours = data.get("hours", 1)
+                return self._json(ok=True, data=get_metrics_history(hours))
+            elif path == "/api/diag/manual":
+                return self._json(ok=True, guide=MANUAL_TROUBLESHOOTING)
+            return self._json(ok=False, msg="unknown diag path")
+
+        # ── 公告 API (明文) ──
+        if path.startswith("/api/ann/"):
+            try: data = json.loads(body) if body else {}
+            except: return self._json(ok=False, msg="json error")
+            if path == "/api/ann/list":
+                return self._json(ok=True, announcements=get_announcements())
+            elif path == "/api/ann/add":
+                ok = add_announcement(data.get("content", ""))
+                return self._json(ok=ok)
+            elif path == "/api/ann/del":
+                ok = del_announcement(data.get("id", 0))
+                return self._json(ok=ok)
+            return self._json(ok=False, msg="unknown ann path")
+
+        # ── 强制更新 API (明文) ──
+        if path.startswith("/api/update/"):
+            try: data = json.loads(body) if body else {}
+            except: return self._json(ok=False, msg="json error")
+            if path == "/api/update/set":
+                ok = set_force_version(data.get("version", "0.0.0"))
+                return self._json(ok=ok)
+            elif path == "/api/update/get":
+                return self._json(ok=True, version=get_force_version())
+            return self._json(ok=False, msg="unknown update path")
 
         # 客户端 API — XOR 加密
         try:
@@ -340,11 +417,228 @@ loadList();
 </body>
 </html>'''
 
+DIAG_HTML = '''<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ImGuiOverlay — 服务器诊断</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Segoe UI',system-ui,sans-serif;background:#0a0e14;color:#cdd6f4;min-height:100vh}
+.header{background:linear-gradient(135deg,#1a1f2e,#0d1117);padding:16px 24px;border-bottom:1px solid #2a3040;display:flex;justify-content:space-between;align-items:center}
+.header h1{font-size:1.3em;color:#89b4fa}
+.header .status{font-size:0.85em;padding:4px 12px;border-radius:12px}
+.status-ok{background:#1a3a1a;color:#a6e3a1}
+.status-fail{background:#3a1a1a;color:#f38ba8}
+.nav{display:flex;gap:4px;padding:8px 24px;background:#11151c;border-bottom:1px solid #1e2530}
+.nav a{color:#6c7086;text-decoration:none;padding:6px 16px;border-radius:6px;font-size:0.9em;transition:all .2s}
+.nav a:hover,.nav a.active{color:#89b4fa;background:#1e2530}
+.panels{padding:16px 24px;display:grid;grid-template-columns:1fr 1fr;gap:12px;max-width:1400px;margin:0 auto}
+@media(max-width:900px){.panels{grid-template-columns:1fr}}
+.card{background:#11151c;border:1px solid #1e2530;border-radius:8px;padding:14px}
+.card h3{color:#89b4fa;font-size:0.95em;margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid #1e2530}
+.metric-row{display:flex;justify-content:space-between;padding:5px 0;font-size:0.85em;border-bottom:1px solid #181c24}
+.metric-row:last-child{border-bottom:none}
+.metric-val{font-weight:600;font-family:'Cascadia Code',monospace}
+.metric-ok{color:#a6e3a1}
+.metric-warn{color:#fab387}
+.metric-fail{color:#f38ba8}
+.alert-item{padding:6px 10px;margin:4px 0;border-radius:4px;font-size:0.82em;display:flex;align-items:flex-start;gap:6px}
+.alert-critical{border-left:3px solid #f38ba8;background:#2a1015}
+.alert-warning{border-left:3px solid #fab387;background:#2a2010}
+.alert-info{border-left:3px solid #89b4fa;background:#10182a}
+.btn{background:#1e2530;color:#cdd6f4;border:1px solid #2a3040;padding:7px 16px;border-radius:6px;cursor:pointer;font-size:0.85em;transition:all .2s}
+.btn:hover{background:#2a3040;border-color:#89b4fa}
+.btn-danger{background:#3a101a;border-color:#f38ba8;color:#f38ba8}
+.btn-danger:hover{background:#4a1520}
+.btn-sm{padding:4px 10px;font-size:0.78em}
+.flex-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+input,textarea{background:#0d1117;border:1px solid #2a3040;color:#cdd6f4;padding:6px 10px;border-radius:4px;font-size:0.85em;width:100%}
+textarea{min-height:60px;resize:vertical}
+.chart-bar{height:8px;border-radius:4px;background:#1e2530;margin:4px 0;overflow:hidden}
+.chart-fill{height:100%;border-radius:4px;transition:width .5s}
+.full{grid-column:1/-1}
+.suggestion{background:#0a1015;border-left:3px solid #89b4fa;padding:10px 14px;margin:6px 0;border-radius:0 6px 6px 0;font-size:0.85em;white-space:pre-wrap;font-family:'Cascadia Code',monospace}
+.refresh{font-size:0.75em;color:#6c7086}
+</style>
+</head>
+<body>
+<div class="header">
+  <div>
+    <h1>⚙ 服务器诊断仪表盘</h1>
+    <span class="refresh" id="refreshStatus">等待数据...</span>
+  </div>
+  <span class="status status-ok" id="overallStatus">检测中...</span>
+</div>
+<div class="nav">
+  <a href="/admin">← 卡密管理</a>
+  <a href="#" class="active" onclick="switchTab('overview',this)">概览</a>
+  <a href="#" onclick="switchTab('announce',this)">公告管理</a>
+  <a href="#" onclick="switchTab('update',this)">强制更新</a>
+</div>
+
+<div class="panels" id="panelOverview">
+  <!-- 系统指标 -->
+  <div class="card">
+    <h3>📊 实时系统指标</h3>
+    <div id="metricsDisplay"><span class="refresh">加载中...</span></div>
+  </div>
+  <!-- 检查清单 -->
+  <div class="card">
+    <h3>🔍 诊断检查</h3>
+    <div id="checksDisplay"><span class="refresh">加载中...</span></div>
+  </div>
+  <!-- 告警 -->
+  <div class="card full">
+    <h3>🔔 最近告警</h3>
+    <div id="alertsDisplay"><span class="refresh">加载中...</span></div>
+  </div>
+  <!-- 修复建议 -->
+  <div class="card full">
+    <h3>💡 修复建议</h3>
+    <div id="suggestionsDisplay"><span class="refresh">加载中...</span></div>
+  </div>
+  <!-- 手动排查 -->
+  <div class="card full">
+    <h3>📋 手动排查指引</h3>
+    <div id="manualDisplay"><span class="refresh">加载中...</span></div>
+  </div>
+</div>
+
+<div class="panels" id="panelAnnounce" style="display:none">
+  <div class="card">
+    <h3>📢 发布公告</h3>
+    <textarea id="annContent" placeholder="公告内容..."></textarea>
+    <br><br><button class="btn" onclick="addAnn()">发布公告</button>
+  </div>
+  <div class="card">
+    <h3>📋 公告列表</h3>
+    <div id="annList"><span class="refresh">加载中...</span></div>
+  </div>
+</div>
+
+<div class="panels" id="panelUpdate" style="display:none">
+  <div class="card">
+    <h3>📦 强制更新设置</h3>
+    <p style="color:#6c7086;font-size:0.82em;margin-bottom:8px">设置后, 版本低于此值的客户端将被强制要求更新</p>
+    <div class="flex-row">
+      <input id="forceVer" placeholder="版本号, 如 2.38" style="width:200px">
+      <button class="btn" onclick="setForceVer()">设置</button>
+      <button class="btn btn-danger btn-sm" onclick="setForceVer('0.0.0')">关闭强制</button>
+    </div>
+    <p style="margin-top:8px;font-size:0.85em">当前: <b id="curForceVer">---</b></p>
+  </div>
+</div>
+
+<script>
+let autoRefresh=null;
+
+function switchTab(tab,el){
+  ["panelOverview","panelAnnounce","panelUpdate"].forEach(id=>document.getElementById(id).style.display="none");
+  document.getElementById("panel"+(tab.charAt(0).toUpperCase()+tab.slice(1).replace("nnounce","nnounce"))).style.display="";
+  document.querySelectorAll(".nav a").forEach(a=>a.classList.remove("active"));
+  if(el)el.classList.add("active");
+  if(tab==="overview") runDiag();
+  if(tab==="announce") loadAnns();
+  if(tab==="update") loadForceVer();
+}
+
+async function apiGet(url){let r=await fetch(url);return r.json()}
+async function apiPost(url,data){let r=await fetch(url,{method:"POST",body:JSON.stringify(data)});return r.json()}
+
+async function runDiag(){
+  document.getElementById("overallStatus").textContent="检测中...";
+  try{
+    let r=await apiGet("/api/diag/now");
+    let rep=r.report;
+    document.getElementById("overallStatus").textContent=rep.ok?"运行正常":"异常";
+    document.getElementById("overallStatus").className="status "+(rep.ok?"status-ok":"status-fail");
+    document.getElementById("refreshStatus").textContent="刷新于 "+new Date().toLocaleTimeString();
+
+    // 指标
+    let m=rep.metrics;
+    let met=`<div class="metric-row"><span>API 延迟</span><span class="metric-val ${m.api_ms<1000?'metric-ok':'metric-warn'}">${m.api_ms.toFixed(0)}ms</span></div>`;
+    met+=`<div class="metric-row"><span>API 状态</span><span class="metric-val ${m.api_ok?'metric-ok':'metric-fail'}">${m.api_ok?'正常':'异常'}</span></div>`;
+    met+=`<div class="metric-row"><span>公网隧道</span><span class="metric-val ${m.bore_alive?'metric-ok':'metric-fail'}">${m.bore_alive?'连通':'断开'}</span></div>`;
+    if(m.cpu_pct>0) met+=`<div class="metric-row"><span>CPU</span><span class="metric-val ${m.cpu_pct>85?'metric-warn':'metric-ok'}">${m.cpu_pct.toFixed(0)}%</span></div>`;
+    if(m.mem_pct>0) met+=`<div class="metric-row"><span>内存</span><span class="metric-val ${m.mem_pct>90?'metric-warn':'metric-ok'}">${m.mem_pct.toFixed(0)}%</span></div>`;
+    if(m.disk_free_gb>0) met+=`<div class="metric-row"><span>磁盘剩余</span><span class="metric-val ${m.disk_free_gb<1?'metric-fail':'metric-ok'}">${m.disk_free_gb.toFixed(1)}GB</span></div>`;
+    document.getElementById("metricsDisplay").innerHTML=met;
+
+    // 检查
+    let chk="";
+    rep.checks.forEach(c=>{
+      let cls=c.status==="OK"?"metric-ok":c.status==="WARN"?"metric-warn":"metric-fail";
+      chk+=`<div class="metric-row"><span>${c.name}</span><span class="metric-val ${cls}">${c.status}</span></div>`;
+      if(c.detail) chk+=`<div style="font-size:0.75em;color:#6c7086;padding:0 0 4px 8px">${c.detail}</div>`;
+    });
+    document.getElementById("checksDisplay").innerHTML=chk;
+
+    // 告警
+    let al="";
+    rep.alerts.forEach(a=>al+=`<div class="alert-item alert-${a.level}">${a.message}</div>`);
+    document.getElementById("alertsDisplay").innerHTML=al||"<span class='refresh'>无告警</span>";
+
+    // 建议
+    let sug="";
+    rep.suggestions.forEach(s=>sug+=`<div class="suggestion">${s}</div>`);
+    document.getElementById("suggestionsDisplay").innerHTML=sug||"<span class='refresh'>无建议</span>";
+  }catch(e){
+    document.getElementById("overallStatus").textContent="离线";
+    document.getElementById("overallStatus").className="status status-fail";
+  }
+}
+
+async function loadManual(){
+  let r=await apiGet("/api/diag/manual");
+  if(r.ok) document.getElementById("manualDisplay").innerHTML=`<pre class="suggestion" style="font-size:0.78em">${r.guide}</pre>`;
+}
+
+// 公告
+async function addAnn(){
+  let c=document.getElementById("annContent").value.trim();
+  if(!c) return;
+  await apiPost("/api/ann/add",{content:c});
+  document.getElementById("annContent").value="";
+  loadAnns();
+}
+async function loadAnns(){
+  let r=await apiGet("/api/ann/list");
+  let h="";
+  (r.announcements||[]).forEach(a=>h+=`<div class="alert-item alert-info"><span style="flex:1">${a.content}</span><button class="btn btn-sm btn-danger" onclick="delAnn(${a.id})">×</button></div>`);
+  document.getElementById("annList").innerHTML=h||"<span class='refresh'>暂无公告</span>";
+}
+async function delAnn(id){await apiPost("/api/ann/del",{id:id});loadAnns()}
+
+// 版本
+async function loadForceVer(){
+  let r=await apiGet("/api/update/get");
+  document.getElementById("curForceVer").textContent=r.version||"0.0.0 (不强制)";
+  document.getElementById("forceVer").value=r.version==="0.0.0"?"":r.version;
+}
+async function setForceVer(v){
+  let ver=v||document.getElementById("forceVer").value.trim()||"0.0.0";
+  await apiPost("/api/update/set",{version:ver});
+  loadForceVer();
+}
+
+runDiag(); loadManual(); setInterval(runDiag,15000);
+</script>
+</body>
+</html>'''
+
 if __name__ == "__main__":
     init_db()
+    # 启动健康监控后台线程
+    mon = start_monitor(port=8080)
     print("=" * 50)
-    print("  ImGuiOverlay 卡密服务端")
-    print("  http://0.0.0.0:8080")
+    print("  ImGuiOverlay 卡密服务端 v2.38")
+    print("  本地: http://0.0.0.0:8080")
+    print("  管理: http://0.0.0.0:8080/admin")
+    print("  诊断: http://0.0.0.0:8080/diag")
+    print("  公网: http://bore.pub:3699")
     print("  示例卡密: DEMO-KEY-001 / VIP-UNLIMITED-2024")
+    print("  健康监控: 已启动")
     print("=" * 50)
     HTTPServer(("0.0.0.0", 8080), APIHandler).serve_forever()
