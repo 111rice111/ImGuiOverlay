@@ -5696,20 +5696,6 @@ void AutoWoodCheck() {
     if (!wood_enabled) return;
     const auto& current_data = data_buffers[front_buffer_idx.load(std::memory_order_acquire)];
 
-    // ★ 监管者自动关闭：玩家坐标与任意阵营1实体距离<3米则关闭盖板
-    if (Z.X != 0 || Z.Y != 0) {
-        for (const auto& item : current_data) {
-            if (item.阵营 != 1 || item.is_ghost) continue;
-            Vector3A hp = getObjectCoordinates(item.objcoor, false);
-            if (!isValidCoordinate(hp)) continue;
-            float dx = hp.X - Z.X, dy = hp.Y - Z.Y;
-            if (sqrtf(dx*dx + dy*dy) < 300.0f) {  // <3米(300cm世界单位)
-                wood_enabled = false;
-                return;
-            }
-        }
-    }
-
     bool self_is_survivor = false;
     for (const auto& item : current_data) {
         if (item.obj == GlobalMemory::自身) {
