@@ -686,6 +686,7 @@ static float wood_trigger_dist = 25.0f;
 static float wood_cooldown_dur = 1.0f;
 static bool  g_was_hunter_inside = false;
 static float g_wood_cooldown = 0.0f;
+static float g_last_wood_trigger_time = 0.0f;
 static bool show_touch_point = false;
 static bool g_show_wood_diag = false;       // 木诊断浮窗开关
 static float g_last_touch_x = 0, g_last_touch_y = 0;
@@ -703,7 +704,7 @@ static float g_calib_inj[4][2];
 static float g_calib_obs_buf[4][2];
 static bool  g_calib_done = true;  // 硬编码校准值
 static float g_calib_A=1.00334f,g_calib_B=0,g_calib_C=-1.67224f;
-static float g_calib_D=0,g_calib_E=-1,g_calib_F=2400;
+static float g_calib_D=0,g_calib_E=1,g_calib_F=0;
 
 static ImColor g_BoxColor_Survivor = ImColor(50, 255, 50, 255);
 static ImColor g_BoxColor_Hunter   = ImColor(255, 50, 50, 255);
@@ -1534,7 +1535,7 @@ inline bool optimizedWorldToScreen(const Vector3A &worldPos,
                                    float &screenW) noexcept {
     const float w = matrix[3] * worldPos.X + matrix[7] * worldPos.Z +
                     matrix[11] * worldPos.Y + matrix[15];
-    if (w <= 0.1f) return false;
+    if (w <= 0.5f) return false;
     const float invW = 1.0f / w;
     screenX = px + (matrix[0] * worldPos.X + matrix[4] * worldPos.Z +
                     matrix[8] * worldPos.Y + matrix[12]) * invW * px;
@@ -5771,14 +5772,26 @@ void AutoWoodCheck() {
     float distToWood = sqrtf(FastMath::fastDistanceSquared(Z, woodPos)) / 11.886f;
 
     if (hunterInside && distToWood <= wood_trigger_dist) {
+        // ★ 冷却检查: 距上次触发不足 cooldown 秒则跳过
+        float now = ImGui::GetTime();
+        if (now - g_last_wood_trigger_time < wood_cooldown_dur) {
+            g_wood_cooldown = wood_cooldown_dur - (now - g_last_wood_trigger_time);
+            return;
+        }
+        g_last_wood_trigger_time = now;
+        g_wood_cooldown = 0.0f;
         int tx = wood_touch_x + (rand() % 100 - 50);
         int ty = wood_touch_y + (rand() % 100 - 50);
         SimulateClick(tx, ty);
         // 弹窗提醒（1.5秒冷却，不刷屏）
-        if (ImGui::GetTime() - g_last_touch_time > 1.5f) {
+        if (now - g_last_touch_time > 1.5f) {
+            g_last_touch_time = now;
             AddNotification("已触发盖板", 1.2f, ImVec4(1.0f, 0.8f, 0.2f, 1.0f));
         }
         usleep(50000);
+    } else {
+        // 未触发时实时更新冷却倒计时显示
+        g_wood_cooldown = fmaxf(0.0f, wood_cooldown_dur - (ImGui::GetTime() - g_last_wood_trigger_time));
     }
 }
 
@@ -6305,38 +6318,90 @@ void Layout_tick_UI(bool *main_thread_flag) {
         ImGui::End();
     }
 
-    // 判定范围可视化 — 钻石切面风格
+    // 判定范围可视化 — 赛博科技风格
     if (show_wood_rect && g_wood_viz_valid && wood_enabled) {
-        float ca = cosf(g_wood_viz_angle), sa = sinf(g_wood_viz_angle);
+        // ★ 防数据竞态: 本地快照, 一次性读取全部变量
+        Vector3A wvp = g_wood_viz_pos;
+        float wva = g_wood_viz_angle;
+        float ca = cosf(wva), sa = sinf(wva);
         float hw = wood_width * 0.5f, hl = wood_length * 0.5f;
         Vector3A wc[4] = {
-            {g_wood_viz_pos.X + hl*ca + hw*(-sa), g_wood_viz_pos.Y + hl*sa + hw*ca, g_wood_viz_pos.Z},
-            {g_wood_viz_pos.X + hl*ca - hw*(-sa), g_wood_viz_pos.Y + hl*sa - hw*ca, g_wood_viz_pos.Z},
-            {g_wood_viz_pos.X - hl*ca - hw*(-sa), g_wood_viz_pos.Y - hl*sa - hw*ca, g_wood_viz_pos.Z},
-            {g_wood_viz_pos.X - hl*ca + hw*(-sa), g_wood_viz_pos.Y - hl*sa + hw*ca, g_wood_viz_pos.Z}
+            {wvp.X + hl*ca + hw*(-sa), wvp.Y + hl*sa + hw*ca, wvp.Z},
+            {wvp.X + hl*ca - hw*(-sa), wvp.Y + hl*sa - hw*ca, wvp.Z},
+            {wvp.X - hl*ca - hw*(-sa), wvp.Y - hl*sa - hw*ca, wvp.Z},
+            {wvp.X - hl*ca + hw*(-sa), wvp.Y - hl*sa + hw*ca, wvp.Z}
         };
-        ImVec2 sc[4]; int valid = 0;
+        ImVec2 sc[4]; int valid = 0; bool valid_proj[4] = {false,false,false,false};
+        const float oob_limit = std::max(displayInfo.width, displayInfo.height) * 2.0f;
+        bool any_oob = false;
         for (int k = 0; k < 4; k++) {
             float sx, sy, sw;
-            if (optimizedWorldToScreen(wc[k], matrix, px, py, sx, sy, sw)) { sc[k] = ImVec2(sx, sy); valid++; }
+            if (optimizedWorldToScreen(wc[k], matrix, px, py, sx, sy, sw)) {
+                // ★ 屏幕空间合法性检查: 拒绝超出屏幕 2 倍外的奇点投影
+                if (fabsf(sx - px) > oob_limit || fabsf(sy - py) > oob_limit) { any_oob = true; continue; }
+                sc[k] = ImVec2(sx, sy); valid_proj[k] = true; valid++;
+            }
         }
-        if (valid >= 3) {
+        if (valid >= 3 && !any_oob) {
             ImDrawList* fg = ImGui::GetForegroundDrawList();
-            // 内填: 极淡银白
-            fg->AddQuadFilled(sc[0], sc[1], sc[2], sc[3], IM_COL32(255,255,255,8));
-            // 三层银白光晕 (1.02x / 1.04x / 1.07x)
             ImVec2 ctr = {(sc[0].x+sc[1].x+sc[2].x+sc[3].x)*0.25f, (sc[0].y+sc[1].y+sc[2].y+sc[3].y)*0.25f};
-            float glow_r[3] = {1.02f, 1.04f, 1.07f};
-            int   glow_a[3] = {8, 5, 3};
-            for (int g = 0; g < 3; g++) {
+
+            // —— 内填: 深蓝紫半透明底 ——
+            fg->AddQuadFilled(sc[0], sc[1], sc[2], sc[3], IM_COL32(20, 80, 180, 12));
+
+            // —— 双层扫描线 (等距横线) ——
+            float minY = sc[0].y, maxY = sc[0].y;
+            for (int k = 1; k < 4; k++) { if (sc[k].y < minY) minY = sc[k].y; if (sc[k].y > maxY) maxY = sc[k].y; }
+            static float scan_phase = 0; scan_phase += 0.04f; if (scan_phase > 1.0f) scan_phase -= 1.0f;
+            float scan_spacing = 4.5f * g_ui_density;
+            for (float sy = minY - scan_spacing + scan_phase * scan_spacing; sy < maxY + scan_spacing; sy += scan_spacing) {
+                // 裁剪线: 在四个角之间插值
+                // 简化: 用 AddLine 画横线穿过四边形, ImGui 不支持裁剪到四边形, 用粗线+淡alpha 近似
+                fg->AddLine(ImVec2(sc[0].x - 5, sy), ImVec2(sc[2].x + 5, sy), IM_COL32(0, 200, 255, 12), 1.0f);
+            }
+
+            // —— 两层青蓝光晕 ——
+            float glow_r[2] = {1.03f, 1.06f};
+            int   glow_a[2] = {10, 4};
+            for (int g = 0; g < 2; g++) {
                 ImVec2 gl[4];
                 for (int k = 0; k < 4; k++) { gl[k].x = ctr.x + (sc[k].x - ctr.x)*glow_r[g]; gl[k].y = ctr.y + (sc[k].y - ctr.y)*glow_r[g]; }
-                fg->AddQuadFilled(gl[0], gl[1], gl[2], gl[3], IM_COL32(224, 224, 232, glow_a[g]));
+                fg->AddQuadFilled(gl[0], gl[1], gl[2], gl[3], IM_COL32(0, 180, 240, glow_a[g]));
             }
-            // 边框: 银白 1.5px
-            fg->AddQuad(sc[0], sc[1], sc[2], sc[3], IM_COL32(232, 232, 238, 100), 1.5f);
-            // 四角亮点
-            for (int k = 0; k < 4; k++) fg->AddCircleFilled(sc[k], 2.5f, IM_COL32(232, 232, 238, 102));
+
+            // —— 四角 bracket (L 形角标) ——
+            const ImU32 bracket_c = IM_COL32(0, 220, 255, 180);
+            const float bk_len = std::min(std::min(fabsf(sc[1].x-sc[0].x), fabsf(sc[2].x-sc[3].x)),
+                                          std::min(fabsf(sc[3].x-sc[0].x), fabsf(sc[2].x-sc[1].x))) * 0.22f;
+            for (int k = 0; k < 4; k++) {
+                int prev = (k+3)%4, next = (k+1)%4;
+                float dx_n = (sc[next].x - sc[k].x), dy_n = (sc[next].y - sc[k].y);
+                float dx_p = (sc[prev].x - sc[k].x), dy_p = (sc[prev].y - sc[k].y);
+                float ln = sqrtf(dx_n*dx_n + dy_n*dy_n), lp = sqrtf(dx_p*dx_p + dy_p*dy_p);
+                if (ln < 0.1f || lp < 0.1f) continue;
+                dx_n /= ln; dy_n /= ln; dx_p /= lp; dy_p /= lp;
+                float bl = std::min(bk_len, std::min(ln, lp) * 0.35f);
+                ImVec2 cn(sc[k].x + dx_n*bl, sc[k].y + dy_n*bl);
+                ImVec2 cp(sc[k].x + dx_p*bl, sc[k].y + dy_p*bl);
+                fg->AddLine(sc[k], cn, bracket_c, 2.0f);
+                fg->AddLine(sc[k], cp, bracket_c, 2.0f);
+            }
+
+            // —— 边框: 青蓝 1.2px ——
+            fg->AddQuad(sc[0], sc[1], sc[2], sc[3], IM_COL32(0, 210, 255, 65), 1.2f);
+
+            // —— 四角菱形亮点 ——
+            for (int k = 0; k < 4; k++) {
+                const float ds = 3.0f;
+                fg->AddLine(ImVec2(sc[k].x-ds, sc[k].y), ImVec2(sc[k].x+ds, sc[k].y), IM_COL32(0, 255, 255, 100), 1.5f);
+                fg->AddLine(ImVec2(sc[k].x, sc[k].y-ds), ImVec2(sc[k].x, sc[k].y+ds), IM_COL32(0, 255, 255, 100), 1.5f);
+            }
+
+            // —— 中心十字准星 ——
+            const float cs = std::min(bk_len * 0.6f, 12.0f);
+            fg->AddLine(ImVec2(ctr.x-cs, ctr.y), ImVec2(ctr.x+cs, ctr.y), IM_COL32(0, 255, 255, 50), 1.0f);
+            fg->AddLine(ImVec2(ctr.x, ctr.y-cs), ImVec2(ctr.x, ctr.y+cs), IM_COL32(0, 255, 255, 50), 1.0f);
+            fg->AddCircle(ctr, cs*0.5f, IM_COL32(0, 220, 255, 40), 16, 0.8f);
         }
     }
 
@@ -6666,6 +6731,7 @@ void Layout_tick_UI(bool *main_thread_flag) {
                 ImGui::Checkbox("启用自动盖板", &wood_enabled); ImGui::SameLine();
                 if (StyledButton("测试触摸", ButtonVariant::Secondary, ImVec2(0,0), g_density)) { SimulateClick(wood_touch_x, wood_touch_y); }
                 ImGui::SameLine(); ImGui::Checkbox("显示触摸点", &show_touch_point);
+                ImGui::SameLine(); ImGui::Checkbox("显示判定范围", &show_wood_rect);
                 ImGui::SameLine(); ImGui::Checkbox("显示诊断", &g_show_wood_diag);
                 ImGui::Spacing();
                 ImGui::TextColored(g_theme.text_muted, "交互键坐标");
@@ -6745,7 +6811,6 @@ void Layout_tick_UI(bool *main_thread_flag) {
                     ImGui::SliderFloat("判定长度", &wood_length, 5.0f, 30.0f);
                     ImGui::SliderFloat("判定宽度", &wood_width, 3.0f, 20.0f);
                 }
-                ImGui::Checkbox("显示判定范围", &show_wood_rect);
                 ImGui::Spacing();
                 ImGui::TextColored(g_theme.warning, "提示：先测试触摸，确认交互键有反应后再开启");
                 break;
