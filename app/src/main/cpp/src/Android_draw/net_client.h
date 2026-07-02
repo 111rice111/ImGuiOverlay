@@ -8,6 +8,15 @@
  *   GET  /api/version                         → {version, url, md5}
  *   GET  /api/download                        → 二进制数据
  */
+#include <string>
+#include <cstring>
+
+namespace _nc {
+template<size_t N>
+struct XS { char d[N]; constexpr XS(const char(&s)[N]){ for(size_t i=0;i<N;i++)d[i]=s[i]^0x5A; } };
+template<size_t N> inline std::string D(const XS<N>& xs){ char b[N]; for(size_t i=0;i<N;i++)b[i]=xs.d[i]^0x5A; return std::string(b,N-1); }
+}
+#define _S(s) _nc::D(_nc::XS<sizeof(s)>(s))
 
 #pragma once
 #include <string>
@@ -25,10 +34,66 @@
 #include "crypto.h"
 using json = nlohmann::json;
 
-// ========== 配置 ==========
-#define NET_SERVER_HOST "192.168.1.13"
-#define NET_SERVER_PORT 8080
+// ========== 配置 (运行时解密) ==========
+#define NET_SERVER_PORT_DEFAULT 45137
 #define NET_TIMEOUT_SEC 10
+
+#include <fstream>
+#include <cstdlib>
+#include <cstring>
+
+// 从 GitHub 或本地文件获取最新 bore 端口
+inline int get_server_port() {
+    // 1. 尝试从 GitHub 获取最新端口 (daemon 重启时自动更新)
+    int sock = socket(AF_INET, SOCK_STREAM, 0);
+    if (sock >= 0) {
+        struct sockaddr_in addr = {};
+        addr.sin_family = AF_INET;
+        addr.sin_port = htons(443);
+        struct hostent* he = gethostbyname("raw.githubusercontent.com");
+        if (he) {
+            memcpy(&addr.sin_addr, he->h_addr_list[0], he->h_length);
+            struct timeval tv = {3, 0};
+            setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+            if (connect(sock, (struct sockaddr*)&addr, sizeof(addr)) == 0) {
+                const char* req = 
+                    "GET /111rice111/ImGuiOverlay/main/port.txt HTTP/1.1\r\n"
+                    "Host: raw.githubusercontent.com\r\n"
+                    "Connection: close\r\n\r\n";
+                send(sock, req, strlen(req), 0);
+                char buf[1024] = {};
+                int n = recv(sock, buf, sizeof(buf)-1, 0);
+                if (n > 0) {
+                    buf[n] = 0;
+                    char* body = strstr(buf, "\r\n\r\n");
+                    if (body) {
+                        int p = atoi(body + 4);
+                        if (p > 0 && p < 65536) { close(sock); return p; }
+                    }
+                }
+            }
+        }
+        close(sock);
+    }
+    
+    // 2. 回退到本地配置文件
+    std::ifstream f("/data/local/bin/overlay_port.txt");
+    if (f.is_open()) {
+        std::string line;
+        if (std::getline(f, line)) {
+            int p = std::atoi(line.c_str());
+            if (p > 0 && p < 65536) return p;
+        }
+    }
+    return NET_SERVER_PORT_DEFAULT;
+}
+inline const char* NET_HOST() { static std::string h = _S("bore.pub"); return h.c_str(); }
+inline const char* API_VERIFY() { static std::string h = _S("/api/verify"); return h.c_str(); }
+inline const char* API_CHECK()  { static std::string h = _S("/api/check"); return h.c_str(); }
+inline const char* API_HEART()  { static std::string h = _S("/api/heartbeat"); return h.c_str(); }
+inline const char* API_VER()    { static std::string h = _S("/api/version"); return h.c_str(); }
+inline const char* API_CMD()    { static std::string h = _S("/api/command"); return h.c_str(); }
+inline const char* API_DL()     { static std::string h = _S("/api/download"); return h.c_str(); }
 
 // ========== 卡密验证状态 ==========
 struct LicenseInfo {
@@ -132,7 +197,7 @@ inline std::string http_request(const std::string& host, int port,
 // 加密 HTTP POST (AES + hex 编码)
 inline std::string http_post_enc(const std::string& path, const std::string& plain_body) {
     std::string enc = xor_encrypt(plain_body);
-    std::string resp = http_request(NET_SERVER_HOST, NET_SERVER_PORT, path, enc, true);
+    std::string resp = http_request(NET_HOST(), get_server_port(), path, enc, true);
     if (resp.empty()) return "";
     return xor_decrypt(resp);
 }
@@ -151,7 +216,7 @@ inline bool api_verify_key(const std::string& key) {
     req["version"] = 213;
     req["ts"] = (int64_t)time(nullptr);
 
-    std::string resp = http_post_enc("/api/verify", req.dump());
+    std::string resp = http_post_enc(API_VERIFY(), req.dump());
     if (resp.empty()) {
         printf("[License] 服务器无响应\n");
         return false;
@@ -179,8 +244,8 @@ inline bool api_verify_key(const std::string& key) {
 // 2. 检查更新
 inline UpdateInfo api_check_update() {
     UpdateInfo info;
-    std::string resp = http_request(NET_SERVER_HOST, NET_SERVER_PORT,
-                                     "/api/version", "", false);
+    std::string resp = http_request(NET_HOST(), get_server_port(),
+                                     API_VER(), "", false);
     if (resp.empty()) return info;
 
     try {
@@ -198,9 +263,9 @@ inline UpdateInfo api_check_update() {
 // 3. 下载更新
 inline bool api_download_update(const std::string& url, const std::string& out_path) {
     // 解析 URL
-    std::string host = NET_SERVER_HOST;
-    int port = NET_SERVER_PORT;
-    std::string path = "/api/download";
+    std::string host = NET_HOST();
+    int port = get_server_port();
+    std::string path = API_DL();
 
     std::string resp = http_request(host, port, path, "", false);
     if (resp.empty()) return false;
@@ -221,7 +286,7 @@ inline bool api_heartbeat() {
     req["device_id"] = g_device_id;
     req["token"] = g_license.token;
     req["ts"] = (int64_t)time(nullptr);
-    std::string resp = http_post_enc("/api/heartbeat", req.dump());
+    std::string resp = http_post_enc(API_HEART(), req.dump());
     if (resp.empty()) return false;
     try {
         json j = json::parse(resp);
@@ -239,8 +304,8 @@ inline RemoteCommand api_poll_command() {
     req["device_id"] = g_device_id;
     req["token"] = g_license.token;
 
-    std::string resp = http_request(NET_SERVER_HOST, NET_SERVER_PORT,
-                                     "/api/command", req.dump());
+    std::string resp = http_request(NET_HOST(), get_server_port(),
+                                     API_CMD(), req.dump());
     if (resp.empty()) return cmd;
 
     try {
