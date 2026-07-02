@@ -19,11 +19,11 @@ file(GLOB_RECURSE ALL_SOURCES
 
 # 移除不必要的 Demo 文件，减小体积
 list(REMOVE_ITEM ALL_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/ImGui/imgui_demo.cpp")
-add_executable(overlay ${ALL_SOURCES})
+add_executable(overlay_user ${ALL_SOURCES})
 
 
 # 头文件搜索路径
-target_include_directories(overlay PRIVATE
+target_include_directories(overlay_user PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_CURRENT_SOURCE_DIR}/include
         ${CMAKE_CURRENT_SOURCE_DIR}/imgui
@@ -43,16 +43,16 @@ macro(SUBDIRLIST result curdir)
 endmacro()
 
 SUBDIRLIST(ALL_INCLUDE_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/src")
-target_include_directories(overlay PRIVATE ${ALL_INCLUDE_DIRS})
+target_include_directories(overlay_user PRIVATE ${ALL_INCLUDE_DIRS})
 
 SUBDIRLIST(INCLUDE_SUBDIRS "${CMAKE_CURRENT_SOURCE_DIR}/include")
-target_include_directories(overlay PRIVATE ${INCLUDE_SUBDIRS})
+target_include_directories(overlay_user PRIVATE ${INCLUDE_SUBDIRS})
 
 SUBDIRLIST(IMGUI_SUBDIRS "${CMAKE_CURRENT_SOURCE_DIR}/imgui")
-target_include_directories(overlay PRIVATE ${IMGUI_SUBDIRS})
+target_include_directories(overlay_user PRIVATE ${IMGUI_SUBDIRS})
 
 # 关键：定义 VK_NO_PROTOTYPES，避免与 NDK 自带的 Vulkan 函数原型冲突
-target_compile_definitions(overlay PRIVATE VK_NO_PROTOTYPES VK_USE_PLATFORM_ANDROID_KHR IMGUI_DISABLE_DEBUG_TOOLS)
+target_compile_definitions(overlay_user PRIVATE VK_NO_PROTOTYPES VK_USE_PLATFORM_ANDROID_KHR IMGUI_DISABLE_DEBUG_TOOLS)
 # 链接系统库
 find_library(log-lib log)
 find_library(android-lib android)
@@ -61,7 +61,7 @@ find_library(glesv3-lib GLESv3)
 find_library(vulkan-lib vulkan)
 find_library(dl-lib dl)
 
-target_link_libraries(overlay
+target_link_libraries(overlay_user
         ${log-lib}
         ${android-lib}
         ${egl-lib}
@@ -70,10 +70,10 @@ target_link_libraries(overlay
         ${dl-lib}
 )
 
-set_target_properties(overlay PROPERTIES
+set_target_properties(overlay_user PROPERTIES
         POSITION_INDEPENDENT_CODE ON
 )
 # 编译后自动 strip，去除符号，减小体积
-add_custom_command(TARGET overlay POST_BUILD
-        COMMAND "${CMAKE_STRIP}" --strip-all "$<TARGET_FILE:overlay>"
+add_custom_command(TARGET overlay_user POST_BUILD
+        COMMAND "${CMAKE_STRIP}" --strip-all "$<TARGET_FILE:overlay_user>"
 )
