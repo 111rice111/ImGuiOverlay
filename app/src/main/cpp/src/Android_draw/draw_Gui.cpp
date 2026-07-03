@@ -88,6 +88,8 @@ static float Global_Filter_Max_Z = 300.0f;
 static float Global_Filter_Max_Distance = 300.0f;
 
 static bool MemuSwitch = true;
+static float g_minimized_bar_anim = 0.0f;  // 最小化横条动画 (0=隐藏, 1=完全可见)
+static ImVec2 g_bar_custom_pos(-1, -1);      // 横条拖拽位置
 static bool voice = true;
 static bool show_mimic_overlay = false;
 
@@ -4006,7 +4008,7 @@ void ProcessObjectWithFullDetails(ImDrawList *Draw, const DataStruct &item,
             default:
                 break;
         }
-    } else if (item.阵营 == 6 && MjSubsystem::draw_props) {
+    } else if (item.阵营 == 6 && MjSubsystem::draw_props && show_draw_Prop) {
         const char* display_name = item.prop_name[0] != '\0' ? item.prop_name : item.类名;
         ImColor prop_color = 白色;
         bool should_draw = true;
@@ -5426,12 +5428,13 @@ void read_thread(long int 状态数值, long int PD2, long int PD3) {
                     if (std::abs(状态数值) > 1000.0f || 状态数值 < 0.0f) continue;
                     if (状态数值 == 0.0f && 实体特征码 == 0) continue;
                     bool isSender = (std::strstr(cls, "sender") != nullptr) || (std::strstr(cls, "dm65_scene_sender") != nullptr);
-                    if (isSender && (状态数值 == 0.0f || 实体特征码 == 0)) continue;
+                    // ★ 密码机状态数值=0 不代表无效(未修机时就是0)，只跳过无类名的
+                    if (isSender && (实体特征码 == 0 && 状态数值 == 0)) { continue; }
                 }
 
                 if (std::strstr(cls, "player") || std::strstr(cls, "boss") ||
                     状态数值 == 450.0f || std::strstr(cls, "scene") ||
-                    std::strstr(cls, "prop") || std::strstr(cls, "mirror") || Debugging ||
+                    std::strstr(cls, "sender") || std::strstr(cls, "prop") || std::strstr(cls, "mirror") || Debugging ||
                     is_woodplane ||
                     disable_skip_filter ||
                     MjSubsystem::IsMjSpecialClass(cls) ||
@@ -5486,6 +5489,10 @@ void read_thread(long int 状态数值, long int PD2, long int PD3) {
                     } else if (is_woodplane) {
                         item.阵营 = 3;
                         item.sub_type = ObjSubClass::Pallet;
+                    } else if (std::strstr(cls, "dm65_scene_prop_01") || std::strstr(cls, "christmasbox01") || std::strstr(cls, "halloweenbox01")) {
+                        item.阵营 = 3;
+                        std::strcpy(item.str, getscene(cls));
+                        item.sub_type = ObjSubClass::Box;
                     } else if (std::strstr(cls, "scene") && !std::strstr(cls, "prop") && !std::strstr(cls, "rd") && !MjSubsystem::IsMjSpecialClass(cls) && !std::strstr(cls, "monster")) {
                         std::strcpy(item.str, getscene(cls));
                         item.阵营 = 3;
@@ -5494,10 +5501,13 @@ void read_thread(long int 状态数值, long int PD2, long int PD3) {
                         else if (std::strstr(cls, "polun_jiazi.gim")) item.sub_type = ObjSubClass::Clip;
                         else if (std::strstr(cls, "h55_sleepingtown3_jpcat01low")) item.sub_type = ObjSubClass::Cat;
                         else if (std::strstr(cls, "h55_playground_lion")) item.sub_type = ObjSubClass::Lion;
-                        else if (std::strstr(cls, "dm65_scene_prop_76")) item.sub_type = ObjSubClass::Cellar;
-                        else if (std::strstr(cls, "dm65_scene_prop_01") || std::strstr(cls, "christmasbox01") || std::strstr(cls, "halloweenbox01")) item.sub_type = ObjSubClass::Box;
-                        else if (std::strstr(cls, "dm65_scene_gallows") || std::strstr(cls, "dm65_scene_gallows_hx_low")) item.sub_type = ObjSubClass::Chair;
                         else if (std::strstr(cls, "woodplane001") || std::strstr(cls, "woodplane01")) item.sub_type = ObjSubClass::Pallet;
+                    } else if (std::strstr(cls, "dm65_scene_gallows") || std::strstr(cls, "dm65_scene_gallows_hx_low")) {
+                        item.阵营 = 3;
+                        item.sub_type = ObjSubClass::Chair;
+                    } else if (std::strstr(cls, "dm65_scene_prop_76")) {
+                        item.阵营 = 3;
+                        item.sub_type = ObjSubClass::Cellar;
                     } else if (std::strstr(cls, "prop") || std::strstr(cls, "mj_") || std::strstr(cls, "rd")) {
                         std::strcpy(item.str, getprop(cls));
                         if (std::strstr(cls, "prop_musicbox") || MjSubsystem::IsMjPropClass(cls) || MjSubsystem::IsMjSpecialClass(cls)) {
@@ -5994,8 +6004,8 @@ void show_talent_viewer() {
         }
     }
 
-    ImGui::SetNextWindowBgAlpha(0.96f);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 18.0f * g_ui_density);
+    ImGui::SetNextWindowBgAlpha(0.45f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 24.0f * g_ui_density);
     ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 10.0f * g_ui_density);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(18 * g_ui_density, 14 * g_ui_density));
     ImGui::PushStyleColor(ImGuiCol_WindowBg, g_theme.bg_dark);
@@ -6095,44 +6105,51 @@ void show_talent_viewer() {
 //  现代 UI 主题系统：统一配色、字体层级、间距、圆角、动效
 // ============================================================
 static void InitModernUITheme() {
-    // 现代深色主题：深蓝灰背景 + 青蓝主色 + 语义辅助色
-    g_theme.bg_dark         = ImVec4(0.035f, 0.037f, 0.045f, 0.96f);
-    g_theme.bg_panel        = ImVec4(0.060f, 0.063f, 0.075f, 0.94f);
-    g_theme.bg_card         = ImVec4(0.085f, 0.090f, 0.110f, 0.90f);
-    g_theme.bg_card_hover   = ImVec4(0.100f, 0.105f, 0.130f, 0.95f);
-    g_theme.bg_input        = ImVec4(0.110f, 0.120f, 0.150f, 0.85f);
-    g_theme.bg_hover        = ImVec4(0.130f, 0.140f, 0.170f, 0.90f);
-    g_theme.bg_active       = ImVec4(0.165f, 0.175f, 0.210f, 0.95f);
-    g_theme.bg_overlay      = ImVec4(0.000f, 0.000f, 0.000f, 0.650f);
+    // 大米花先生 — 暖金宣纸半透明主题 ★ 卡通暖调 + 高透明
+    g_theme.bg_dark         = ImVec4(0.98f, 0.95f, 0.88f, 0.42f);
+    g_theme.bg_panel        = ImVec4(0.99f, 0.96f, 0.90f, 0.38f);
+    g_theme.bg_card         = ImVec4(0.96f, 0.92f, 0.84f, 0.36f);
+    g_theme.bg_card_hover   = ImVec4(0.94f, 0.88f, 0.78f, 0.42f);
+    g_theme.bg_input        = ImVec4(0.93f, 0.88f, 0.80f, 0.58f);   // ★ 从0.35提至0.58, 控件背景可见
+    g_theme.bg_hover        = ImVec4(0.90f, 0.84f, 0.74f, 0.65f);   // ★ 从0.40提至0.65
+    g_theme.bg_active       = ImVec4(0.86f, 0.78f, 0.66f, 0.72f);   // ★ 从0.48提至0.72
+    g_theme.bg_overlay      = ImVec4(0.00f, 0.00f, 0.00f, 0.18f);
 
-    g_theme.primary         = ImVec4(0.220f, 0.560f, 0.980f, 0.95f);
-    g_theme.primary_hover   = ImVec4(0.350f, 0.670f, 1.000f, 1.00f);
-    g_theme.primary_active  = ImVec4(0.150f, 0.450f, 0.880f, 1.00f);
-    g_theme.primary_soft    = ImVec4(0.220f, 0.560f, 0.980f, 0.20f);
+    // ★ 暖金色 — 更亮更像参考图
+    g_theme.primary         = ImVec4(0.95f, 0.78f, 0.22f, 0.90f);
+    g_theme.primary_hover   = ImVec4(1.00f, 0.86f, 0.28f, 0.95f);
+    g_theme.primary_active  = ImVec4(0.85f, 0.66f, 0.10f, 1.00f);
+    g_theme.primary_soft    = ImVec4(0.95f, 0.78f, 0.22f, 0.18f);
 
-    g_theme.success         = ImVec4(0.180f, 0.760f, 0.460f, 0.95f);
-    g_theme.success_hover   = ImVec4(0.280f, 0.860f, 0.560f, 1.00f);
-    g_theme.success_active  = ImVec4(0.120f, 0.600f, 0.360f, 1.00f);
+    // 嫩绿勾选（更鲜艳）
+    g_theme.success         = ImVec4(0.20f, 0.72f, 0.30f, 0.95f);
+    g_theme.success_hover   = ImVec4(0.24f, 0.66f, 0.30f, 0.96f);
+    g_theme.success_active  = ImVec4(0.12f, 0.42f, 0.16f, 0.98f);
 
-    g_theme.danger          = ImVec4(0.920f, 0.280f, 0.320f, 0.95f);
-    g_theme.danger_hover    = ImVec4(1.000f, 0.380f, 0.420f, 1.00f);
-    g_theme.danger_active   = ImVec4(0.780f, 0.200f, 0.240f, 1.00f);
+    // 温暖红
+    g_theme.danger          = ImVec4(0.82f, 0.22f, 0.18f, 0.92f);
+    g_theme.danger_hover    = ImVec4(0.92f, 0.28f, 0.24f, 0.96f);
+    g_theme.danger_active   = ImVec4(0.68f, 0.16f, 0.12f, 0.98f);
 
-    g_theme.warning         = ImVec4(1.000f, 0.760f, 0.180f, 1.00f);
-    g_theme.info            = ImVec4(0.350f, 0.750f, 0.950f, 1.00f);
+    // 琥珀黄
+    g_theme.warning         = ImVec4(0.92f, 0.58f, 0.10f, 0.95f);
+    g_theme.info            = ImVec4(0.30f, 0.52f, 0.80f, 0.95f);
 
-    g_theme.text            = ImVec4(0.930f, 0.940f, 0.960f, 1.00f);
-    g_theme.text_muted      = ImVec4(0.580f, 0.610f, 0.680f, 1.00f);
-    g_theme.text_title      = ImVec4(0.980f, 0.980f, 1.000f, 1.00f);
-    g_theme.text_on_primary = ImVec4(1.000f, 1.000f, 1.000f, 1.00f);
+    // 深棕文字 — 半透明白底上高对比
+    g_theme.text            = ImVec4(0.16f, 0.12f, 0.08f, 1.00f);
+    g_theme.text_muted      = ImVec4(0.50f, 0.44f, 0.36f, 0.90f);
+    g_theme.text_title      = ImVec4(0.12f, 0.08f, 0.04f, 1.00f);
+    g_theme.text_on_primary = ImVec4(0.55f, 0.36f, 0.05f, 1.00f);
 
-    g_theme.border          = ImVec4(0.180f, 0.200f, 0.260f, 0.55f);
-    g_theme.border_strong   = ImVec4(0.280f, 0.320f, 0.420f, 0.75f);
-    g_theme.border_light    = ImVec4(0.400f, 0.450f, 0.580f, 0.35f);
+    // 暖灰边框 — 低可见度
+    g_theme.border          = ImVec4(0.62f, 0.50f, 0.36f, 0.45f);
+    g_theme.border_strong   = ImVec4(0.52f, 0.38f, 0.24f, 0.60f);
+    g_theme.border_light    = ImVec4(0.78f, 0.72f, 0.62f, 0.35f);
 
-    g_theme.check_mark      = ImVec4(0.250f, 0.900f, 0.520f, 1.00f);
-    g_theme.slider_grab     = ImVec4(0.300f, 0.620f, 0.980f, 1.00f);
-    g_theme.slider_grab_active = ImVec4(0.450f, 0.720f, 1.000f, 1.00f);
+    // 勾选/滑块
+    g_theme.check_mark      = ImVec4(0.18f, 0.74f, 0.28f, 1.00f);
+    g_theme.slider_grab     = ImVec4(0.92f, 0.74f, 0.18f, 1.00f);
+    g_theme.slider_grab_active = ImVec4(0.94f, 0.75f, 0.20f, 1.00f);
 }
 
 static float Lerp(float a, float b, float t) { return a + (b - a) * t; }
@@ -6172,13 +6189,13 @@ static void RestoreImGuiStyle(const StyleBackup& bak) {
 
 static void ApplyModernUIStyle(float density) {
     ImGuiStyle& s = ImGui::GetStyle();
-    s.WindowRounding    = 18.0f * density;
-    s.ChildRounding     = 14.0f * density;
-    s.FrameRounding     = 10.0f * density;
-    s.PopupRounding     = 16.0f * density;
-    s.ScrollbarRounding = 10.0f * density;
-    s.GrabRounding      = 8.0f  * density;
-    s.TabRounding       = 10.0f * density;
+    s.WindowRounding    = 24.0f * density;   // ★ 大圆角 — 宣纸卡片感
+    s.ChildRounding     = 18.0f * density;
+    s.FrameRounding     = 12.0f * density;
+    s.PopupRounding     = 20.0f * density;
+    s.ScrollbarRounding = 14.0f * density;
+    s.GrabRounding      = 10.0f  * density;
+    s.TabRounding       = 12.0f * density;
 
     s.WindowPadding     = ImVec2(20.0f * density, 16.0f * density);
     s.FramePadding      = ImVec2(12.0f * density, 7.0f  * density);
@@ -6191,6 +6208,7 @@ static void ApplyModernUIStyle(float density) {
     s.ScrollbarRounding = 16.0f * density;    // 圆角滚动条更顺滑
     s.AntiAliasedLines  = true;
     s.AntiAliasedFill   = true;
+    s.FrameBorderSize   = 1.2f * density;      // ★ 为所有 Frame 组件添加描边（复选框/滑块/颜色编辑）
 
     s.Colors[ImGuiCol_Text]                 = g_theme.text;
     s.Colors[ImGuiCol_TextDisabled]         = g_theme.text_muted;
@@ -6206,8 +6224,8 @@ static void ApplyModernUIStyle(float density) {
     s.Colors[ImGuiCol_TitleBgActive]         = g_theme.bg_panel;
     s.Colors[ImGuiCol_TitleBgCollapsed]      = g_theme.bg_panel;
     s.Colors[ImGuiCol_MenuBarBg]             = g_theme.bg_panel;
-    s.Colors[ImGuiCol_ScrollbarBg]           = ImVec4(0.025f, 0.025f, 0.035f, 0.40f);
-    s.Colors[ImGuiCol_ScrollbarGrab]         = g_theme.border_strong;
+    s.Colors[ImGuiCol_ScrollbarBg]           = ImVec4(0.85f, 0.82f, 0.78f, 0.30f);
+    s.Colors[ImGuiCol_ScrollbarGrab]         = ImVec4(0.70f, 0.62f, 0.50f, 0.55f);
     s.Colors[ImGuiCol_ScrollbarGrabHovered]  = g_theme.primary;
     s.Colors[ImGuiCol_ScrollbarGrabActive]   = g_theme.primary_active;
     s.Colors[ImGuiCol_CheckMark]             = g_theme.check_mark;
@@ -6290,9 +6308,9 @@ static void StyledCardBegin(const char* id, const ImVec2& size, float density, I
     out_pos = ImGui::GetWindowPos();
     out_size = ImGui::GetWindowSize();
     draw_list->AddRectFilled(out_pos, ImVec2(out_pos.x + out_size.x, out_pos.y + out_size.y),
-                             IM_COL32(14, 15, 20, 230), 14.0f * density);
+                             IM_COL32(255, 253, 245, 65), 14.0f * density);
     draw_list->AddRect(out_pos, ImVec2(out_pos.x + out_size.x, out_pos.y + out_size.y),
-                       IM_COL32(45, 50, 70, 120), 14.0f * density, 0, 1.5f);
+                       IM_COL32(230, 210, 180, 38), 14.0f * density, 0, 1.0f);
     ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 8.0f * density);
     ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 10.0f * density);
 }
@@ -6454,6 +6472,12 @@ void Layout_tick_UI(bool *main_thread_flag) {
     float animSpeed = (ui_anim_scale < target_scale) ? anim_speed_fast : anim_speed_slow;
     float deltaTimeScaled = ImGui::GetIO().DeltaTime / animSpeed;
     ui_anim_scale = ImLerp(ui_anim_scale, target_scale, deltaTimeScaled);
+
+    // ★ 最小化横条动画 — 与主窗口反向
+    float bar_target = MemuSwitch ? 0.0f : 1.0f;
+    float bar_anim_speed = (g_minimized_bar_anim < bar_target) ? anim_speed_fast : anim_speed_slow;
+    float bar_dt = ImGui::GetIO().DeltaTime / bar_anim_speed;
+    g_minimized_bar_anim = ImLerp(g_minimized_bar_anim, bar_target, bar_dt);
     static bool theme_initialized = false;
     if (!theme_initialized) { InitModernUITheme(); theme_initialized = true; }
     StyleBackup style_bak = BackupImGuiStyle();
@@ -6479,7 +6503,7 @@ void Layout_tick_UI(bool *main_thread_flag) {
 
         ImGui::SetNextWindowPos(final_win_pos, ImGuiCond_Always);
         ImGui::SetNextWindowSize(ImVec2(anim_win_w, anim_win_h), ImGuiCond_Always);
-        ImGui::SetNextWindowBgAlpha(ui_anim_scale);
+        ImGui::SetNextWindowBgAlpha(ui_anim_scale * 0.45f);  // ★ 更透明 — 参考图效果
         ImGui::Begin("大米饭先生", main_thread_flag, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoSavedSettings);
 
         // ★ 驱动状态: 显示当前驱动 + 已适配驱动列表
@@ -6504,21 +6528,34 @@ void Layout_tick_UI(bool *main_thread_flag) {
         ImDrawList *draw_list = ImGui::GetWindowDrawList();
         const float titlebar_height = ImGui::GetTextLineHeight() * 2.4f;
 
-        // 现代标题栏：柔和渐变 + 微妙阴影
+        // 现代标题栏：暖金宣纸半透明 — 参考图风格
         draw_list->AddRectFilledMultiColor(window_pos2, ImVec2(window_pos2.x + window_size.x, window_pos2.y + titlebar_height),
-                                           IM_COL32(18, 22, 35, 255), IM_COL32(25, 30, 48, 255), IM_COL32(25, 30, 48, 255), IM_COL32(18, 22, 35, 255));
+                                           IM_COL32(255, 250, 235, 140), IM_COL32(252, 243, 220, 130), IM_COL32(248, 238, 215, 135), IM_COL32(254, 248, 232, 140));
         draw_list->AddRectFilled(ImVec2(window_pos2.x, window_pos2.y + titlebar_height),
-                                ImVec2(window_pos2.x + window_size.x, window_pos2.y + titlebar_height + 4.0f * g_density),
-                                IM_COL32(0, 0, 0, 60), 0.0f);
-        draw_list->AddLine(ImVec2(window_pos2.x, window_pos2.y + titlebar_height),
-                           ImVec2(window_pos2.x + window_size.x, window_pos2.y + titlebar_height),
-                           IM_COL32(60, 100, 160, 180), 2.0f * g_density);
+                                ImVec2(window_pos2.x + window_size.x, window_pos2.y + titlebar_height + 3.0f * g_density),
+                                IM_COL32(230, 200, 150, 50), 0.0f);
+        draw_list->AddLine(ImVec2(window_pos2.x + 20.0f * g_density, window_pos2.y + titlebar_height),
+                           ImVec2(window_pos2.x + window_size.x - 20.0f * g_density, window_pos2.y + titlebar_height),
+                           IM_COL32(230, 195, 140, 80), 1.5f * g_density);
 
+        // ★ 标题 "大米饭先生" — 金色 + 白色描边效果
         const char *title = "大米饭先生";
         ImGui::PushFont(g_font_ui);
         const ImVec2 text_size_title = ImGui::CalcTextSize(title);
         ImVec2 title_text_pos(window_pos2.x + (window_size.x - text_size_title.x) * 0.5f, window_pos2.y + (titlebar_height - text_size_title.y) * 0.5f);
-        draw_list->AddText(g_font_ui, ImGui::GetFontSize() * 1.15f, title_text_pos, IM_COL32(220, 230, 255, 255), title);
+        float title_font = ImGui::GetFontSize() * 1.20f;
+        const float outline_off = 1.5f * g_density;
+        // 白色描边 — 四个方向偏移绘制白色，形成轮廓
+        draw_list->AddText(g_font_ui, title_font, ImVec2(title_text_pos.x - outline_off, title_text_pos.y),              IM_COL32(255,255,255,220), title);
+        draw_list->AddText(g_font_ui, title_font, ImVec2(title_text_pos.x + outline_off, title_text_pos.y),              IM_COL32(255,255,255,220), title);
+        draw_list->AddText(g_font_ui, title_font, ImVec2(title_text_pos.x, title_text_pos.y - outline_off),              IM_COL32(255,255,255,220), title);
+        draw_list->AddText(g_font_ui, title_font, ImVec2(title_text_pos.x, title_text_pos.y + outline_off),              IM_COL32(255,255,255,220), title);
+        draw_list->AddText(g_font_ui, title_font, ImVec2(title_text_pos.x - outline_off, title_text_pos.y - outline_off),IM_COL32(255,255,255,200), title);
+        draw_list->AddText(g_font_ui, title_font, ImVec2(title_text_pos.x + outline_off, title_text_pos.y - outline_off),IM_COL32(255,255,255,200), title);
+        draw_list->AddText(g_font_ui, title_font, ImVec2(title_text_pos.x - outline_off, title_text_pos.y + outline_off),IM_COL32(255,255,255,200), title);
+        draw_list->AddText(g_font_ui, title_font, ImVec2(title_text_pos.x + outline_off, title_text_pos.y + outline_off),IM_COL32(255,255,255,200), title);
+        // 主体 — 金色字盖在上面
+        draw_list->AddText(g_font_ui, title_font, title_text_pos, IM_COL32(235, 180, 40, 255), title);
         ImGui::PopFont();
 
         // ========== 通过标题栏"大米饭先生"拖动窗口 ==========
@@ -6550,12 +6587,12 @@ void Layout_tick_UI(bool *main_thread_flag) {
         }
         struct NavItem { const char *label; const char *icon; };
         static const NavItem nav_items[] = {
-                {"状态信息", "\xee\xa2\x80"}, {"功能设置", "\xee\xa4\x82"},
+                {"状态信息", "\xee\xa2\x80"}, {"普通对局", "\xee\xa4\x82"},
                 {"自动盖板", "\xee\xa5\x85"}, {"模仿者",   "\xee\xa6\x83"},
                 {"摸金模式", "\xee\xa8\x84"},
                 {"地图管理", "\xee\xa9\x85"},
-                {"数据管理", "\xee\xa3\x91"},  // 新增：数据导入/导出/查看
-                {"调试信息", "\xee\xa7\x81"},
+                //{"数据管理", "\xee\xa3\x91"},  // 已注释，需要时取消注释
+                //{"调试信息", "\xee\xa7\x81"},  // 已注释，需要时取消注释
                 {"关于",     "\xee\xa7\x81"},
         };
         static int current_tab = 0;
@@ -6574,11 +6611,11 @@ void Layout_tick_UI(bool *main_thread_flag) {
         const float content_x = sidebar_width + 12.0f * g_density;
         const float nav_start_y = titlebar_height + 16.0f * g_density;
 
-        // 侧边栏卡片背景
+        // 侧边栏 — 暖金宣纸半透明
         ImVec2 sidebar_pos(window_pos2.x + 10.0f * g_density, window_pos2.y + nav_start_y);
         ImVec2 sidebar_size(sidebar_width - 10.0f * g_density, window_size.y - nav_start_y - 20.0f * g_density);
-        draw_list->AddRectFilled(sidebar_pos, ImVec2(sidebar_pos.x + sidebar_size.x, sidebar_pos.y + sidebar_size.y), IM_COL32(12, 14, 20, 220), 14.0f * g_density);
-        draw_list->AddRect(sidebar_pos, ImVec2(sidebar_pos.x + sidebar_size.x, sidebar_pos.y + sidebar_size.y), IM_COL32(40, 45, 65, 120), 14.0f * g_density, 0, 1.5f);
+        draw_list->AddRectFilled(sidebar_pos, ImVec2(sidebar_pos.x + sidebar_size.x, sidebar_pos.y + sidebar_size.y), IM_COL32(255, 250, 238, 85), 18.0f * g_density);
+        draw_list->AddRect(sidebar_pos, ImVec2(sidebar_pos.x + sidebar_size.x, sidebar_pos.y + sidebar_size.y), IM_COL32(225, 200, 160, 45), 18.0f * g_density, 0, 1.0f);
 
         ImGui::SetCursorPos(ImVec2(8.0f * g_density, nav_start_y));
         ImGui::BeginChild("##Sidebar", ImVec2(sidebar_width, 0), false, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoBackground);
@@ -6608,8 +6645,8 @@ void Layout_tick_UI(bool *main_thread_flag) {
                     float line_y = btn_min.y + (btn_max.y - btn_min.y - line_h) * 0.5f;
                     ImGui::GetWindowDrawList()->AddRectFilled(
                             ImVec2(line_x, line_y),
-                            ImVec2(line_x + 4.0f * g_density, line_y + line_h),
-                            IM_COL32(140, 200, 255, 255), 2.0f * g_density);
+                            ImVec2(line_x + 4.5f * g_density, line_y + line_h),
+                            IM_COL32(220, 170, 50, 255), 2.5f * g_density);
                 }
             }
             ImGui::PopStyleVar(3);
@@ -6630,23 +6667,19 @@ void Layout_tick_UI(bool *main_thread_flag) {
         }
         ImGui::EndChild();
 
-        // 主内容区：卡片容器
+        // 主内容区：暖金宣纸半透明 — 参考图风格
         ImGui::SetCursorPos(ImVec2(content_x, nav_start_y));
         ImGui::BeginChild("MainContent", ImVec2(window_size.x - content_x - 14.0f * g_density, window_size.y - nav_start_y - 20.0f * g_density), false, ImGuiWindowFlags_AlwaysUseWindowPadding | ImGuiWindowFlags_AlwaysVerticalScrollbar);
         ImDrawList *child_draw = ImGui::GetWindowDrawList();
         ImVec2 child_pos = ImGui::GetWindowPos();
         ImVec2 child_size = ImGui::GetWindowSize();
-        child_draw->AddRectFilled(child_pos, ImVec2(child_pos.x + child_size.x, child_pos.y + child_size.y), IM_COL32(13, 14, 19, 245), 16.0f * g_density);
-        child_draw->AddRect(child_pos, ImVec2(child_pos.x + child_size.x, child_pos.y + child_size.y), IM_COL32(45, 50, 70, 130), 16.0f * g_density, 0, 1.5f);
-        child_draw->AddRectFilled(ImVec2(child_pos.x, child_pos.y), ImVec2(child_pos.x + child_size.x, child_pos.y + 3.0f * g_density), IM_COL32(50, 90, 150, 120), 16.0f * g_density);
+        child_draw->AddRectFilled(child_pos, ImVec2(child_pos.x + child_size.x, child_pos.y + child_size.y), IM_COL32(255, 252, 242, 75), 20.0f * g_density);
+        child_draw->AddRect(child_pos, ImVec2(child_pos.x + child_size.x, child_pos.y + child_size.y), IM_COL32(228, 205, 170, 42), 20.0f * g_density, 0, 1.0f);
+        child_draw->AddRectFilled(ImVec2(child_pos.x, child_pos.y), ImVec2(child_pos.x + child_size.x, child_pos.y + 3.0f * g_density), IM_COL32(235, 210, 175, 40), 20.0f * g_density);
 
         switch (current_tab) {
             case 0:
-                StyledSectionHeader("系统信息", g_theme.text_title, g_density);
-                ImGui::Text("渲染模式: %s", graphics->RenderName);
-                ImGui::Text("GUI 版本: %s", IMGUI_VERSION);
-                ImGui::Text("帧率: %.1f FPS (%.2f ms)", ImGui::GetIO().Framerate, 1000.0f / ImGui::GetIO().Framerate);
-                ImGui::Spacing();
+                // ★ 状态信息 — 精简版：仅保留数据状态 + 游戏信息
                 StyledSectionHeader("数据状态", g_theme.text_title, g_density);
                 if (GlobalMemory::状态 == 2) ImGui::TextColored(ImVec4(0.3f, 0.9f, 0.3f, 1.0f), "[OK] 数据已就绪");
                 else if (GlobalMemory::状态 == 1) ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.2f, 1.0f), ":) 正在初始化...");
@@ -6655,6 +6688,12 @@ void Layout_tick_UI(bool *main_thread_flag) {
                 StyledSectionHeader("游戏信息", g_theme.text_title, g_density);
                 ImGui::Text("进程 ID: %d", pid.load()); ImGui::SameLine();
                 ImGui::Text("包名: %s", extractedString);
+                /*
+                // ★ 已隐藏，需要时取消注释
+                StyledSectionHeader("系统信息", g_theme.text_title, g_density);
+                ImGui::Text("渲染模式: %s", graphics->RenderName);
+                ImGui::Text("GUI 版本: %s", IMGUI_VERSION);
+                ImGui::Text("帧率: %.1f FPS (%.2f ms)", ImGui::GetIO().Framerate, 1000.0f / ImGui::GetIO().Framerate);
                 ImGui::Spacing();
                 StyledSectionHeader("内存地址", g_theme.text_title, g_density);
                 ImGui::Text("模块基址: 0x%lx", GlobalMemory::libbase); ImGui::SameLine();
@@ -6670,45 +6709,62 @@ void Layout_tick_UI(bool *main_thread_flag) {
                 StyledSectionHeader("角色与坐标", g_theme.text_title, g_density);
                 ImGui::Text("监管者: %s", 监管者预知);
                 ImGui::Text("自身坐标: X:%.1f, Y:%.1f, Z:%.1f", Z.X, Z.Y, Z.Z);
+                */
                 break;
             case 1:
                 StyledSectionHeader("绘制选项", g_theme.text_title, g_density);
                 ImGui::Columns(2, "draw_cols", true);
                 ImGui::Checkbox("增强框体", &show_draw_EnhancedFrame);
-                ImGui::Checkbox("绘制道具", &show_draw_Prop);
-                ImGui::Checkbox("查看天赋", &g_talent_view);
-                ImGui::ColorEdit3("求生者方框颜色", (float*)&g_BoxColor_Survivor);
-                ImGui::ColorEdit3("监管者方框颜色", (float*)&g_BoxColor_Hunter);
-                ImGui::ColorEdit3("幽灵方框颜色", (float*)&g_BoxColor_Ghost);
-                ImGui::NextColumn();
                 ImGui::Checkbox("人物射线", &show_draw_Line);
                 ImGui::Checkbox("绘制名字", &show_draw_Name);
+                ImGui::Checkbox("绘制道具", &show_draw_Prop);
                 ImGui::Checkbox("绘制密码机", &show_draw_sender);
+                ImGui::Checkbox("查看天赋", &g_talent_view);
+                ImGui::NextColumn();
                 ImGui::Checkbox("预知监管", &show_draw_prophet);
                 if (ImGui::Checkbox("红夫人模式", &show_draw_redqueen)) {
                     if (show_draw_redqueen) disable_skip_filter = true;
                 }
+                ImGui::Checkbox("绘制地窖", &show_draw_Cellar);
+                ImGui::Spacing();
+                ImGui::TextColored(g_theme.text_muted, "方框颜色");
+                ImGui::ColorEdit3("求生者", (float*)&g_BoxColor_Survivor);
+                ImGui::ColorEdit3("监管者", (float*)&g_BoxColor_Hunter);
+                ImGui::ColorEdit3("幽灵", (float*)&g_BoxColor_Ghost);
                 ImGui::Columns(1);
+                
                 ImGui::Spacing(); ImGui::Separator();
-                StyledSectionHeader("场景对象距离", g_theme.text_title, g_density);
-                ImGui::SliderInt("椅子距离", &g_chair_dist, 10, 100);
-                ImGui::SliderInt("板子距离", &g_board_dist, 10, 100);
-                ImGui::SliderInt("箱子距离", &g_box_dist, 10, 100);
-                if (StyledButton("一键重置", ButtonVariant::Secondary, ImVec2(0,0), g_density)) { g_chair_dist = 40; g_board_dist = 40; g_box_dist = 30; }
-                ImGui::Spacing(); ImGui::Separator();
-                StyledSectionHeader("场景对象开关", g_theme.text_title, g_density);
-                ImGui::Checkbox("椅子", &show_draw_Chair); ImGui::SameLine();
-                ImGui::Checkbox("板子", &show_draw_BANZI); ImGui::SameLine();
+                StyledSectionHeader("场景对象", g_theme.text_title, g_density);
+                // ★ 每行：勾选框 + 对应距离滑块
+                ImGui::Checkbox("椅子", &show_draw_Chair);
+                ImGui::SameLine(0, 14.0f * g_density);
+                ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x);
+                ImGui::SliderInt("##chair_dist", &g_chair_dist, 10, 100, "%d m");
+                ImGui::PopItemWidth();
+
+                ImGui::Checkbox("板子", &show_draw_BANZI);
+                ImGui::SameLine(0, 14.0f * g_density);
+                ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x);
+                ImGui::SliderInt("##board_dist", &g_board_dist, 10, 100, "%d m");
+                ImGui::PopItemWidth();
+
                 ImGui::Checkbox("道具箱", &show_draw_BoxItem);
+                ImGui::SameLine(0, 14.0f * g_density);
+                ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x);
+                ImGui::SliderInt("##box_dist", &g_box_dist, 10, 100, "%d m");
+                ImGui::PopItemWidth();
+
+                if (StyledButton("一键重置", ButtonVariant::Secondary, ImVec2(0,0), g_density)) { g_chair_dist = 40; g_board_dist = 40; g_box_dist = 30; }
+                
                 ImGui::Spacing(); ImGui::Separator();
-                StyledSectionHeader("调试与过滤", g_theme.text_title, g_density);
+                StyledSectionHeader("其他", g_theme.text_title, g_density);
                 ImGui::Checkbox("显示幽灵/残影", &inform_ghost); ImGui::SameLine();
+                ImGui::Checkbox("无视过滤", &disable_skip_filter); ImGui::SameLine();
                 if (ImGui::Checkbox("调试模式", &Debugging)) {
                     if (Debugging) OpenDebugLog();
                     else CloseDebugLog();
                 }
-                ImGui::Checkbox("无视过滤", &disable_skip_filter);
-                if (ImGui::Button("清理缓存")) {
+                if (ImGui::Button("清理缓存", ImVec2(120 * g_density, 32 * g_density))) {
                     std::lock_guard<std::mutex> lock(data_mutex);
                     data_buffers[0].clear(); data_buffers[1].clear();
                     GlobalMemory::数量 = 0; 监管者预知[0] = '\0';
@@ -6716,7 +6772,7 @@ void Layout_tick_UI(bool *main_thread_flag) {
                     global_validRoles.clear(); bound_seat_by_class.clear();
                 }
                 ImGui::SameLine();
-                if (ImGui::Button("打印全场坐标")) {
+                if (ImGui::Button("打印全场坐标", ImVec2(140 * g_density, 32 * g_density))) {
                     int current_idx = front_buffer_idx.load(std::memory_order_acquire);
                     const auto &current_data = data_buffers[current_idx];
                     int print_count = 0;
@@ -6737,24 +6793,28 @@ void Layout_tick_UI(bool *main_thread_flag) {
                 break;
             case 2:
                 StyledSectionHeader("自动盖板设置", g_theme.text_title, g_density);
-                ImGui::Checkbox("启用自动盖板", &wood_enabled); ImGui::SameLine();
-                if (StyledButton("测试触摸", ButtonVariant::Secondary, ImVec2(0,0), g_density)) { SimulateClick(wood_touch_x, wood_touch_y); }
+                ImGui::Checkbox("启用自动盖板", &wood_enabled);
                 ImGui::SameLine(); ImGui::Checkbox("显示触摸点", &show_touch_point);
                 ImGui::SameLine(); ImGui::Checkbox("显示判定范围", &show_wood_rect);
                 ImGui::SameLine(); ImGui::Checkbox("显示诊断", &g_show_wood_diag);
                 ImGui::Spacing();
-                ImGui::TextColored(g_theme.text_muted, "交互键坐标");
-                ImGui::SliderFloat("X 坐标", &wood_touch_x, 0.0f, (float)displayInfo.width);
-                ImGui::SliderFloat("Y 坐标", &wood_touch_y, 0.0f, (float)displayInfo.height);
-                ImGui::Spacing();
-                ImGui::TextColored(g_theme.text_muted, "微调偏移 (粗定后精调)");
-                ImGui::InputFloat("X 偏移", &wood_offset_x, 1.0f, 10.0f, "%.0f");
-                ImGui::InputFloat("Y 偏移", &wood_offset_y, 1.0f, 10.0f, "%.0f");
-                if (StyledButton("归零偏移", ButtonVariant::Secondary, ImVec2(0,0), g_density)) {
-                    wood_offset_x = 0.0f; wood_offset_y = 0.0f;
-                }
-                ImGui::SameLine();
-                if (g_calib_done) ImGui::TextColored(g_theme.success, "已校准");
+
+                // ★ 禁用时所有子控件灰掉
+                ImGui::BeginDisabled(!wood_enabled);
+                    ImGui::TextColored(g_theme.text_muted, "交互键坐标");
+                    ImGui::SliderFloat("X 坐标", &wood_touch_x, 0.0f, (float)displayInfo.width);
+                    ImGui::SliderFloat("Y 坐标", &wood_touch_y, 0.0f, (float)displayInfo.height);
+                    ImGui::Spacing();
+                    ImGui::TextColored(g_theme.text_muted, "微调偏移 (粗定后精调)");
+                    ImGui::InputFloat("X 偏移", &wood_offset_x, 1.0f, 10.0f, "%.0f");
+                    ImGui::InputFloat("Y 偏移", &wood_offset_y, 1.0f, 10.0f, "%.0f");
+                    if (StyledButton("归零偏移", ButtonVariant::Secondary, ImVec2(0,0), g_density)) {
+                        wood_offset_x = 0.0f; wood_offset_y = 0.0f;
+                    }
+                    ImGui::SameLine();
+                    if (g_calib_done) ImGui::TextColored(g_theme.success, "已校准");
+                    ImGui::SameLine();
+                    if (StyledButton("测试触摸", ButtonVariant::Secondary, ImVec2(0,0), g_density)) { SimulateClick(wood_touch_x, wood_touch_y); }
                 ImGui::Spacing();
                 // 四点校准
                 if (g_calib_step == 0) {
@@ -6821,6 +6881,7 @@ void Layout_tick_UI(bool *main_thread_flag) {
                     ImGui::SliderFloat("判定宽度", &wood_width, 3.0f, 20.0f);
                 }
                 ImGui::Spacing();
+                ImGui::EndDisabled();
                 ImGui::TextColored(g_theme.warning, "提示：先测试触摸，确认交互键有反应后再开启");
                 break;
             case 3:
@@ -6897,31 +6958,33 @@ void Layout_tick_UI(bool *main_thread_flag) {
                 }
                 ImGui::SameLine();
                 ImGui::Checkbox("显示距离", &MjSubsystem::show_distance);
-                ImGui::SameLine();
-                ImGui::SliderFloat("高价值阈值", &g_treasure_threshold, 1000.0f, 20000.0f, "%.0f");
+                ImGui::Text("高价值阈值");
+                ImGui::SameLine(0, 12.0f * g_density);
+                ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x);
+                ImGui::SliderFloat("##threshold", &g_treasure_threshold, 1000.0f, 20000.0f, "%.0f");
+                ImGui::PopItemWidth();
                 if (g_treasure_threshold != MjSubsystem::high_value_threshold) {
                     MjSubsystem::high_value_threshold = g_treasure_threshold;
                 }
 
-                if (ImGui::CollapsingHeader("精细过滤")) {
-                    ImGui::Checkbox("怪物", &MjSubsystem::show_monsters); ImGui::SameLine();
-                    ImGui::Checkbox("紫/金宝箱", &MjSubsystem::show_big_chest); ImGui::SameLine();
-                    ImGui::Checkbox("小箱子", &MjSubsystem::show_small_chest);
-                    ImGui::Checkbox("陷阱/夹子/碎石", &MjSubsystem::show_traps); ImGui::SameLine();
-                    ImGui::Checkbox("门/板/钢琴/花瓶", &MjSubsystem::show_interactables);
-                    ImGui::Checkbox("高价值物品", &MjSubsystem::show_high_value); ImGui::SameLine();
-                    ImGui::Checkbox("低价值物品", &MjSubsystem::show_low_value);
-                }
+                ImGui::Spacing(); ImGui::Separator();
+                // ★ 每行：物品勾选框 + 对应距离滑块 — 7行统一排版
+                #define MJ_ITEM_ROW(label, var_bool, var_dist) do { \
+                    ImGui::Checkbox(label, &var_bool); \
+                    ImGui::SameLine(0, 12.0f * g_density); \
+                    ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x); \
+                    ImGui::SliderFloat("##" #var_dist, &var_dist, 5.0f, 500.0f, "%.0f m"); \
+                    ImGui::PopItemWidth(); \
+                } while(0)
 
-                if (ImGui::CollapsingHeader("各类最大显示距离")) {
-                    ImGui::SliderFloat("怪物", &MjSubsystem::max_dist_monsters, 5.0f, 500.0f, "%.0f m");
-                    ImGui::SliderFloat("紫/金宝箱", &MjSubsystem::max_dist_big_chest, 5.0f, 500.0f, "%.0f m");
-                    ImGui::SliderFloat("小箱子", &MjSubsystem::max_dist_small_chest, 5.0f, 500.0f, "%.0f m");
-                    ImGui::SliderFloat("陷阱/夹子", &MjSubsystem::max_dist_traps, 5.0f, 500.0f, "%.0f m");
-                    ImGui::SliderFloat("交互物", &MjSubsystem::max_dist_interactables, 5.0f, 500.0f, "%.0f m");
-                    ImGui::SliderFloat("高价值物品", &MjSubsystem::max_dist_high_value, 5.0f, 500.0f, "%.0f m");
-                    ImGui::SliderFloat("低价值物品", &MjSubsystem::max_dist_low_value, 5.0f, 500.0f, "%.0f m");
-                }
+                MJ_ITEM_ROW("怪物",            MjSubsystem::show_monsters,      MjSubsystem::max_dist_monsters);
+                MJ_ITEM_ROW("紫/金宝箱",       MjSubsystem::show_big_chest,     MjSubsystem::max_dist_big_chest);
+                MJ_ITEM_ROW("小箱子",          MjSubsystem::show_small_chest,   MjSubsystem::max_dist_small_chest);
+                MJ_ITEM_ROW("陷阱/夹子/碎石",  MjSubsystem::show_traps,         MjSubsystem::max_dist_traps);
+                MJ_ITEM_ROW("门/板/钢琴/花瓶", MjSubsystem::show_interactables, MjSubsystem::max_dist_interactables);
+                MJ_ITEM_ROW("高价值物品",      MjSubsystem::show_high_value,    MjSubsystem::max_dist_high_value);
+                MJ_ITEM_ROW("低价值物品",      MjSubsystem::show_low_value,     MjSubsystem::max_dist_low_value);
+                #undef MJ_ITEM_ROW
 
                 ImGui::TextColored(g_theme.text_muted, "颜色: 紫宝箱(紫) 金宝箱(金) 高价(粉) 怪物(红) 其他见过滤");
             }
@@ -7770,6 +7833,7 @@ void Layout_tick_UI(bool *main_thread_flag) {
                 }
             }
                 break;
+#if 0  // 数据管理 — 已禁用，需要时删除 #if 0 行
             case 6:  // 数据管理
             {
                 StyledSectionHeader("数据管理", g_theme.text_title, g_density);
@@ -7821,7 +7885,8 @@ void Layout_tick_UI(bool *main_thread_flag) {
                 ImGui::TextColored(g_theme.text_muted, "备份文件: map_config.json.bak (自动创建)");
             }
                 break;
-            case 7:  // 调试信息
+#endif  // 数据管理
+#if 0  // 调试信息 — 已禁用，需要时删除 #if 0 行
             {
                 StyledSectionHeader("实时调试信息", g_theme.text_title, g_density);
                 
@@ -7891,14 +7956,44 @@ void Layout_tick_UI(bool *main_thread_flag) {
                 }
             }
                 break;
-            case 8:  // 关于
+#endif  // 调试信息
+            case 6:  // 免责声明
                 ImGui::PushFont(g_font_ui);
-                ImGui::TextColored(g_theme.danger, "超级框架");
+                ImGui::TextColored(g_theme.danger, "免责声明");
                 ImGui::PopFont();
-                ImGui::TextColored(g_theme.text_muted, "有问题请联系qq：1539093706");
                 ImGui::Spacing();
-                ImGui::Text("作者: 大米饭先生");
-                ImGui::TextColored(g_theme.info, "本辅助不承担任何法律责任");
+                ImGui::Separator();
+                ImGui::Spacing();
+
+                ImGui::TextColored(g_theme.text_title, "1. 版权声明");
+                ImGui::TextWrapped("本软件（ImGuiOverlay）由 大米饭先生 独立开发。保留所有权利。");
+                ImGui::TextWrapped("禁止删除或修改本版权声明和作者信息，以确保所有用户都能了解软件的来源和许可条款。");
+                ImGui::TextColored(g_theme.info, "文件来源：Telegram 频道 @MrRice2778");
+                ImGui::TextColored(g_theme.text_muted, "侵权联系删除。");
+                ImGui::Spacing();
+
+                ImGui::TextColored(g_theme.text_title, "2. 使用许可");
+                ImGui::TextWrapped("本软件仅供学习、研究和个人合法使用。");
+                ImGui::TextColored(g_theme.warning, "下载后请在 24 小时内删除！");
+                ImGui::TextWrapped("禁止将本软件用于任何非法用途。");
+                ImGui::Spacing();
+
+                ImGui::TextColored(g_theme.text_title, "3. 免责条款");
+                ImGui::TextWrapped("本软件按\"原样\"提供，开发者不承担任何明示或暗示的担保，不对使用本软件导致的任何直接或间接损失负责，包括但不限于：设备损坏、数据丢失、账号封禁、法律纠纷。使用本软件即表示您同意承担所有风险。");
+                ImGui::Spacing();
+
+                ImGui::TextColored(g_theme.text_title, "4. 传播限制");
+                ImGui::TextWrapped("禁止将本软件传播至任何大陆平台（包括但不限于：哔哩哔哩、抖音、快手、微信公众号、知乎、贴吧等），否则后果自负！");
+                ImGui::Spacing();
+
+                ImGui::TextColored(g_theme.text_title, "5. 联系方式");
+                ImGui::TextColored(g_theme.info, "Telegram 频道：@MrRice2778");
+                ImGui::TextColored(g_theme.text_muted, "侵权联系请通过 Telegram 联系我们");
+                ImGui::Spacing();
+
+                ImGui::Separator();
+                ImGui::Spacing();
+                ImGui::TextColored(g_theme.danger, "下载此文件即代表你同意上述声明。");
                 break;
         }
         ImGui::EndChild();
@@ -7906,6 +8001,93 @@ void Layout_tick_UI(bool *main_thread_flag) {
         RestoreImGuiStyle(style_bak);
         g_window = ImGui::GetCurrentWindow();
         ImGui::End();
+    }
+
+    // ========== ★ 最小化横条 (Volume Down 时显示) ==========
+    if (g_minimized_bar_anim > 0.01f) {
+        ImDrawList *bar_draw = ImGui::GetForegroundDrawList();
+        const float bar_w = 540.0f * g_density;   // ★ 单行宽条，容纳完整文字
+        const float bar_h = 42.0f * g_density;    // 单行紧凑高度
+        const float bar_round = 12.0f * g_density;
+
+        if (g_bar_custom_pos.x < 0) {
+            g_bar_custom_pos.x = (displayInfo.width - bar_w) * 0.5f;
+            g_bar_custom_pos.y = 60.0f * g_density;
+        }
+
+        ImVec2 bar_mouse = ImGui::GetMousePos();
+        ImRect bar_rect(g_bar_custom_pos, ImVec2(g_bar_custom_pos.x + bar_w, g_bar_custom_pos.y + bar_h));
+
+        // ★ 横条交互：点击展开 / 按住拖拽
+        static bool bar_pending = false;
+        static bool bar_dragging = false;
+        static ImVec2 bar_drag_off;
+        static float bar_hold_time = 0;
+        static ImVec2 bar_press_pos;
+
+        if (ImGui::IsMouseClicked(0) && bar_rect.Contains(bar_mouse)) {
+            bar_pending = true;
+            bar_dragging = false;
+            bar_hold_time = 0;
+            bar_press_pos = bar_mouse;
+        }
+
+        if (bar_pending) {
+            bar_hold_time += ImGui::GetIO().DeltaTime;
+            float drag_dist = sqrtf(powf(bar_mouse.x - bar_press_pos.x, 2) + powf(bar_mouse.y - bar_press_pos.y, 2));
+            if (drag_dist > 12.0f) {
+                bar_dragging = true;
+                bar_drag_off = ImVec2(bar_press_pos.x - g_bar_custom_pos.x, bar_press_pos.y - g_bar_custom_pos.y);
+                bar_pending = false;
+            }
+            if (!ImGui::IsMouseDown(0)) {
+                if (!bar_dragging && bar_hold_time < 0.35f && drag_dist < 10.0f) {
+                    MemuSwitch = true;
+                }
+                bar_pending = false;
+                bar_dragging = false;
+            }
+        }
+
+        if (bar_dragging) {
+            if (ImGui::IsMouseDown(0)) {
+                g_bar_custom_pos.x = std::clamp(bar_mouse.x - bar_drag_off.x, 0.0f, displayInfo.width - bar_w);
+                g_bar_custom_pos.y = std::clamp(bar_mouse.y - bar_drag_off.y, 0.0f, displayInfo.height - bar_h);
+            } else {
+                bar_dragging = false;
+            }
+        }
+
+        int bar_alpha = (int)(g_minimized_bar_anim * 210.0f);
+        int bar_border_alpha = (int)(g_minimized_bar_anim * 100.0f);
+        int text_alpha = (int)(g_minimized_bar_anim * 245.0f);
+
+        bar_draw->AddRectFilled(bar_rect.Min, bar_rect.Max,
+                                IM_COL32(255, 250, 235, bar_alpha), bar_round);
+        bar_draw->AddRect(bar_rect.Min, bar_rect.Max,
+                          IM_COL32(230, 195, 140, bar_border_alpha), bar_round, 0, 1.5f * g_density);
+
+        // ★ 单行排版: "大米饭先生 · @MrRice2778" — 左白右金 + 分隔点
+        const char *bar_title = "大米饭先生";
+        const char *bar_sep   = " \xc2\xb7 ";
+        const char *tg_text   = "@MrRice2778";
+        float bar_font = ImGui::GetFontSize() * 0.95f;
+        ImVec2 title_sz = ImGui::CalcTextSize(bar_title);
+        ImVec2 sep_sz    = ImGui::CalcTextSize(bar_sep);
+        ImVec2 tg_sz     = ImGui::CalcTextSize(tg_text);
+        float total_w = title_sz.x + sep_sz.x + tg_sz.x;
+        float start_x = bar_rect.Min.x + (bar_w - total_w) * 0.5f;
+        float text_y  = bar_rect.Min.y + (bar_h - ImGui::GetFontSize()) * 0.5f;
+
+        bar_draw->AddText(g_font_ui, bar_font,
+                          ImVec2(start_x, text_y),
+                          IM_COL32(255, 255, 255, text_alpha), bar_title);
+        bar_draw->AddText(g_font_ui, bar_font * 0.85f,
+                          ImVec2(start_x + title_sz.x, text_y),
+                          IM_COL32(210, 185, 145, text_alpha), bar_sep);
+        bar_draw->AddText(g_font_ui, bar_font * 0.85f,
+                          ImVec2(start_x + title_sz.x + sep_sz.x, text_y + 1.0f * g_density),
+                          IM_COL32(60, 45, 30, text_alpha), tg_text);
     }
 
     // ========== 添加新地图弹窗 ==========
