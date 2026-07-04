@@ -396,7 +396,7 @@ struct SurfaceComposerClient {
     }
     uint32_t flags = 0;
     if (skipScrenshot && Functionals::GetInstance().systemVersion >= 12) {
-      flags |= 0x40;
+      flags |= 0x80;   // eSecure = 0x80 (ISurfaceComposerClient.h)
     }
     if (12 <= Functionals::GetInstance().systemVersion) {
       static void *fakeParentHandleForBinder = nullptr;
@@ -418,7 +418,7 @@ struct SurfaceComposerClient {
           data, windowName, width, height, 1, flags, parentHandle,
           layerMetadata, nullptr);
     }
-    if (12 <= Functionals::GetInstance().systemVersion) {
+    if (skipScrenshot && 12 <= Functionals::GetInstance().systemVersion) {
       static SurfaceComposerClientTransaction transaction;
       transaction.SetTrustedOverlay(result, true);
       transaction.Apply(false, true);

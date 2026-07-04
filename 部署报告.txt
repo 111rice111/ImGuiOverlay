@@ -1,0 +1,24 @@
+ImGuiOverlay 部署完成报告
+时间：2026-07-02 22:40
+
+✅ 已修复的问题：
+1. Token 每次失效 → 客户端现在会保存 token 到 /data/local/bin/auth_token.dat
+2. 心跳验证 → 服务器端现在通过 token 查找卡密，不依赖 card_key
+3. 公告功能 → 客户端启动时先拉取公告和版本信息
+4. 强制更新 → 服务器返回 force_min_version，客户端会提示更新
+
+✅ 已推送的文件：
+- overlay_user (1.6MB) → /data/local/bin/overlay_user (chmod 777)
+- overlay_config.txt → /data/local/bin/overlay_config.txt
+- 使用说明书.txt → /sdcard/使用说明书.txt
+
+⚠️ 待确认：
+1. 服务器上的 server_v3.php 是否已更新为最新版本（token 验证修复）
+2. 客户端是否能正常保存和加载 token
+3. 公告和强制更新是否正常工作
+
+📋 下一步：
+1. 在服务器上访问 http://43.136.183.71/?page=admin
+2. 生成一个测试卡密
+3. 在手机上输入卡密，重启 overlay，看是否需要重新输入
+4. 在管理后台添加一条公告，重启 overlay，看是否显示公告

@@ -39,7 +39,7 @@ bool OpenGLGraphics::Create() {
   m_EglSurface =
       eglCreateWindowSurface(m_EglDisplay, egl_config, m_Window, nullptr);
   eglMakeCurrent(m_EglDisplay, m_EglSurface, m_EglSurface, m_EglContext);
-  glClearColor(0.0, 0.0, 0.0, 0.0);
+  glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
   return true;
 }
 void OpenGLGraphics::Setup() { ImGui_ImplOpenGL3_Init("#version 300 es"); }

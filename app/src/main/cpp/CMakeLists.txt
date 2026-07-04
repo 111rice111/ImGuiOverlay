@@ -5,8 +5,25 @@ if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
 endif()
 
-set(CMAKE_CXX_FLAGS_RELEASE "-O2 -DNDEBUG -fvisibility=hidden -flto")
-set(CMAKE_C_FLAGS_RELEASE "-O2 -DNDEBUG -fvisibility=hidden -flto")
+# 安全加固编译标志
+# 基础: 优化 + 符号剥离 + 死代码消除
+set(CMAKE_CXX_FLAGS_RELEASE "-O2 -DNDEBUG -fvisibility=hidden -flto -ffunction-sections -fdata-sections")
+set(CMAKE_C_FLAGS_RELEASE   "-O2 -DNDEBUG -fvisibility=hidden -flto -ffunction-sections -fdata-sections")
+
+# 二进制加固: 立即绑定 + RELRO + 栈保护
+set(SECURITY_FLAGS "-Wl,-z,relro -Wl,-z,now -fstack-protector-strong -D_FORTIFY_SOURCE=2")
+set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} ${SECURITY_FLAGS}")
+set(CMAKE_C_FLAGS_RELEASE   "${CMAKE_C_FLAGS_RELEASE} ${SECURITY_FLAGS}")
+
+# 链接: 剥离符号表 + 移除未引用段 + 只读GOT
+set(CMAKE_EXE_LINKER_FLAGS_RELEASE "-Wl,-s -Wl,--gc-sections -Wl,-z,relro -Wl,-z,now")
+
+# ★ OLLVM 混淆 (可选 — 需先安装 OLLVM 工具链)
+# 取消下面注释即可启用:
+# set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -mllvm -fla -mllvm -sub -mllvm -bcf -mllvm -split")
+# set(CMAKE_C_FLAGS_RELEASE   "${CMAKE_C_FLAGS_RELEASE} -mllvm -fla -mllvm -sub -mllvm -bcf")
+
+# ★ UPX 加壳 (可选 — 编译后执行: upx --best overlay)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)

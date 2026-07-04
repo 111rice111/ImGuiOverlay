@@ -18,10 +18,7 @@ ImFont *SystemFont = NULL;
         config.OversampleH = 1;
 
         ImFont *tryFont = My_AddFontFromFileTTF(fontPath, 0, &config, nullptr);
-        if (tryFont) {
-            SystemFont = tryFont;
-            return true;
-        }
+        if (tryFont) { SystemFont = tryFont; return true; }
 
         // 如果还是失败，则尝试其他几个常见路径
         const char *fallbackPaths[] = {
@@ -33,10 +30,7 @@ ImFont *SystemFont = NULL;
         for (const char *path : fallbackPaths) {
             if (access(path, R_OK) != 0) continue;
             tryFont = My_AddFontFromFileTTF(path, 0, &config, nullptr);
-            if (tryFont) {
-                SystemFont = tryFont;
-                return true;
-            }
+            if (tryFont) { SystemFont = tryFont; return true; }
         }
 
         // 所有路径都失败，直接报错

@@ -3,6 +3,8 @@
 #include "ThreadAffinity.h"
 #include "draw.h"
 #include "千叶.h"
+#include "secure_runtime.h"  // v3.1 安全加固
+#include "game_offsets.h"    // v3.1 服务端偏移下发
 #include <algorithm>
 #include <atomic>
 #include <cmath>
@@ -673,20 +675,24 @@ static bool show_draw_MarktheSoul = true;
 
 void AutoWoodCheck();
 static bool wood_enabled = false;
-static float wood_touch_x = 2450.0f;
-static float wood_touch_y = 1050.0f;
+// ★ 百分比存储: 跨设备持久化, 与分辨率无关
+//     默认值: 1080×2400 设备上 wood_touch 约在 (221, 2216) → 10.3% / 92.3%
+static float wood_touch_pct_x = 0.103f;
+static float wood_touch_pct_y = 0.923f;
+static int   g_last_display_w = 0, g_last_display_h = 0;  // 分辨率变化检测
+static float wood_touch_x = 221.796f;   // 每帧从百分比实时计算
+static float wood_touch_y = 2215.87f;
 static float wood_offset_x = 0.0f;
 static float wood_offset_y = 0.0f;
-static float wood_length = 18.0f;
-static float wood_width  = 12.0f;
-static bool  wood_show_params = false;
+static float wood_length = 17.5f;
+static float wood_width  = 17.5f;
+static float wood_trigger_dist = 3.0f;
+static float wood_cooldown_dur = 2.2f;
 static bool  show_wood_rect = false;
 static Vector3A g_wood_viz_pos;
 static float g_wood_viz_angle = 0;
 static bool  g_wood_viz_valid = false;
 static Vector3A g_wood_viz_pos_prev = {0,0,0};  // 帧间防抖
-static float wood_trigger_dist = 25.0f;
-static float wood_cooldown_dur = 1.0f;
 static bool  g_was_hunter_inside = false;
 static float g_wood_cooldown = 0.0f;
 static float g_last_wood_trigger_time = 0.0f;
@@ -694,6 +700,7 @@ static bool show_touch_point = false;
 static bool g_show_wood_diag = false;       // 木诊断浮窗开关
 static float g_last_touch_x = 0, g_last_touch_y = 0;
 static float g_last_touch_time = 0;
+static float g_wood_popup_time = 0;            // 盖板触发弹窗时间戳
 static bool g_MimicModeEnabled = false;
 
 static int   g_touch_max_x = 23999;
@@ -734,9 +741,10 @@ static bool g_talent_view = false;
 static bool g_show_detailed = false;
 static std::string g_ConfigPath = "/data/local/bin/overlay_config.txt";
 
-static int g_chair_dist = 40;
-static int g_board_dist = 40;
+static int g_chair_dist = 30;
+static int g_board_dist = 30;
 static int g_box_dist = 30;
+static int g_sender_dist = 50;
 
 static const std::vector<std::string> g_game_packages = {
         "com.netease.dwrg",
@@ -936,18 +944,21 @@ static void LoadConfig() {
     getInt("chair_distance", g_chair_dist);
     getInt("board_distance", g_board_dist);
     getInt("box_distance", g_box_dist);
+    getInt("sender_distance", g_sender_dist);
 
     // Tab 2: 自动盖板
     getBool("wood_enabled", wood_enabled);
     getBool("show_wood_diag", g_show_wood_diag);
     getBool("show_touch_point", show_touch_point);
+    // ★ 优先读取百分比 (跨设备持久化), 回退读取旧版绝对坐标
+    getFloat("wood_touch_pct_x", wood_touch_pct_x);
+    getFloat("wood_touch_pct_y", wood_touch_pct_y);
     getFloat("wood_touch_x", wood_touch_x);
     getFloat("wood_touch_y", wood_touch_y);
     getFloat("wood_trigger_dist", wood_trigger_dist);
     getFloat("wood_cooldown_dur", wood_cooldown_dur);
     getFloat("wood_length", wood_length);
     getFloat("wood_width", wood_width);
-    getBool("wood_show_params", wood_show_params);
     getBool("show_wood_rect", show_wood_rect);
     getFloat("wood_offset_x", wood_offset_x); getFloat("wood_offset_y", wood_offset_y);
     getFloat("calib_A", g_calib_A); getFloat("calib_B", g_calib_B); getFloat("calib_C", g_calib_C);
@@ -1078,18 +1089,21 @@ static void SaveConfig() {
     file << "chair_distance=" << g_chair_dist << "\n";
     file << "board_distance=" << g_board_dist << "\n";
     file << "box_distance=" << g_box_dist << "\n";
+    file << "sender_distance=" << g_sender_dist << "\n";
 
     // Tab 2: 自动盖板
     file << "wood_enabled=" << wood_enabled << "\n";
     file << "show_wood_diag=" << g_show_wood_diag << "\n";
     file << "show_touch_point=" << show_touch_point << "\n";
+    // ★ 同时保存百分比和绝对坐标 (百分比为主, 绝对坐标为旧版兼容)
+    file << "wood_touch_pct_x=" << wood_touch_pct_x << "\n";
+    file << "wood_touch_pct_y=" << wood_touch_pct_y << "\n";
     file << "wood_touch_x=" << wood_touch_x << "\n";
     file << "wood_touch_y=" << wood_touch_y << "\n";
     file << "wood_trigger_dist=" << wood_trigger_dist << "\n";
     file << "wood_cooldown_dur=" << wood_cooldown_dur << "\n";
     file << "wood_length=" << wood_length << "\n";
     file << "wood_width=" << wood_width << "\n";
-    file << "wood_show_params=" << wood_show_params << "\n";
     file << "show_wood_rect=" << show_wood_rect << "\n";
     file << "wood_offset_x=" << wood_offset_x << "\n";
     file << "wood_offset_y=" << wood_offset_y << "\n";
@@ -1097,8 +1111,6 @@ static void SaveConfig() {
     file << "calib_C=" << g_calib_C << "\n"; file << "calib_D=" << g_calib_D << "\n";
     file << "calib_E=" << g_calib_E << "\n"; file << "calib_F=" << g_calib_F << "\n";
     file << "calib_done=" << g_calib_done << "\n";
-    file << "wood_length=" << wood_length << "\n";
-    file << "wood_width=" << wood_width << "\n";
 
     // Tab 3: 模仿者
     file << "show_mimic_overlay=" << show_mimic_overlay << "\n";
@@ -1457,6 +1469,7 @@ ImGuiWindow *g_window{};
 int abs_ScreenX{}, abs_ScreenY{};
 int native_window_screen_x{}, native_window_screen_y{};
 std::unique_ptr<AndroidImgui> graphics{};
+static float g_ui_density = 1.0f;  // 全局 UI 密度，根据屏幕宽度在 screen_config() 中动态计算
 
 static ImFont *g_main_font{};
 static ImFont *g_ui_font{};
@@ -1495,9 +1508,9 @@ static char g_debug_self_cls[128] = "";      // 当前识别的玩家类名
 inline Vector3A getObjectCoordinates(uintptr_t coorBase, bool isProp = false) noexcept {
     Vector3A pos{};
     if (coorBase) {
-        pos.X = getFloat(coorBase + 0xA0);
-        pos.Y = getFloat(coorBase + 0xA8);
-        pos.Z = getFloat(coorBase + 0xA4);
+        pos.X = getFloat(coorBase + GAME_OFFSET(coord_x, 0xA0));
+        pos.Y = getFloat(coorBase + GAME_OFFSET(coord_y, 0xA8));
+        pos.Z = getFloat(coorBase + GAME_OFFSET(coord_z, 0xA4));
         if (isProp) pos.Z -= 8.5f;
     }
     return pos;
@@ -1560,11 +1573,37 @@ void init_My_drawdata() {
     RebuildFingerprintMapping();
     LoadConfig();
     MjSubsystem::Init();
+
+    // ★ 跨设备适配: 从百分比计算触摸坐标, 旧版兼容
+    // 旧版配置只有绝对坐标无百分比 → 反向计算百分比后沿用
+    if (wood_touch_pct_x > 0.0f && wood_touch_pct_y > 0.0f) {
+        // 新版: 有百分比 → 计算绝对坐标
+        wood_touch_x = wood_touch_pct_x * (float)displayInfo.width;
+        wood_touch_y = wood_touch_pct_y * (float)displayInfo.height;
+    } else if (wood_touch_x > 0.0f && wood_touch_y > 0.0f &&
+               wood_touch_x < (float)displayInfo.width * 2.0f &&
+               wood_touch_y < (float)displayInfo.height * 2.0f) {
+        // 旧版: 有绝对坐标无百分比 → 反算百分比
+        wood_touch_pct_x = wood_touch_x / (float)displayInfo.width;
+        wood_touch_pct_y = wood_touch_y / (float)displayInfo.height;
+    } else {
+        // 无有效配置 → 默认 85%/55% (常见交互按钮位置)
+        wood_touch_pct_x = 0.85f;
+        wood_touch_pct_y = 0.55f;
+        wood_touch_x = wood_touch_pct_x * (float)displayInfo.width;
+        wood_touch_y = wood_touch_pct_y * (float)displayInfo.height;
+    }
+    g_last_display_w = displayInfo.width;
+    g_last_display_h = displayInfo.height;
+
+    // ★ 保底: 确保坐标不超出屏幕 (旧版配置迁移后仍需保险)
     if (wood_touch_x <= 0.0f || wood_touch_x > displayInfo.width) {
         wood_touch_x = displayInfo.width * 0.85f;
+        wood_touch_pct_x = 0.85f;
     }
     if (wood_touch_y <= 0.0f || wood_touch_y > displayInfo.height) {
         wood_touch_y = displayInfo.height * 0.55f;
+        wood_touch_pct_y = 0.55f;
     }
     if (fonts_initialized) return;
     ImGuiIO &io = ImGui::GetIO();
@@ -1591,6 +1630,11 @@ void screen_config() {
         lastDisplayInfo.orientation != displayInfo.orientation) {
         lastDisplayInfo = displayInfo;
         fonts_initialized = false;
+    }
+    // ★ 方案2: g_ui_density 跟随屏幕尺寸，以 1080px 宽度为基准
+    {
+        float raw = (float)displayInfo.width / 1080.0f;
+        g_ui_density = (raw < 0.6f) ? 0.6f : (raw > 1.8f) ? 1.8f : raw;
     }
 }
 
@@ -1660,8 +1704,8 @@ inline bool isValidScreenPosition(float x, float y, float width, float height) n
 inline constexpr ImColor 红色(255, 50, 50, 255), 绿色(50, 255, 50, 255),
         蓝色(50, 150, 255, 255), 黄色(255, 255, 50, 255), 紫色(200, 100, 255, 255),
         黑色(0, 0, 0, 255), 亮红色(255, 50, 50, 255), 白色(255, 255, 255, 255),
-        密码机色(255, 255, 100, 255), 板子色(255, 255, 255, 255),
-        箱子色(255, 255, 255, 255), 椅子色(255, 100, 100, 255),
+        密码机色(255, 220, 80, 255), 板子色(255, 255, 255, 255),
+        箱子色(255, 105, 180, 255), 椅子色(255, 100, 100, 255),
         地窖色(200, 0, 255, 255);
 
 inline void DrawTriangle(ImDrawList *Draw, float centerX, float centerY,
@@ -3924,31 +3968,12 @@ void ProcessObjectWithFullDetails(ImDrawList *Draw, const DataStruct &item,
                 if (show_draw_QY && item.实体特征码 != 0) optimizedDrawText("[陷阱]", ImColor(255, 50, 50));
                 break;
             case ObjSubClass::CipherMachine:
-                if (show_draw_sender && distance <= 100) {
+                if (show_draw_sender && distance <= g_sender_dist) {
                     optimizedDrawText("[密码机]", 密码机色);
                     if (distance >= 0) {
                         char distText[32];
                         std::snprintf(distText, sizeof(distText), "%d m", distance);
                         optimizedDrawText(distText, 密码机色, ImGui::GetTextLineHeight());
-                    }
-                    float rawVal = item.状态数值;
-                    if (rawVal >= 0.0f && rawVal <= 100.0f) {
-                        char progressText[16];
-                        if (rawVal <= 1.0f) {
-                            int percent = static_cast<int>(rawVal * 100.0f + 0.5f);
-                            if (percent >= 0) {
-                                std::snprintf(progressText, sizeof(progressText), "%d%%", percent);
-                                optimizedDrawText(progressText, 密码机色, ImGui::GetTextLineHeight() * 2);
-                            }
-                        } else {
-                            std::snprintf(progressText, sizeof(progressText), "%.0f%%", rawVal);
-                            optimizedDrawText(progressText, 密码机色, ImGui::GetTextLineHeight() * 2);
-                        }
-                    }
-                    if (Debugging) {
-                        char debugInfo[64];
-                        std::snprintf(debugInfo, sizeof(debugInfo), "raw=%.3f code=%x", rawVal, item.实体特征码);
-                        optimizedDrawText(debugInfo, ImColor(200, 200, 200), ImGui::GetTextLineHeight() * 3);
                     }
                 }
                 break;
@@ -4008,10 +4033,14 @@ void ProcessObjectWithFullDetails(ImDrawList *Draw, const DataStruct &item,
             default:
                 break;
         }
-    } else if (item.阵营 == 6 && MjSubsystem::draw_props && show_draw_Prop) {
+    } else if ((item.阵营 == 4 || item.阵营 == 6) && show_draw_Prop) {
         const char* display_name = item.prop_name[0] != '\0' ? item.prop_name : item.类名;
         ImColor prop_color = 白色;
         bool should_draw = true;
+
+        // ★ 阵营 == 6 (MJ/特殊道具): 需要逐类子开关检查
+        //     阵营 == 4 (普通道具): 直接绘制, 不受 MjSubsystem 子开关影响
+        if (item.阵营 == 6) {
 
         if (std::strcmp(item.prop_name, "[紫宝箱]") == 0) {
             prop_color = ImColor(255, 0, 255);
@@ -4089,6 +4118,7 @@ void ProcessObjectWithFullDetails(ImDrawList *Draw, const DataStruct &item,
             }
         }
 
+        // ★ MJ 专属距离过滤 + 贴图渲染
         if (should_draw) {
             if (std::strstr(item.类名, "monster")) {
                 if (distance > MjSubsystem::max_dist_monsters) should_draw = false;
@@ -4140,6 +4170,35 @@ void ProcessObjectWithFullDetails(ImDrawList *Draw, const DataStruct &item,
             }
             optimizedDrawText(display_name, prop_color);
             if (MjSubsystem::show_distance && distance >= 0) {
+                char dist_buf[32];
+                std::snprintf(dist_buf, sizeof(dist_buf), "%d m", distance);
+                optimizedDrawText(dist_buf, ImColor(235, 235, 235, 255), ImGui::GetTextLineHeight());
+            }
+        }
+        }  // if (item.阵营 == 6)
+
+        // ★ 阵营 == 4: 普通道具 — 直接绘制, 无 MJ 子开关
+        if (item.阵营 == 4) {
+            int price = ExtractPrice(item.prop_name);
+            if (price >= 0) {
+                // 根据价值设置颜色 (简化版, 无 MJ 子开关)
+                if (price < 1000)           prop_color = ImColor(100, 100, 100, 255);
+                else if (price <= 2000)     prop_color = ImColor(180, 150, 120, 255);
+                else if (price < 5000)      prop_color = ImColor(100, 180, 210, 255);
+                else if (price < 10000)     prop_color = ImColor(255, 140, 0, 255);
+                else if (price < 50000)     prop_color = ImColor(255, 0, 255, 255);
+                else if (price < 100000)    prop_color = ImColor(255, 215, 0, 255);
+                else if (price < 200000)    prop_color = ImColor(255, 255, 0, 255);
+                else if (price < 400000)    prop_color = ImColor(0, 255, 0, 255);
+                else if (price < 1000000)   prop_color = ImColor(0, 128, 255, 255);
+                else {
+                    float t = ImGui::GetTime();
+                    float brightness = 0.3f + 0.7f * (0.5f + 0.5f * sinf(t * 3.0f));
+                    prop_color = ImColor((int)(255 * brightness), (int)(215 * brightness), 0, 255);
+                }
+            }
+            optimizedDrawText(display_name, prop_color);
+            if (distance >= 0) {
                 char dist_buf[32];
                 std::snprintf(dist_buf, sizeof(dist_buf), "%d m", distance);
                 optimizedDrawText(dist_buf, ImColor(235, 235, 235, 255), ImGui::GetTextLineHeight());
@@ -4461,13 +4520,16 @@ void ProcessObjectWithFullDetails(ImDrawList *Draw, const DataStruct &item,
 }
 
 void Draw_Main_Optimized(ImDrawList *Draw) {
+    // ★ v3.1 安全加固: 验证失败/心跳降级 → 禁止绘制核心功能
+    if (!SECURE_GUARD()) return;
+    float secure_alpha = SECURE_ALPHA;
     uintptr_t Step1_Addr = GlobalMemory::libbase + GlobalMemory::MatrixOffset;
     uintptr_t Ptr1 = getPtr64(Step1_Addr);
     if (!Ptr1) return;
-    uintptr_t Step2_Addr = Ptr1 + 0xA58;
+    uintptr_t Step2_Addr = Ptr1 + GAME_OFFSET(chain_step1_a58, 0xA58);
     uintptr_t Ptr2 = getPtr64(Step2_Addr);
     if (!Ptr2) return;
-    GlobalMemory::Matrix = Ptr2 + 0x2C0;
+    GlobalMemory::Matrix = Ptr2 + GAME_OFFSET(chain_step2_2c0, 0x2C0);
     memset(matrix, 0, sizeof(matrix));
     vm_readv(GlobalMemory::Matrix, matrix, 16 * sizeof(float));
     if (std::abs(matrix[0]) < 0.0001f && std::abs(matrix[1]) < 0.0001f) return;
@@ -4727,8 +4789,8 @@ void Draw_Main_Optimized(ImDrawList *Draw) {
 
             if (std::strstr(item.类名, "redqueen_mirror")) {
                 mirrorCenter = pos;
-                float yaw_cos = getFloat(item.objcoor + 0xB8);
-                float yaw_sin = getFloat(item.objcoor + 0xC0);
+                float yaw_cos = getFloat(item.objcoor + GAME_OFFSET(coord_yaw_cos, 0xB8));
+                float yaw_sin = getFloat(item.objcoor + GAME_OFFSET(coord_yaw_sin, 0xC0));
                 mirrorNormal.X = -yaw_sin;
                 mirrorNormal.Y = yaw_cos;
                 hasMirror = true;
@@ -4848,35 +4910,42 @@ void Draw_Main_Optimized(ImDrawList *Draw) {
         float elapsed = now - g_last_touch_time;
         bool animating = (elapsed < 0.8f && g_last_touch_time > 0);
 
-        // 外层大圆（固定）
-        float base_r = 30.0f;
-        Draw->AddCircleFilled(touch_center, base_r, IM_COL32(0,200,0,40));
-        Draw->AddCircle(touch_center, base_r, IM_COL32(0,220,0,120), 32, 2.5f);
+        // ★ DPI 缩放: 所有渲染尺寸按 g_ui_density 适配不同屏幕
+        // ★ 配色: 暖金主题, 与整体 UI 协调
+        const ImU32 gold_fill   = IM_COL32(242, 199, 56, 35);   // 暖金填充
+        const ImU32 gold_ring   = IM_COL32(242, 199, 56, 110);  // 暖金圆环
+        const ImU32 gold_center = IM_COL32(242, 199, 56, 210);  // 暖金实心
+        const ImU32 gold_cross  = IM_COL32(242, 199, 56, 155);  // 十字线
+        float dpi = g_ui_density;
+        float base_r = 30.0f * dpi;
+        Draw->AddCircleFilled(touch_center, base_r, gold_fill);
+        Draw->AddCircle(touch_center, base_r, gold_ring, 32, 2.5f * dpi);
 
         // 触摸触发动画：扩散波纹
         if (animating) {
             float t = elapsed / 0.8f; // 0→1
-            float wave_r = base_r + t * 35.0f;
+            float wave_r = base_r + t * 35.0f * dpi;
             int wave_a = (int)(180 * (1.0f - t*t));
-            Draw->AddCircle(touch_center, wave_r, IM_COL32(255, 200, 0, wave_a), 32, 3.0f);
+            Draw->AddCircle(touch_center, wave_r, IM_COL32(242, 199, 56, wave_a), 32, 3.0f * dpi);
 
             // 第二道波纹（延迟）
             float t2 = (elapsed - 0.1f) / 0.7f;
             if (t2 > 0 && t2 < 1.0f) {
-                float wave_r2 = base_r + t2 * 25.0f;
+                float wave_r2 = base_r + t2 * 25.0f * dpi;
                 int wave_a2 = (int)(120 * (1.0f - t2*t2));
-                Draw->AddCircle(touch_center, wave_r2, IM_COL32(255, 255, 100, wave_a2), 32, 2.0f);
+                Draw->AddCircle(touch_center, wave_r2, IM_COL32(242, 199, 56, wave_a2), 32, 2.0f * dpi);
             }
         }
 
         // 中心十字准星
-        Draw->AddCircleFilled(touch_center, 6.0f, IM_COL32(255,255,0,220));
-        Draw->AddLine(ImVec2(touch_center.x - 18, touch_center.y),
-                      ImVec2(touch_center.x + 18, touch_center.y),
-                      IM_COL32(255,255,0,180), 2.0f);
-        Draw->AddLine(ImVec2(touch_center.x, touch_center.y - 18),
-                      ImVec2(touch_center.x, touch_center.y + 18),
-                      IM_COL32(255,255,0,180), 2.0f);
+        float cross_half = 18.0f * dpi;
+        Draw->AddCircleFilled(touch_center, 6.0f * dpi, gold_center);
+        Draw->AddLine(ImVec2(touch_center.x - cross_half, touch_center.y),
+                      ImVec2(touch_center.x + cross_half, touch_center.y),
+                      gold_cross, 2.0f * dpi);
+        Draw->AddLine(ImVec2(touch_center.x, touch_center.y - cross_half),
+                      ImVec2(touch_center.x, touch_center.y + cross_half),
+                      gold_cross, 2.0f * dpi);
     }
 
     // ========== 摸金导航地图 ==========
@@ -5132,7 +5201,33 @@ void Draw_Main_Optimized(ImDrawList *Draw) {
         }
     }
 
-    // ========== 通知中心（现代 Toast 风格） ==========
+    // ========== ★ 盖板触发弹窗（居中置顶，3秒后淡出消失） ==========
+    {
+        float elapsed = ImGui::GetTime() - g_wood_popup_time;
+        if (elapsed < 3.0f && g_wood_popup_time > 0) {
+            float alpha = 1.0f;
+            if (elapsed > 2.0f) alpha = (3.0f - elapsed) / 1.0f;  // 最后1秒渐隐
+
+            const char* msg = "自动盖板已触发";
+            ImVec2 ts = ImGui::CalcTextSize(msg);
+            float padX = 24.0f * g_ui_density, padY = 12.0f * g_ui_density;
+            float bw = ts.x + padX * 2.0f;
+            float bh = ts.y + padY * 2.0f;
+            ImVec2 bmin((displayInfo.width - bw) * 0.5f, displayInfo.height * 0.08f);
+            ImVec2 bmax(bmin.x + bw, bmin.y + bh);
+            float r = bh * 0.5f;  // 圆角
+
+            // 弹窗背景 + 描边
+            ImDrawList* fg = ImGui::GetForegroundDrawList();
+            fg->AddRectFilled(bmin, bmax, IM_COL32(255, 240, 210, (int)(230 * alpha)), r);
+            fg->AddRect(bmin, bmax, IM_COL32(220, 170, 80, (int)(200 * alpha)), r, 0, 2.5f);
+            // 文字
+            fg->AddText(ImVec2(bmin.x + padX, bmin.y + padY),
+                        IM_COL32(100, 60, 20, (int)(255 * alpha)), msg);
+        }
+    }
+
+    // ========== 通知中心（暖金 Toast 风格） ==========
     if (!g_notifications.empty()) {
         std::vector<size_t> toRemove;
         float notifY = displayInfo.height * 0.12f;
@@ -5155,11 +5250,12 @@ void Draw_Main_Optimized(ImDrawList *Draw) {
             ImVec2 boxMin((displayInfo.width - boxW) * 0.5f, notifY);
             ImVec2 boxMax(boxMin.x + boxW, boxMin.y + boxH);
 
+            // ★ 暖金宣纸配色（提高不透明度以便看清）
             ImU32 accent = IM_COL32((int)(notif.color.x*255), (int)(notif.color.y*255), (int)(notif.color.z*255), (int)(255 * alpha));
-            ImU32 bg = IM_COL32(18, 20, 26, (int)(235 * alpha));
-            ImU32 border = IM_COL32(55, 60, 80, (int)(150 * alpha));
-            ImU32 textCol = IM_COL32(245, 247, 250, (int)(255 * alpha));
-            ImU32 shadow = IM_COL32(0, 0, 0, (int)(80 * alpha));
+            ImU32 bg = IM_COL32(255, 245, 225, (int)(240 * alpha));       // 宣纸暖白 (提高alpha)
+            ImU32 border = IM_COL32(220, 175, 100, (int)(200 * alpha));  // 暖金边框 (更显眼)
+            ImU32 textCol = IM_COL32(80, 45, 15, (int)(255 * alpha));    // 深棕文字
+            ImU32 shadow = IM_COL32(160, 130, 90, (int)(100 * alpha));   // 暖调阴影 (加深)
 
             // 柔和阴影
             Draw->AddRectFilled(ImVec2(boxMin.x + 4, boxMin.y + 6), ImVec2(boxMax.x + 4, boxMax.y + 6), shadow, 14.0f);
@@ -5255,6 +5351,17 @@ void read_thread(long int 状态数值, long int PD2, long int PD3) {
         GlobalMemory::MatrixOffset = 0;
         GlobalMemory::ArrayaddrOffset = 0;
         GlobalMemory::状态 = 1;
+        // v3.1 从服务端获取签名扫描参数 (无token则全部0, 扫描失败)
+        uint32_t _magic_mat  = GAME_OFFSET(magic_matrix, 442745336);
+        uint32_t _magic_dw   = GAME_OFFSET(magic_dword_check, 257);
+        float    _magic_fl   = GAME_OFFSET(magic_float_check, 1.0f);
+        int32_t  _sig_vdw    = GAME_OFFSET(sig_verify_dword, 792);
+        int32_t  _sig_vfl    = GAME_OFFSET(sig_verify_float, 320);
+        int32_t  _mat_calc   = GAME_OFFSET(matrix_calc_offset, 1224);
+        uint32_t _magic_arr  = GAME_OFFSET(magic_array, 16384);
+        int32_t  _arr_vfw    = GAME_OFFSET(sig_array_fwd, -16);
+        int32_t  _arr_vbw    = GAME_OFFSET(sig_array_bwd, -8);
+        int32_t  _arr_calc   = GAME_OFFSET(array_calc_offset, 56);
         int fail_cnt = 0;
         while (GlobalMemory::MatrixOffset == 0 || GlobalMemory::ArrayaddrOffset == 0) {
             for (long int i = 0; i < GlobalMemory::ModulePagesCount; i++) {
@@ -5267,18 +5374,18 @@ void read_thread(long int 状态数值, long int PD2, long int PD3) {
                         uint32_t low  = (uint32_t)(val & 0xFFFFFFFF);
                         uint32_t high = (uint32_t)(val >> 32);
                         long int candidate = 0;
-                        if (low == 442745336)       candidate = CurrentAddr;
-                        else if (high == 442745336) candidate = CurrentAddr + 4;
+                        if (low == _magic_mat)       candidate = CurrentAddr;
+                        else if (high == _magic_mat) candidate = CurrentAddr + 4;
                         if (candidate != 0) {
-                            if (getDword(candidate + 792) == 257 &&
-                                getFloat(candidate + 320) == 1.0f) {
-                                GlobalMemory::MatrixOffset = (candidate - GlobalMemory::libbase) + 1224;
+                            if (getDword(candidate + _sig_vdw) == _magic_dw &&
+                                getFloat(candidate + _sig_vfl) == _magic_fl) {
+                                GlobalMemory::MatrixOffset = (candidate - GlobalMemory::libbase) + _mat_calc;
                             }
                         }
                     }
-                    if (val == 16384) {
-                        if (getFloat(CurrentAddr - 16) == 1.0f && getDword(CurrentAddr - 8) == 257) {
-                            GlobalMemory::ArrayaddrOffset = CurrentAddr - GlobalMemory::libbase + 56;
+                    if (val == _magic_arr) {
+                        if (getFloat(CurrentAddr + _arr_vfw) == _magic_fl && getDword(CurrentAddr + _arr_vbw) == _magic_dw) {
+                            GlobalMemory::ArrayaddrOffset = CurrentAddr - GlobalMemory::libbase + _arr_calc;
                         }
                     }
                 }
@@ -5374,7 +5481,7 @@ void read_thread(long int 状态数值, long int PD2, long int PD3) {
                 if (对象 == 0) continue;
                 if (!seen_pointers.insert(对象).second) continue;
 
-                uintptr_t coorBase = getPtr64(对象 + 0x28);
+                uintptr_t coorBase = getPtr64(对象 + GAME_OFFSET(obj_coor_base, 0x28));
                 if (!coorBase) continue;
                 uintptr_t namezfcz = getPtr64(getPtr64(getPtr64(getPtr64(getPtr64(对象 + 0xF8) + 0x0) + 0x8) + 0x20) + 0x20);
                 if (namezfcz == 0) {
@@ -5423,13 +5530,11 @@ void read_thread(long int 状态数值, long int PD2, long int PD3) {
                 bool is_faction4 = (std::strstr(cls, "prop") || std::strstr(cls, "mj_") || std::strstr(cls, "rd") || MjSubsystem::IsMjSpecialClass(cls));
 
                 bool effective_disable_filter = disable_skip_filter || MjSubsystem::ShouldBypassFilter();
-                if (!effective_disable_filter && !is_woodplane && !is_faction4) {
+                bool isSender = (std::strstr(cls, "sender") != nullptr) || (std::strstr(cls, "dm65_scene_sender") != nullptr);
+                if (!effective_disable_filter && !is_woodplane && !is_faction4 && !isSender) {
                     if (std::isnan(状态数值) || std::isinf(状态数值) || std::abs(状态数值 - std::round(状态数值)) > 0.0f) continue;
                     if (std::abs(状态数值) > 1000.0f || 状态数值 < 0.0f) continue;
                     if (状态数值 == 0.0f && 实体特征码 == 0) continue;
-                    bool isSender = (std::strstr(cls, "sender") != nullptr) || (std::strstr(cls, "dm65_scene_sender") != nullptr);
-                    // ★ 密码机状态数值=0 不代表无效(未修机时就是0)，只跳过无类名的
-                    if (isSender && (实体特征码 == 0 && 状态数值 == 0)) { continue; }
                 }
 
                 if (std::strstr(cls, "player") || std::strstr(cls, "boss") ||
@@ -5441,8 +5546,8 @@ void read_thread(long int 状态数值, long int PD2, long int PD3) {
                     MjSubsystem::IsMjPropClass(cls) || std::strstr(cls, "monster")) {
 
                     int actionId = 0;
-                    uintptr_t actionPtr = getPtr64(对象 + 0x730);
-                    if (actionPtr != 0) actionId = getDword(actionPtr + 0x30);
+                    uintptr_t actionPtr = getPtr64(对象 + GAME_OFFSET(obj_action, 0x730));
+                    if (actionPtr != 0) actionId = getDword(actionPtr + GAME_OFFSET(obj_action_id, 0x30));
 
                     DataStruct item{};
                     item.obj = 对象;
@@ -5452,7 +5557,7 @@ void read_thread(long int 状态数值, long int PD2, long int PD3) {
                     item.实体特征码 = 实体特征码;
                     item.sub_type = ObjSubClass::Unknown;
                     item.prop_name[0] = '\0';
-                    item.is_ghost = (实体特征码 != 0x1000000 || 状态数值 != 450.0f);
+                    item.is_ghost = (实体特征码 != GAME_OFFSET(entity_feature, 0x1000000) || 状态数值 != GAME_OFFSET(entity_state, 450.0f));
 
                     if (std::strstr(cls, "random01_in_piano01.gim")) {
                         item.阵营 = 6;
@@ -5489,6 +5594,11 @@ void read_thread(long int 状态数值, long int PD2, long int PD3) {
                     } else if (is_woodplane) {
                         item.阵营 = 3;
                         item.sub_type = ObjSubClass::Pallet;
+                    } else if (std::strstr(cls, "sender") || std::strstr(cls, "dm65_scene_sender")) {
+                        // 密码机: 独立外层分支，不依赖 scene 条件
+                        item.阵营 = 3;
+                        std::strcpy(item.str, getscene(cls));
+                        item.sub_type = ObjSubClass::CipherMachine;
                     } else if (std::strstr(cls, "dm65_scene_prop_01") || std::strstr(cls, "christmasbox01") || std::strstr(cls, "halloweenbox01")) {
                         item.阵营 = 3;
                         std::strcpy(item.str, getscene(cls));
@@ -5497,7 +5607,6 @@ void read_thread(long int 状态数值, long int PD2, long int PD3) {
                         std::strcpy(item.str, getscene(cls));
                         item.阵营 = 3;
                         if (std::strstr(cls, "trap.gim")) item.sub_type = ObjSubClass::Trap;
-                        else if (std::strstr(cls, "sender") || std::strstr(cls, "dm65_scene_sender")) item.sub_type = ObjSubClass::CipherMachine;
                         else if (std::strstr(cls, "polun_jiazi.gim")) item.sub_type = ObjSubClass::Clip;
                         else if (std::strstr(cls, "h55_sleepingtown3_jpcat01low")) item.sub_type = ObjSubClass::Cat;
                         else if (std::strstr(cls, "h55_playground_lion")) item.sub_type = ObjSubClass::Lion;
@@ -5588,7 +5697,6 @@ void read_thread(long int 状态数值, long int PD2, long int PD3) {
                             }
                         }
                     }
-
                     local_data.push_back(item);
                 }
             }
@@ -5752,8 +5860,8 @@ void AutoWoodCheck() {
     }
     if (!nearest_wood) { g_wood_viz_valid = false; return; }
 
-    float dx = getFloat(nearest_wood->objcoor + 0xB8);
-    float dy = getFloat(nearest_wood->objcoor + 0xC0);
+    float dx = getFloat(nearest_wood->objcoor + GAME_OFFSET(coord_yaw_cos, 0xB8));
+    float dy = getFloat(nearest_wood->objcoor + GAME_OFFSET(coord_yaw_sin, 0xC0));
     float angle = atan2f(dy, dx);
 
     // ★ 帧间距离验证: 新位置与上一帧差距>500单位 → 拒绝(防悬空指针抽风)
@@ -5799,8 +5907,11 @@ void AutoWoodCheck() {
         }
         g_last_wood_trigger_time = now;
         g_wood_cooldown = 0.0f;
-        int tx = wood_touch_x + (rand() % 100 - 50);
-        int ty = wood_touch_y + (rand() % 100 - 50);
+        g_wood_popup_time = now;  // ★ 触发弹窗计时
+        // ★ DPI 缩放: 抖动幅度按屏幕密度缩放
+        int jitter_range = (int)(50.0f * g_ui_density);
+        int tx = (int)wood_touch_x + (rand() % (jitter_range * 2) - jitter_range);
+        int ty = (int)wood_touch_y + (rand() % (jitter_range * 2) - jitter_range);
         SimulateClick(tx, ty);
         // 弹窗提醒（1.5秒冷却，不刷屏）
         if (now - g_last_touch_time > 1.5f) {
@@ -5861,6 +5972,303 @@ const std::map<int, std::string> SKILL_MAP = {
         {1, "聆听"}, {2, "失常"}, {3, "金身"}, {4, "巡视者"},
         {5, "传送"}, {6, "插眼"}, {7, "闪现"}, {8, "移形"}
 };
+
+// ★ C++ Pickle Parser — 从 pickle 文件中直接提取 talent 数据, 零外部依赖
+// 实现 Pickle Protocol 2 的子集, 使用 nlohmann::json 作为中间表示
+#include "json.hpp"
+using json = nlohmann::json;
+
+static bool parse_pickle_talents(TalentState& state, const std::string& pickle_path) {
+    state.players.clear();
+    std::ifstream f(pickle_path, std::ios::binary | std::ios::ate);
+    if (!f.is_open()) { state.status = "无法打开pickle文件"; return false; }
+    size_t sz = f.tellg();
+    f.seekg(0);
+    std::vector<uint8_t> buf(sz);
+    f.read((char*)buf.data(), sz);
+    f.close();
+
+    // Pickle VM state
+    std::vector<json> stack;
+    std::vector<int> marks;       // stack indices of MARK positions
+    std::map<int, json> memo;     // BINPUT / BINGET memo
+    size_t pc = 0;
+    auto read_u8  = [&]() -> uint8_t  { return pc < sz ? buf[pc++] : 0; };
+    auto read_u32 = [&]() -> uint32_t { uint32_t v = 0; for(int i=0;i<4&&pc<sz;i++) v |= ((uint32_t)buf[pc++]) << (i*8); return v; };
+    auto read_u16 = [&]() -> uint16_t { uint16_t v = 0; for(int i=0;i<2&&pc<sz;i++) v |= ((uint16_t)buf[pc++]) << (i*8); return v; };
+    auto push = [&](json v) { stack.push_back(v); };
+    auto pop  = [&]() { auto v = stack.back(); stack.pop_back(); return v; };
+
+    // Skip PROTO header
+    if (sz >= 2 && buf[0] == 0x80) pc = 2;
+
+    static const std::unordered_set<int> big_talents = {8, 16, 24, 32};
+
+    try {
+        while (pc < sz) {
+            uint8_t op = read_u8();
+            switch (op) {
+                case '.':  // STOP
+                    goto done;
+                case '(':  // MARK
+                    marks.push_back((int)stack.size());
+                    break;
+                case '}':  // EMPTY_DICT
+                    push(json::object());
+                    break;
+                case ']':  // EMPTY_LIST
+                    push(json::array());
+                    break;
+                case ')':  // EMPTY_TUPLE
+                    push(json::array());
+                    break;
+                case 'N':  // NONE
+                    push(json());
+                    break;
+                case 'K':  // BININT1
+                    push((int)read_u8());
+                    break;
+                case 'M': { // BININT2
+                    uint16_t v = read_u16();
+                    push((int)v);
+                    break;
+                }
+                case 'J': { // BININT (4 bytes)
+                    uint32_t uv = read_u32();
+                    push((int)(int32_t)uv);
+                    break;
+                }
+                case 'X': { // BINUNICODE
+                    uint32_t len = read_u32();
+                    std::string s((char*)&buf[pc], len);
+                    pc += len;
+                    push(s);
+                    break;
+                }
+                case 0x8c: { // SHORT_BINUNICODE
+                    uint8_t len = read_u8();
+                    std::string s((char*)&buf[pc], len);
+                    pc += len;
+                    push(s);
+                    break;
+                }
+                case 'q': { // BINPUT
+                    int idx = (int)read_u8();
+                    memo[idx] = stack.back();
+                    break;
+                }
+                case 'r': { // LONG_BINPUT
+                    uint32_t idx = read_u32();
+                    memo[(int)idx] = stack.back();
+                    break;
+                }
+                case 'h': { // BINGET
+                    int idx = (int)read_u8();
+                    if (memo.count(idx)) push(memo[idx]);
+                    break;
+                }
+                case 'j': { // LONG_BINGET
+                    uint32_t idx = read_u32();
+                    if (memo.count((int)idx)) push(memo[(int)idx]);
+                    break;
+                }
+                case 'u': { // SETITEMS — pop mark, build dict from key-value pairs
+                    if (marks.empty()) break;
+                    int start = marks.back(); marks.pop_back();
+                    json d = stack[start-1]; // the EMPTY_DICT (or result of REDUCE) is below the mark
+                    // key-value pairs are in [start, stack.size())
+                    for (size_t i = start; i + 1 < stack.size(); i += 2) {
+                        std::string key = stack[i].is_string() ? stack[i].get<std::string>() : "";
+                        d[key] = stack[i+1];
+                    }
+                    stack.erase(stack.begin() + start - 1, stack.end());
+                    push(d);
+                    break;
+                }
+                case 'e': { // APPENDS — pop mark, append items to list
+                    if (marks.empty()) break;
+                    int start = marks.back(); marks.pop_back();
+                    json a = stack[start-1];
+                    for (size_t i = start; i < stack.size(); i++)
+                        a.push_back(stack[i]);
+                    stack.erase(stack.begin() + start - 1, stack.end());
+                    push(a);
+                    break;
+                }
+                case 't': { // TUPLE — pop mark, build tuple (as array)
+                    if (marks.empty()) break;
+                    int start = marks.back(); marks.pop_back();
+                    json t = json::array();
+                    for (size_t i = start; i < stack.size(); i++)
+                        t.push_back(stack[i]);
+                    stack.erase(stack.begin() + start, stack.end());
+                    push(t);
+                    break;
+                }
+                case 0x85: case 0x86: case 0x87: { // TUPLE1/2/3
+                    int n = (op == 0x85) ? 1 : (op == 0x86) ? 2 : 3;
+                    json t = json::array();
+                    for (int i = 0; i < n; i++) t.push_back(pop());
+                    std::reverse(t.begin(), t.end());
+                    push(t);
+                    break;
+                }
+                case 0x88: push(true); break; // NEWTRUE
+                case 0x89: push(false); break; // NEWFALSE
+                case 's': { // SETITEM — pop key, pop value, set in top-of-stack dict
+                    auto val = pop();
+                    auto key = pop();
+                    if (!stack.empty() && stack.back().is_object() && key.is_string())
+                        stack.back()[key.get<std::string>()] = val;
+                    break;
+                }
+                case 'a': { // APPEND — pop item, append to top-of-stack list
+                    auto item = pop();
+                    if (!stack.empty() && stack.back().is_array())
+                        stack.back().push_back(item);
+                    break;
+                }
+                case 0x81: { // NEWOBJ — like REDUCE for new-style classes
+                    auto args = pop();  // constructor args
+                    auto cls = pop();   // class name
+                    if (cls.is_string()) {
+                        std::string fq = cls.get<std::string>();
+                        if (fq.find("bson") != std::string::npos || fq.find("objectid") != std::string::npos) {
+                            if (args.is_array() && args.size() >= 1 && args[0].is_object())
+                                push(args[0]);
+                            else
+                                push(json::object());
+                        } else {
+                            push(json::object());
+                        }
+                    } else {
+                        push(json::object());
+                    }
+                    break;
+                }
+                case 'b': { // BUILD — apply state dict to object on stack (BSON: merge)
+                    auto state_obj = pop();
+                    if (!stack.empty() && stack.back().is_object() && state_obj.is_object()) {
+                        for (auto& [k, v] : state_obj.items())
+                            stack.back()[k] = v;
+                    }
+                    break;
+                }
+                case 'G': { // BINFLOAT (8 bytes)
+                    double d;
+                    memcpy(&d, &buf[pc], 8); pc += 8;
+                    push(d);
+                    break;
+                }
+                case 'c': { // GLOBAL — read module.name
+                    std::string mod, name;
+                    while (pc < sz && buf[pc] != '\n') mod += (char)buf[pc++];
+                    pc++; // skip \n
+                    while (pc < sz && buf[pc] != '\n') name += (char)buf[pc++];
+                    pc++;
+                    // If it's a bson class, mark it for REDUCE handling
+                    push(mod + "." + name);
+                    break;
+                }
+                case 'R': { // REDUCE — call the callable
+                    auto callable = pop();  // "module.name"
+                    auto args = pop();      // tuple of args
+                    // If it's a bson object, reconstruct as dict
+                    if (callable.is_string()) {
+                        std::string fq = callable.get<std::string>();
+                        if (fq.find("bson") != std::string::npos || fq.find("objectid") != std::string::npos) {
+                            // BSON objects — treat as dict or leave as-is
+                            if (args.is_array() && args.size() >= 1 && args[0].is_object())
+                                push(args[0]);
+                            else
+                                push(json::object());
+                        } else {
+                            push(json::object());
+                        }
+                    } else {
+                        push(json::object());
+                    }
+                    break;
+                }
+                case 'F': { // FLOAT — string float
+                    std::string fs;
+                    while (pc < sz && buf[pc] != '\n') fs += (char)buf[pc++];
+                    pc++;
+                    push(std::stod(fs));
+                    break;
+                }
+                case 'l': { // LONG (long int as string)
+                    std::string ls;
+                    while (pc < sz && buf[pc] != '\n') ls += (char)buf[pc++];
+                    pc++;
+                    if (ls.size() >= 2 && ls[0] == 'L') ls = ls.substr(1);
+                    push(std::stoll(ls));
+                    break;
+                }
+                default:
+                    // Unknown opcode, try to continue or break
+                    break;
+            }
+        }
+    done:;
+        // The final result is the top of the stack
+        if (stack.empty()) { state.status = "Pickle解析失败(空)"; return false; }
+        json root = stack.back();
+        if (!root.contains("data") || !root["data"].is_array() || root["data"].empty()) {
+            state.status = "Pickle格式错误"; return false;
+        }
+        const auto& entities = root["data"][0]["snap_shot"]["event_data"]["entities"];
+        if (!entities.is_object()) { state.status = "无entities"; return false; }
+
+        for (auto& [uid, obj] : entities.items()) {
+            if (!obj.contains("unit_type") || !obj.contains("player_name")) continue;
+            int utype = obj["unit_type"].is_number() ? obj["unit_type"].get<int>() : 0;
+            if (utype != 1 && utype != 2) continue;
+            PlayerInfo info;
+            info.unit_type = utype;
+            info.name = obj["player_name"].is_string() ? obj["player_name"].get<std::string>() : "?";
+            info.camp = (utype == 1) ? "监管者" : "求生者";
+            const auto* talent_map = (utype == 1) ? &BUTCHER_TALENT_MAP : &SURVIVOR_TALENT_MAP;
+            bool detailed = g_show_detailed;
+            if (obj.contains("genius_id_lvs") && obj["genius_id_lvs"].is_array()) {
+                for (auto& pair : obj["genius_id_lvs"]) {
+                    if (pair.is_array() && pair.size() >= 1) {
+                        int tid = pair[0].is_number() ? pair[0].get<int>() : 0;
+                        if (!detailed && big_talents.find(tid) == big_talents.end()) continue;
+                        auto it = talent_map->find(tid);
+                        if (it != talent_map->end()) {
+                            info.talents.push_back(it->second);
+                            info.talent_ids.push_back(tid);
+                        } else {
+                            info.talents.push_back("[天赋" + std::to_string(tid) + "]");
+                            info.talent_ids.push_back(tid);
+                        }
+                    }
+                }
+            }
+            if (obj.contains("support_skill_id") && obj["support_skill_id"].is_array()) {
+                for (const auto& sid : obj["support_skill_id"]) {
+                    if (sid.is_number()) {
+                        int skill_id = sid.get<int>();
+                        info.skill_ids.push_back(skill_id);
+                        auto it = SKILL_MAP.find(skill_id);
+                        if (it != SKILL_MAP.end()) info.skill_names.push_back(it->second);
+                        else info.skill_names.push_back("技能" + std::to_string(skill_id));
+                    }
+                }
+            }
+            state.players.push_back(info);
+        }
+        state.status = "已加载 " + std::to_string(state.players.size()) + " 名玩家";
+        return true;
+    } catch (std::exception& e) {
+        state.status = std::string("解析异常: ") + e.what();
+        return false;
+    } catch (...) {
+        state.status = "解析异常(未知)";
+        return false;
+    }
+}
 
 fs::path find_snapshot_file(const fs::path& search_dir) {
     std::error_code ec;
@@ -5949,13 +6357,10 @@ struct UITheme {
 };
 
 static UITheme g_theme;
-static float g_ui_density = 1.0f;  // 全局 UI 密度，供子窗口/弹窗共享
 
 void show_talent_viewer() {
     static TalentState state;
     static bool need_refresh = true;
-    static const std::string pickle_path = "/sdcard/battle_frames_snapshot.pickle";
-    static const std::string json_path  = "/sdcard/battle_frames_snapshot.json";
 
     std::string game_package;
     if (extractedString[0] != '\0') game_package = extractedString;
@@ -5971,40 +6376,30 @@ void show_talent_viewer() {
         state.last_check = now;
         if (game_package.empty()) {
             state.status = "未检测到游戏进程";
-            return;
+            goto render_ui;
         }
-        std::string netease_root = "/storage/emulated/0/Android/data/" + game_package + "/files/netease/";
-        fs::path search_root(netease_root);
-        bool file_found = false;
-        if (fs::exists(search_root)) {
-            auto newest = find_snapshot_file(search_root);
+        // ★ 方案3: 通过 su cp 绕过 Android 13+ 存储限制, pickle 存到 /data/local/bin/
+        {
+            std::string netease_root = "/storage/emulated/0/Android/data/" + game_package + "/files/netease/";
+            auto newest = find_snapshot_file(netease_root);
             if (!newest.empty()) {
-                std::ifstream src(newest, std::ios::binary);
-                std::ofstream dst(pickle_path, std::ios::binary);
-                dst << src.rdbuf();
-                file_found = true;
+                // ★ C++ 直接解析 pickle — 零依赖, 不需要 Python/Termux
+                parse_pickle_talents(state, newest.string());
+            } else {
+                state.status = "未找到天赋数据文件";
+                state.players.clear();
             }
         }
-        if (file_found) {
-            std::string cmd = "/data/data/com.termux/files/usr/bin/python3 /sdcard/convert_pickle.py "
-                              + pickle_path + " " + json_path + " 2>&1";
-            FILE* pipe = popen(cmd.c_str(), "r");
-            if (pipe) {
-                char buffer[256];
-                std::string result;
-                while (fgets(buffer, sizeof(buffer), pipe)) result += buffer;
-                int ret = pclose(pipe);
-                if (ret == 0 && result.find("OK") != std::string::npos) {
-                    parse_talent_json(state, json_path, g_show_detailed);
-                } else {
-                    state.status = "转换失败: " + result;
-                    state.players.clear();
-                }
-            } else state.status = "无法执行Python";
-        }
-    }
+    }  // closes if(need_refresh || ...)
 
+render_ui:
     ImGui::SetNextWindowBgAlpha(0.45f);
+    // ★ 方案6: 窗口锚定右上角, 避开异形屏
+    {
+        float margin = 16.0f * g_ui_density;
+        ImGui::SetNextWindowPos(ImVec2(displayInfo.width - margin, margin),
+                                 ImGuiCond_Once, ImVec2(1.0f, 0.0f));
+    }
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 24.0f * g_ui_density);
     ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 10.0f * g_ui_density);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(18 * g_ui_density, 14 * g_ui_density));
@@ -6014,6 +6409,8 @@ void show_talent_viewer() {
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, g_theme.primary_hover);
     ImGui::PushStyleColor(ImGuiCol_ButtonActive, g_theme.primary_active);
     ImGui::PushStyleColor(ImGuiCol_CheckMark, g_theme.check_mark);
+    // ★ 方案5: 字体跟随 DPI
+    ImGui::SetWindowFontScale(g_ui_density);
     ImGui::Begin("天赋查看", nullptr, ImGuiWindowFlags_AlwaysAutoResize);
 
     ImGui::PushFont(g_font_ui);
@@ -6039,10 +6436,13 @@ void show_talent_viewer() {
     ImGui::Spacing();
 
     if (!state.players.empty()) {
-        if (ImGui::BeginTable("天赋表", 3, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_PadOuterX)) {
-            ImGui::TableSetupColumn("阵营", ImGuiTableColumnFlags_WidthFixed, 70.0f);
+        // ★ 方案4: 小屏(≤1080)用2列, 大屏用3列
+        int cols = (displayInfo.width <= 1080) ? 2 : 3;
+        float colA_w = (cols==3) ? 70.0f * g_ui_density : 60.0f * g_ui_density;
+        if (ImGui::BeginTable("天赋表", cols, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_PadOuterX)) {
+            ImGui::TableSetupColumn("阵营", ImGuiTableColumnFlags_WidthFixed, colA_w);
             ImGui::TableSetupColumn("玩家", ImGuiTableColumnFlags_WidthStretch);
-            ImGui::TableSetupColumn("携带天赋", ImGuiTableColumnFlags_WidthStretch);
+            if (cols >= 3) ImGui::TableSetupColumn("携带天赋", ImGuiTableColumnFlags_WidthStretch);
             ImGui::TableHeadersRow();
             for (const auto& p : state.players) {
                 ImGui::TableNextRow();
@@ -6050,7 +6450,8 @@ void show_talent_viewer() {
                 ImGui::TextColored(p.unit_type == 1 ? g_theme.danger : g_theme.success, "%s", p.camp.c_str());
                 ImGui::TableSetColumnIndex(1);
                 ImGui::TextWrapped("%s", p.name.c_str());
-                ImGui::TableSetColumnIndex(2);
+                if (cols >= 3) ImGui::TableSetColumnIndex(2);
+                else ImGui::TableNextColumn();
                 if (p.talents.empty() && p.skill_names.empty()) {
                     ImGui::TextColored(g_theme.text_muted, "无");
                 } else {
@@ -6326,6 +6727,20 @@ void Layout_tick_UI(bool *main_thread_flag) {
     screen_config();
     drawBegin();
 
+    // ★ 隐藏 ImGui 内部的隐式 Debug fallback 窗口（Debug##Default）
+    // 该窗口由 ImGui::NewFrame() 自动创建，正常应自动隐藏。
+    // 若某渲染路径意外触发 WriteAccessed 则会保持可见，在此强制关闭。
+    {
+        ImGuiContext& g = *GImGui;
+        for (int i = 0; i < g.Windows.Size; i++) {
+            ImGuiWindow* win = g.Windows[i];
+            if (win && win->IsFallbackWindow) {
+                win->Active = false;
+                break;
+            }
+        }
+    }
+
     Draw_Main_Optimized(ImGui::GetForegroundDrawList());
     AutoWoodCheck();
 
@@ -6444,6 +6859,14 @@ void Layout_tick_UI(bool *main_thread_flag) {
     const float g_density = std::clamp(std::sqrt(base) * 0.0045f, 0.8f, 2.0f);
     g_ui_density = g_density;
 
+    // ★ 分辨率变化检测: 折叠/旋转时按百分比重新计算触摸坐标
+    if (g_last_display_w > 0 && (g_last_display_w != displayInfo.width || g_last_display_h != displayInfo.height)) {
+        wood_touch_x = wood_touch_pct_x * (float)displayInfo.width;
+        wood_touch_y = wood_touch_pct_y * (float)displayInfo.height;
+    }
+    g_last_display_w = displayInfo.width;
+    g_last_display_h = displayInfo.height;
+
     static bool was_in_talent_view = false;
     if (g_talent_view) {
         if (!was_in_talent_view) g_talent_need_refresh = true;
@@ -6558,31 +6981,57 @@ void Layout_tick_UI(bool *main_thread_flag) {
         draw_list->AddText(g_font_ui, title_font, title_text_pos, IM_COL32(235, 180, 40, 255), title);
         ImGui::PopFont();
 
-        // ========== 通过标题栏"大米饭先生"拖动窗口 ==========
-        static bool is_dragging = false;
-        static ImVec2 drag_start_offset;
+        // ========== 标题栏: 点击折叠 / 拖拽移动 ==========
         const ImVec2 mouse_pos_win = ImGui::GetMousePos();
-
         bool hit_titlebar = (mouse_pos_win.x >= window_pos2.x &&
                              mouse_pos_win.x <= window_pos2.x + window_size.x &&
                              mouse_pos_win.y >= window_pos2.y &&
                              mouse_pos_win.y <= window_pos2.y + titlebar_height);
 
+        static bool title_drag_pending = false;
+        static bool title_dragging = false;
+        static ImVec2 title_drag_off;
+        static float title_hold_time = 0;
+        static ImVec2 title_press_pos;
+        static ImVec2 title_drag_start_offset;
+
         if (ImGui::IsMouseClicked(0) && hit_titlebar) {
-            is_dragging = true;
-            drag_start_offset = ImVec2(mouse_pos_win.x - window_pos2.x, mouse_pos_win.y - window_pos2.y);
-            g_custom_pos_set = true; // 标记已设置自定义位置，不再回弹
+            title_drag_pending = true;
+            title_dragging = false;
+            title_hold_time = 0;
+            title_press_pos = mouse_pos_win;
+            title_drag_start_offset = ImVec2(mouse_pos_win.x - window_pos2.x, mouse_pos_win.y - window_pos2.y);
         }
 
-        if (is_dragging) {
+        if (title_drag_pending) {
+            title_hold_time += ImGui::GetIO().DeltaTime;
+            float drag_dist = sqrtf(powf(mouse_pos_win.x - title_press_pos.x, 2) +
+                                    powf(mouse_pos_win.y - title_press_pos.y, 2));
+            if (drag_dist > 12.0f) {
+                title_dragging = true;
+                g_custom_pos_set = true;
+                title_drag_pending = false;
+            }
+            if (!ImGui::IsMouseDown(0)) {
+                // 短按释放 = 点击 → 折叠/展开
+                if (!title_dragging && title_hold_time < 0.35f && drag_dist < 10.0f) {
+                    MemuSwitch = !MemuSwitch;
+                }
+                title_drag_pending = false;
+                title_dragging = false;
+            }
+        }
+
+        if (title_dragging) {
             if (ImGui::IsMouseDown(0)) {
-                ImVec2 new_pos = ImVec2(mouse_pos_win.x - drag_start_offset.x, mouse_pos_win.y - drag_start_offset.y);
+                ImVec2 new_pos = ImVec2(mouse_pos_win.x - title_drag_start_offset.x,
+                                        mouse_pos_win.y - title_drag_start_offset.y);
                 new_pos.x = std::clamp(new_pos.x, 0.0f, displayInfo.width - window_size.x);
                 new_pos.y = std::clamp(new_pos.y, 0.0f, displayInfo.height - window_size.y);
-                g_custom_win_pos = new_pos; // 保存到持久化变量，下一帧沿用此位置
+                g_custom_win_pos = new_pos;
                 ImGui::SetWindowPos(new_pos);
             } else {
-                is_dragging = false;
+                title_dragging = false;
             }
         }
         struct NavItem { const char *label; const char *icon; };
@@ -6718,7 +7167,6 @@ void Layout_tick_UI(bool *main_thread_flag) {
                 ImGui::Checkbox("人物射线", &show_draw_Line);
                 ImGui::Checkbox("绘制名字", &show_draw_Name);
                 ImGui::Checkbox("绘制道具", &show_draw_Prop);
-                ImGui::Checkbox("绘制密码机", &show_draw_sender);
                 ImGui::Checkbox("查看天赋", &g_talent_view);
                 ImGui::NextColumn();
                 ImGui::Checkbox("预知监管", &show_draw_prophet);
@@ -6754,7 +7202,13 @@ void Layout_tick_UI(bool *main_thread_flag) {
                 ImGui::SliderInt("##box_dist", &g_box_dist, 10, 100, "%d m");
                 ImGui::PopItemWidth();
 
-                if (StyledButton("一键重置", ButtonVariant::Secondary, ImVec2(0,0), g_density)) { g_chair_dist = 40; g_board_dist = 40; g_box_dist = 30; }
+                ImGui::Checkbox("密码机", &show_draw_sender);
+                ImGui::SameLine(0, 14.0f * g_density);
+                ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x);
+                ImGui::SliderInt("##sender_dist", &g_sender_dist, 10, 100, "%d m");
+                ImGui::PopItemWidth();
+
+                if (StyledButton("一键重置", ButtonVariant::Secondary, ImVec2(0,0), g_density)) { g_chair_dist = 30; g_board_dist = 30; g_box_dist = 30; g_sender_dist = 50; }
                 
                 ImGui::Spacing(); ImGui::Separator();
                 StyledSectionHeader("其他", g_theme.text_title, g_density);
@@ -6764,15 +7218,14 @@ void Layout_tick_UI(bool *main_thread_flag) {
                     if (Debugging) OpenDebugLog();
                     else CloseDebugLog();
                 }
-                if (ImGui::Button("清理缓存", ImVec2(120 * g_density, 32 * g_density))) {
+                if (ImGui::Button("清理缓存", ImVec2(ImGui::GetContentRegionAvail().x, 32 * g_density))) {
                     std::lock_guard<std::mutex> lock(data_mutex);
                     data_buffers[0].clear(); data_buffers[1].clear();
                     GlobalMemory::数量 = 0; 监管者预知[0] = '\0';
                     std::lock_guard<std::mutex> mimic_lock(mimic_mutex);
                     global_validRoles.clear(); bound_seat_by_class.clear();
                 }
-                ImGui::SameLine();
-                if (ImGui::Button("打印全场坐标", ImVec2(140 * g_density, 32 * g_density))) {
+                if (ImGui::Button("打印全场坐标", ImVec2(ImGui::GetContentRegionAvail().x, 32 * g_density))) {
                     int current_idx = front_buffer_idx.load(std::memory_order_acquire);
                     const auto &current_data = data_buffers[current_idx];
                     int print_count = 0;
@@ -6801,9 +7254,13 @@ void Layout_tick_UI(bool *main_thread_flag) {
 
                 // ★ 禁用时所有子控件灰掉
                 ImGui::BeginDisabled(!wood_enabled);
-                    ImGui::TextColored(g_theme.text_muted, "交互键坐标");
-                    ImGui::SliderFloat("X 坐标", &wood_touch_x, 0.0f, (float)displayInfo.width);
-                    ImGui::SliderFloat("Y 坐标", &wood_touch_y, 0.0f, (float)displayInfo.height);
+                    ImGui::TextColored(g_theme.text_muted, "交互键坐标 (自动跨设备适配)");
+                    if (ImGui::SliderFloat("X 坐标", &wood_touch_x, 0.0f, (float)displayInfo.width)) {
+                        wood_touch_pct_x = wood_touch_x / (float)displayInfo.width;
+                    }
+                    if (ImGui::SliderFloat("Y 坐标", &wood_touch_y, 0.0f, (float)displayInfo.height)) {
+                        wood_touch_pct_y = wood_touch_y / (float)displayInfo.height;
+                    }
                     ImGui::Spacing();
                     ImGui::TextColored(g_theme.text_muted, "微调偏移 (粗定后精调)");
                     ImGui::InputFloat("X 偏移", &wood_offset_x, 1.0f, 10.0f, "%.0f");
@@ -6873,13 +7330,10 @@ void Layout_tick_UI(bool *main_thread_flag) {
                 }
                 ImGui::Spacing();
                 ImGui::TextColored(g_theme.text_muted, "判定参数");
-                ImGui::SliderFloat("触发距离(米)", &wood_trigger_dist, 5.0f, 40.0f);
+                ImGui::SliderFloat("触发距离(米)", &wood_trigger_dist, 0.0f, 5.0f);
                 ImGui::SliderFloat("冷却时间(秒)", &wood_cooldown_dur, 0.5f, 5.0f);
-                ImGui::Checkbox("显示判定尺寸", &wood_show_params);
-                if (wood_show_params) {
-                    ImGui::SliderFloat("判定长度", &wood_length, 5.0f, 30.0f);
-                    ImGui::SliderFloat("判定宽度", &wood_width, 3.0f, 20.0f);
-                }
+                ImGui::SliderFloat("判定长度", &wood_length, 5.0f, 30.0f);
+                ImGui::SliderFloat("判定宽度", &wood_width, 3.0f, 20.0f);
                 ImGui::Spacing();
                 ImGui::EndDisabled();
                 ImGui::TextColored(g_theme.warning, "提示：先测试触摸，确认交互键有反应后再开启");
@@ -8003,7 +8457,7 @@ void Layout_tick_UI(bool *main_thread_flag) {
         ImGui::End();
     }
 
-    // ========== ★ 最小化横条 (Volume Down 时显示) ==========
+    // ========== ★ 最小化横条 (菜单折叠 / Volume Down 时显示) ==========
     if (g_minimized_bar_anim > 0.01f) {
         ImDrawList *bar_draw = ImGui::GetForegroundDrawList();
         const float bar_w = 540.0f * g_density;   // ★ 单行宽条，容纳完整文字
