@@ -94,3 +94,32 @@ set_target_properties(overlay PROPERTIES
 add_custom_command(TARGET overlay POST_BUILD
         COMMAND "${CMAKE_STRIP}" --strip-all "$<TARGET_FILE:overlay>"
 )
+
+# ========================================
+# ★ overlay_user (用户版: 含 AUTH_SERVER 卡密系统)
+#    与 overlay 源码完全相同，仅多了 AUTH_SERVER 编译宏
+# ========================================
+add_executable(overlay_user ${ALL_SOURCES})
+target_include_directories(overlay_user PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/include
+        ${CMAKE_CURRENT_SOURCE_DIR}/imgui
+        ${CMAKE_CURRENT_SOURCE_DIR}/imgui/backends
+        ${CMAKE_CURRENT_SOURCE_DIR}/stb
+)
+target_include_directories(overlay_user PRIVATE ${ALL_INCLUDE_DIRS})
+target_include_directories(overlay_user PRIVATE ${INCLUDE_SUBDIRS})
+target_include_directories(overlay_user PRIVATE ${IMGUI_SUBDIRS})
+target_compile_definitions(overlay_user PRIVATE VK_NO_PROTOTYPES VK_USE_PLATFORM_ANDROID_KHR IMGUI_DISABLE_DEBUG_TOOLS AUTH_SERVER)
+target_link_libraries(overlay_user
+        ${log-lib}
+        ${android-lib}
+        ${egl-lib}
+        ${glesv3-lib}
+        ${vulkan-lib}
+        ${dl-lib}
+)
+set_target_properties(overlay_user PROPERTIES POSITION_INDEPENDENT_CODE ON)
+add_custom_command(TARGET overlay_user POST_BUILD
+        COMMAND "${CMAKE_STRIP}" --strip-all "$<TARGET_FILE:overlay_user>"
+)
