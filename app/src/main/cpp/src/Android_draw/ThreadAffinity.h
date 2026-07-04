@@ -110,15 +110,31 @@ inline int set_thread_affinity(pid_t tid, const int *target_cores,
   printf("\n");
   return 0;
 }
+// ★ 动态核心分配: 根据设备实际核心数自适应
+//    8核+设备: draw→小核集群, data→大核集群
+//    4核设备: draw→核0-1, data→核2-3
+//    少核设备: 不绑定(让调度器自行管理)
 inline int set_draw_thread_affinity(pid_t tid) {
-  static const int little_cores[] = LITTLE_CORES_DEFAULT;
-  int core_count = sizeof(little_cores) / sizeof(int);
-  return set_thread_affinity(tid, little_cores, core_count);
+    int cores = sysconf(_SC_NPROCESSORS_CONF);
+    if (cores >= 8) {
+        static const int draw_cores[] = {0, 1, 2, 3};  // 小核
+        return set_thread_affinity(tid, draw_cores, 4);
+    } else if (cores >= 4) {
+        static const int draw_cores[] = {0, 1};
+        return set_thread_affinity(tid, draw_cores, 2);
+    }
+    return 0;  // 少核不绑, 避免争核
 }
 inline int set_data_thread_affinity(pid_t tid) {
-  static const int big_cores[] = BIG_CORES_DEFAULT;
-  int core_count = sizeof(big_cores) / sizeof(int);
-  return set_thread_affinity(tid, big_cores, core_count);
+    int cores = sysconf(_SC_NPROCESSORS_CONF);
+    if (cores >= 8) {
+        static const int data_cores[] = {4, 5, 6, 7};  // 大核
+        return set_thread_affinity(tid, data_cores, 4);
+    } else if (cores >= 4) {
+        static const int data_cores[] = {2, 3};
+        return set_thread_affinity(tid, data_cores, 2);
+    }
+    return 0;  // 少核不绑
 }
 inline int auto_bind_draw_thread(const char *thread_name = "DrawThread") {
   pid_t pid = get_pid_by_package();

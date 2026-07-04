@@ -152,11 +152,19 @@ int main(int argc, char *argv[]) {
     cp_environment();
     AntiBypassGuard::instance().set_checkpoint_ok();
     
-    cpu_set_t cpuset;
-    CPU_ZERO(&cpuset);
-    CPU_SET(0, &cpuset);
-    CPU_SET(4, &cpuset);
-    sched_setaffinity(0, sizeof(cpu_set_t), &cpuset);
+    // ★ 动态CPU亲和性: 根据设备实际核心数分配, 兼容4核/8核/更多
+    {
+        int cores = sysconf(_SC_NPROCESSORS_CONF);
+        cpu_set_t cpuset;
+        CPU_ZERO(&cpuset);
+        CPU_SET(0, &cpuset);
+        if (cores > 4) {
+            CPU_SET(4, &cpuset);
+        } else if (cores > 2) {
+            CPU_SET(cores - 1, &cpuset);
+        }
+        sched_setaffinity(0, sizeof(cpu_set_t), &cpuset);
+    }
     
     std::cout << "\033[2J\033[H";
     std::cout << "\033[35m";
@@ -335,10 +343,12 @@ int main(int argc, char *argv[]) {
     
     static bool flag = true;
     while (flag) {
-        // v3.1 加固: 每30分钟刷新服务端配置 (实体偏移 + 游戏偏移)
+        // v3.1 加固: 每30分钟刷新服务端配置 → 后台线程, 不阻塞渲染
         if (config_needs_refresh()) {
-            api_fetch_config(g_license.token, g_device_id);
-            api_fetch_game_offsets();
+            std::thread([]{
+                api_fetch_config(g_license.token, g_device_id);
+                api_fetch_game_offsets();
+            }).detach();
         }
         drawBegin();
         graphics->NewFrame();

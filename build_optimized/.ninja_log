@@ -1,0 +1,21 @@
+# ninja log v5
+11	1627	8048918743500000	CMakeFiles/overlay.dir/src/Android_Graphics/vulkan_wrapper.cpp.o	37be186f26899e77
+234	3123	8048918744800000	CMakeFiles/overlay.dir/src/Android_my_imgui/my_imgui_impl_android.cpp.o	c7c6752caac0fc7a
+207	3581	8048918744000000	CMakeFiles/overlay.dir/src/Android_my_imgui/my_imgui.cpp.o	4aa325d01a0867c8
+3125	5449	8048918773000000	CMakeFiles/overlay.dir/src/ImGui/backends/imgui_impl_android.cpp.o	6131627afa141c81
+3583	5613	8048918779100000	CMakeFiles/overlay.dir/src/ImGui/backends/imgui_impl_opengl3.cpp.o	178ce1a264d14c17
+56	5914	8048918743500000	CMakeFiles/overlay.dir/src/Android_Graphics/OpenGLGraphics.cpp.o	9418da9d5e9b92d4
+183	6180	8048918743500000	CMakeFiles/overlay.dir/src/Android_my_imgui/AndroidImgui.cpp.o	8ac40403d087ba0f
+99	6296	8048918743500000	CMakeFiles/overlay.dir/src/Android_Graphics/VulkanGraphics.cpp.o	36ad95d7377a9f16
+5915	7900	8048918800400000	CMakeFiles/overlay.dir/src/ImGui/backends/imgui_impl_vulkan.cpp.o	396bc1bffa177f0d
+1640	8537	8048918759700000	CMakeFiles/overlay.dir/src/Android_touch/TouchHelperA.cpp.o	37e5d69486d34887
+6181	9458	8048918804300000	CMakeFiles/overlay.dir/src/ImGui/imgui_tables.cpp.o	f0d2a14a5a3d50fb
+9459	10976	8048918835200000	CMakeFiles/overlay.dir/src/Android_Graphics/GraphicsManager.cpp.o	82e286db4e265e97
+5449	11242	8048918796300000	CMakeFiles/overlay.dir/src/ImGui/imgui_draw.cpp.o	3c4941bc881ac978
+7900	11753	8048918819700000	CMakeFiles/overlay.dir/src/My_Utils/stb_image.cpp.o	4e9aa0bedb9b6706
+6297	12081	8048918806000000	CMakeFiles/overlay.dir/src/ImGui/imgui_widgets.cpp.o	f6ed96207369cfe7
+5613	13133	8048918796800000	CMakeFiles/overlay.dir/src/ImGui/imgui.cpp.o	2345074408f979c0
+128	13941	8048918743500000	CMakeFiles/overlay.dir/src/Android_draw/DataManager.cpp.o	28f2d87fa2ba87ac
+8539	18057	8048918826000000	CMakeFiles/overlay.dir/src/main.cpp.o	dcb88ed4277cfad0
+157	27318	8048918743500000	CMakeFiles/overlay.dir/src/Android_draw/draw_Gui.cpp.o	c7dd35130f5d43a4
+27319	56270	8048919298000000	overlay	ebd40af8828d7f21
