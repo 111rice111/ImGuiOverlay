@@ -374,9 +374,12 @@ struct Timer {
   inline int BindCurrentThreadToCores(bool is_draw_thread,
                                       const char *thread_name) {
     pid_t tid = gettid();
-    printf("\033[1;36m[INFO]\033[0m 当前线程 \033[1;37m%s\033[0m 的 "
-           "TID：\033[1;32m%d\033[0m\n",
-           thread_name, tid);
+    static int s_print_count = 0;
+    if (s_print_count++ < 2) {  // 只打印Draw+Data两次初始化, 之后静默
+      printf("\033[1;36m[INFO]\033[0m 当前线程 \033[1;37m%s\033[0m 的 "
+             "TID：\033[1;32m%d\033[0m\n",
+             thread_name, tid);
+    }
     if (is_draw_thread)
       return CPUAffinityUtil::set_draw_thread_affinity(tid);
     else
