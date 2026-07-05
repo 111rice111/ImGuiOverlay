@@ -556,24 +556,39 @@ void Screen2Touch(float sx, float sy, int &out_raw_x, int &out_raw_y) {
   float shortSide = screenSize.y;  // 物理短边
   float xt, yt;  // 物理统一坐标
 
-  // 逆 orientation 变换 (Touch2Screen otherTouch=false 的逆)
-  switch (orientation) {
-  case 1:
-    yt = sx;
-    xt = shortSide - sy;
-    break;
-  case 2:
-    xt = shortSide - sx;
-    yt = longSide - sy;
-    break;
-  case 3:
-    xt = sy;
-    yt = longSide - sx;
-    break;
-  default:  // 0
-    xt = sx;
-    yt = sy;
-    break;
+  // 逆 orientation 变换
+  if (otherTouch) {
+    // Touch2Screen otherTouch=true 的逆
+    switch (orientation) {
+    case 1:
+      xt = sx;  yt = sy;
+      break;
+    case 2:
+      yt = sy;  xt = shortSide - sx;
+      break;
+    case 3:
+      xt = shortSide - sx;  yt = longSide - sy;
+      break;
+    default:
+      xt = sy;  yt = shortSide - sx;
+      break;
+    }
+  } else {
+    // Touch2Screen otherTouch=false 的逆
+    switch (orientation) {
+    case 1:
+      yt = sx;  xt = shortSide - sy;
+      break;
+    case 2:
+      xt = shortSide - sx;  yt = longSide - sy;
+      break;
+    case 3:
+      xt = sy;  yt = longSide - sx;
+      break;
+    default:
+      xt = sx;  yt = sy;
+      break;
+    }
   }
 
   // 归一化到 [0,1]
@@ -582,13 +597,13 @@ void Screen2Touch(float sx, float sy, int &out_raw_x, int &out_raw_y) {
 
   // 逆物理统一: 判断 absX 对应长边还是短边
   bool absX_is_long = (screenX_max >= screenY_max);
-  float nx, ny;  // absX/absY 归一化
+  float nx, ny;
   if (absX_is_long) {
-    nx = yt_norm;  // absX=长边
-    ny = xt_norm;  // absY=短边
+    nx = yt_norm;
+    ny = xt_norm;
   } else {
-    nx = xt_norm;  // absX=短边
-    ny = yt_norm;  // absY=长边
+    nx = xt_norm;
+    ny = yt_norm;
   }
 
   // 还原到触摸驱动原始坐标
