@@ -1,6 +1,7 @@
 #include "OpenGLGraphics.h"
 #include "imgui_impl_opengl3.h"
 #include <GLES3/gl3.h>
+#include <android/log.h>
 #include <android/native_window.h>
 #if !defined(EGL_OPENGL_ES3_BIT)
 // 如果 EGL_OPENGL_ES3_BIT 未定义，则编译这部分代码
@@ -26,18 +27,16 @@ bool OpenGLGraphics::Create() {
   eglInitialize(m_EglDisplay, nullptr, nullptr);
   EGLint num_configs = 0;
   eglChooseConfig(m_EglDisplay, egl_attributes, nullptr, 0, &num_configs);
-  EGLConfig egl_config;
-  eglChooseConfig(m_EglDisplay, egl_attributes, &egl_config, 1, &num_configs);
-  EGLint egl_format;
-  eglGetConfigAttrib(m_EglDisplay, egl_config, EGL_NATIVE_VISUAL_ID,
-                     &egl_format);
-  ANativeWindow_setBuffersGeometry(m_Window, 0, 0, egl_format);
+  eglChooseConfig(m_EglDisplay, egl_attributes, &m_EglConfig, 1, &num_configs);
+  eglGetConfigAttrib(m_EglDisplay, m_EglConfig, EGL_NATIVE_VISUAL_ID,
+                     &m_EglFormat);
+  ANativeWindow_setBuffersGeometry(m_Window, 0, 0, m_EglFormat);
   const EGLint egl_context_attributes[] = {EGL_CONTEXT_CLIENT_VERSION, 3,
                                            EGL_NONE};
-  m_EglContext = eglCreateContext(m_EglDisplay, egl_config, EGL_NO_CONTEXT,
+  m_EglContext = eglCreateContext(m_EglDisplay, m_EglConfig, EGL_NO_CONTEXT,
                                   egl_context_attributes);
   m_EglSurface =
-      eglCreateWindowSurface(m_EglDisplay, egl_config, m_Window, nullptr);
+      eglCreateWindowSurface(m_EglDisplay, m_EglConfig, m_Window, nullptr);
   eglMakeCurrent(m_EglDisplay, m_EglSurface, m_EglSurface, m_EglContext);
   glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
   return true;
@@ -50,6 +49,26 @@ void OpenGLGraphics::Render(ImDrawData *drawData) {
   eglSwapBuffers(m_EglDisplay, m_EglSurface);
 }
 void OpenGLGraphics::PrepareShutdown() { ImGui_ImplOpenGL3_Shutdown(); }
+void OpenGLGraphics::RecreateSurface(ANativeWindow *newWindow, float width, float height) {
+  // ★ 旋转时重建 EGL surface，不销毁 context，保留所有纹理和 ImGui 状态
+  if (m_EglSurface != EGL_NO_SURFACE) {
+    eglMakeCurrent(m_EglDisplay, EGL_NO_SURFACE, EGL_NO_SURFACE, m_EglContext);
+    eglDestroySurface(m_EglDisplay, m_EglSurface);
+    m_EglSurface = EGL_NO_SURFACE;
+  }
+  // 设置新窗口的 buffer 格式
+  ANativeWindow_setBuffersGeometry(newWindow, 0, 0, m_EglFormat);
+  // 创建新 EGL surface
+  m_EglSurface = eglCreateWindowSurface(m_EglDisplay, m_EglConfig, newWindow, nullptr);
+  if (m_EglSurface == EGL_NO_SURFACE) {
+    __android_log_print(ANDROID_LOG_ERROR, "ImGui", "[-] RecreateSurface: eglCreateWindowSurface failed");
+    return;
+  }
+  // 绑定新 surface 到现有 context
+  eglMakeCurrent(m_EglDisplay, m_EglSurface, m_EglSurface, m_EglContext);
+  glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+  __android_log_print(ANDROID_LOG_INFO, "ImGui", "[+] RecreateSurface: %dx%d", (int)width, (int)height);
+}
 void OpenGLGraphics::Cleanup() {
   eglMakeCurrent(m_EglDisplay, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
   eglDestroyContext(m_EglDisplay, m_EglContext);

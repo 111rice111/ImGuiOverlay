@@ -508,4 +508,22 @@ unlock:
 }
 void setOrientation(int o) { orientation = o; }
 void setOtherTouch(bool p_otherTouch) { otherTouch = p_otherTouch; }
+void UpdateScreenSize(const My_Vector2 &s) {
+  lock.lock();
+  My_Vector2 size = s;
+  if (size.x > size.y) {
+    screenSize = size;
+  } else {
+    screenSize = {size.y, size.x};
+  }
+  if (!devices.empty()) {
+    int screenX = devices[0].absX.maximum;
+    int screenY = devices[0].absY.maximum;
+    if (size.x > size.y) std::swap(size.x, size.y);
+    if (otherTouch) std::swap(size.x, size.y);
+    touch_scale.x = (float)screenX / size.x;
+    touch_scale.y = (float)screenY / size.y;
+  }
+  lock.unlock();
+}
 } // namespace Touch

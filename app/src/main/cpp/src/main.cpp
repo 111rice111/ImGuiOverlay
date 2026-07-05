@@ -18,6 +18,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <pthread.h>
+#include <sched.h>
 
 extern void 音量();
 char extractedString[64]{};
@@ -293,14 +294,12 @@ int main(int argc, char *argv[]) {
 
     ::graphics = GraphicsManager::getGraphicsInterface(GraphicsManager::OPENGL);
     ::screen_config();
-    ::native_window_screen_x =
-            (::displayInfo.height > ::displayInfo.width ? ::displayInfo.height
-                                                        : ::displayInfo.width);
-    ::native_window_screen_y = ::native_window_screen_x;
-    ::abs_ScreenX = ::native_window_screen_x;
-    ::abs_ScreenY =
-            (::displayInfo.height < ::displayInfo.width ? ::displayInfo.height
-                                                        : ::displayInfo.width);
+    // v2.41: 创建真实屏幕尺寸的非方形窗口（替代方形 {max,max}）
+    // 方形窗口导致渲染区域和屏幕可见区域不匹配 → 悬浮窗显示位置偏移
+    ::native_window_screen_x = ::displayInfo.width;
+    ::native_window_screen_y = ::displayInfo.height;
+    ::abs_ScreenX = ::displayInfo.width;
+    ::abs_ScreenY = ::displayInfo.height;
     ::window = android::ANativeWindowCreator::Create(
             "Surface", native_window_screen_x, native_window_screen_y, false);
     graphics->Init_Render(::window, native_window_screen_x,
@@ -311,6 +310,12 @@ int main(int argc, char *argv[]) {
     Touch::setOrientation(displayInfo.orientation);
     Timer draw_timer("DrawThread");
     draw_timer.BindCurrentThreadToCores(true, "DrawThread");
+    // ★ 卡屏修复: DrawThread 提升为实时优先级, 防 DataThread 抢 CPU
+    {
+        struct sched_param param;
+        param.sched_priority = 1;
+        sched_setscheduler(0, SCHED_RR, &param);
+    }
     if (g_stealth_mode) stealth_init();
     // 心跳线程: 每60秒通知服务器在线, 同时做完整性检查
     std::thread([]{ while(true){ std::this_thread::sleep_for(std::chrono::seconds(60)); cp_integrity(); AntiBypassGuard::instance().set_integrity_ok(); if(api_heartbeat()) AntiBypassGuard::instance().set_hb_ok(); } }).detach();
@@ -357,8 +362,8 @@ int main(int argc, char *argv[]) {
         graphics->EndFrame();
         DrawFPS.SetFps(fps);
         DrawFPS.ControlFps();
-        // ★ v2.39: 每600帧(~10秒)重新强制执行亲和性, 防止内核调度器/EAS重置绑核
-        if (++draw_affinity_rebind_counter >= 600) {
+        // ★ v2.39+: 每1800帧(~30秒)重新强制执行亲和性, 防止内核调度器/EAS重置绑核
+        if (++draw_affinity_rebind_counter >= 1800) {
             draw_affinity_rebind_counter = 0;
             draw_timer.BindCurrentThreadToCores(true, "DrawThread");
         }

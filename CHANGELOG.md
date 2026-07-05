@@ -1,5 +1,17 @@
 # 更新日志
 
+## [2026-07-05] — v2.41-stable: 非方形窗口 + 旋转重建 EGL Surface
+
+### 🐛 彻底修复（v2.40 遗留问题）
+v2.40 仅同步了 ImGui DisplaySize，但 native window 仍是方形 {max,max}，方形窗口在屏幕上的渲染位置与屏幕可见区域不匹配，导致悬浮窗显示位置和实际位置不一样。
+
+### 修改内容
+- **非方形窗口**: 创建真实屏幕尺寸 `{width, height}` 的窗口，替代方形 `{max, max}`
+- **旋转重建**: 旋转/折叠时重建 native window + EGL surface（不销毁 GL context，保留纹理）
+- **OpenGLGraphics::RecreateSurface**: 新增方法，销毁旧 surface → 创建新 surface → 绑定到现有 context
+- **Touch::UpdateScreenSize**: 轻量更新触摸坐标系，不重开 /dev/input 设备
+- **AndroidImgui::Recreate**: 统一重建入口，更新窗口、尺寸、DisplaySize
+
 ## [2026-07-05] — v2.40-stable: 触摸坐标系修复
 
 ### 🐛 Bug修复（跨设备触摸失效）

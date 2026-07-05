@@ -11,6 +11,8 @@ private:
   EGLDisplay m_EglDisplay = EGL_NO_DISPLAY;
   EGLSurface m_EglSurface = EGL_NO_SURFACE;
   EGLContext m_EglContext = EGL_NO_CONTEXT;
+  EGLConfig m_EglConfig = nullptr;
+  EGLint m_EglFormat = 0;
 
 public:
   OpenGLGraphics() { snprintf(RenderName, sizeof(RenderName), "OpenGL"); }
@@ -22,5 +24,6 @@ public:
   void Cleanup() override;
   BaseTexData *LoadTexture(BaseTexData *tex_data, void *pixel_data) override;
   void RemoveTexture(BaseTexData *tex_data) override;
+  void RecreateSurface(ANativeWindow *newWindow, float width, float height) override;
 };
 #endif // ANDROIDIMGUI_OPENGLGRAPHICS_H

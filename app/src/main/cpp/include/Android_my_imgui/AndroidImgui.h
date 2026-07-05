@@ -42,6 +42,7 @@ public:
   void NewFrame(bool resize = false);
   void EndFrame();
   void Shutdown();
+  void Recreate(ANativeWindow *window, float width, float height);
   TextureInfo LoadTextureFromFile(const char *filepath);
   TextureInfo LoadTextureFromMemory(void *data, int len);
   TextureInfo_gif LoadTextureFromMemory_gif(void *data, int len);
@@ -58,5 +59,6 @@ private:
   virtual void Cleanup() = 0;
   virtual BaseTexData *LoadTexture(BaseTexData *tex_data, void *pixel_data) = 0;
   virtual void RemoveTexture(BaseTexData *tex_data) = 0;
+  virtual void RecreateSurface(ANativeWindow *newWindow, float width, float height) {}
 };
 #endif // ANDROIDIMGUI_ANDROIDIMGUI_H

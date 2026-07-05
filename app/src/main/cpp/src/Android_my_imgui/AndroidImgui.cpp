@@ -37,6 +37,17 @@ void AndroidImgui::EndFrame() {
   ImGui::Render();
   Render(ImGui::GetDrawData());
 }
+void AndroidImgui::Recreate(ANativeWindow *window, float width, float height) {
+  m_Window = window;
+  m_Width = width;
+  m_Height = height;
+  RecreateSurface(window, width, height);
+  if (ImGui::GetCurrentContext()) {
+    ImGuiIO &io = ImGui::GetIO();
+    io.DisplaySize = {width, height};
+    io.DisplayFramebufferScale = ImVec2(1.0f, 1.0f);
+  }
+}
 void AndroidImgui::Shutdown() {
   for (auto &texture : m_Textures) {
     RemoveTexture(texture);

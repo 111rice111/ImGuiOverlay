@@ -31,4 +31,5 @@ int GetFingerCount();
 bool GetFinger(int idx, float &outX, float &outY);
 void setOrientation(int orientation);
 void setOtherTouch(bool p_otherTouch);
+void UpdateScreenSize(const My_Vector2 &s);
 } // namespace Touch
