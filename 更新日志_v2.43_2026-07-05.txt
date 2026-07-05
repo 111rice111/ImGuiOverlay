@@ -1,0 +1,26 @@
+====== v2.43 更新日志 (2026-07-05) ======
+
+【修复】SimulateClick 坐标转换修复
+
+◆ 修复问题
+自动盖板"测试触摸"显示位置和实际注入位置不一致
+
+◆ 根因
+SimulateClick 中坐标转换存在两个缺陷：
+1. raw_x = tx / displayInfo.width * g_touch_max_x 假设 absX=短边
+2. 未做 orientation 旋转变换
+
+◆ 修复方案
+新增 Touch::Screen2Touch() — Touch2Screen 的逆运算：
+1. 逆 orientation 变换（屏幕坐标→物理统一坐标）
+2. 归一化 + absX/absY 方向自适应
+3. 还原到触摸驱动原始坐标
+
+SimulateClick 改用 Screen2Touch 替代手动转换。
+
+◆ 补充修复
+Screen2Touch 补全 otherTouch=true 分支的逆变换
+
+◆ 版本信息
+版本代码: 243
+MD5: fa5e5c4cc462db8b6964a64d241e954e
