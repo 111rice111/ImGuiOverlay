@@ -1,5 +1,19 @@
 # 更新日志
 
+## [2026-07-05] — v2.42-stable: Touch2Screen 坐标轴方向自适应
+
+### 🐛 修复触摸点偏移
+原 `Touch2Screen` 假设触摸驱动 `absX` 对应屏幕短边、`absY` 对应长边。
+当设备 `absX` 对应长边时，X/Y 坐标轴被互换，导致触摸点和显示点不一致。
+
+### 修复方案
+用归一化坐标重写 `Touch2Screen`：
+1. 保存触摸驱动 `absX/absY.maximum`
+2. 归一化坐标到 [0,1]
+3. 判断 `absX` 对应物理长边还是短边（`screenX_max >= screenY_max`）
+4. 自动交换坐标轴，确保 `xt=短边方向`、`yt=长边方向`
+5. 保留原有 orientation 旋转变换逻辑
+
 ## [2026-07-05] — v2.41-stable: 非方形窗口 + 旋转重建 EGL Surface
 
 ### 🐛 彻底修复（v2.40 遗留问题）

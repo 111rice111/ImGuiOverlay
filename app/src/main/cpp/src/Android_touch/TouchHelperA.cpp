@@ -24,6 +24,8 @@ static struct {
 } input;
 static My_Vector2 touch_scale;
 static My_Vector2 screenSize;
+static int screenX_max = 0;  // v2.42: 触摸驱动 absX.maximum（用于判断 absX 对应长/短边）
+static int screenY_max = 0;  // v2.42: 触摸驱动 absY.maximum
 static std::vector<Device> devices;
 static int nowfd;
 static int orientation = 0;
@@ -295,6 +297,8 @@ bool Init(const My_Vector2 &s, bool p_readOnly) {
   // LOGD("device count: %zu", devices.size());
   int screenX = devices[0].absX.maximum;
   int screenY = devices[0].absY.maximum;
+  screenX_max = screenX;  // v2.42: 保存用于 Touch2Screen 方向判断
+  screenY_max = screenY;
   if (!readOnly) {
     struct uinput_user_dev ui_dev;
     nowfd = open("/dev/uinput", O_WRONLY | O_NONBLOCK);
@@ -431,9 +435,26 @@ void SetCallBack(const std::function<void(std::vector<Device> *)> &cb) {
   callback = cb;
 }
 My_Vector2 Touch2Screen(const My_Vector2 &coord) {
-  float x = coord.x, y = coord.y;
-  float xt = x / touch_scale.x;
-  float yt = y / touch_scale.y;
+  // ★ v2.42: 使用归一化坐标，自动适配 absX/absY 对应物理长边还是短边
+  // 原代码假设 absX=短边，当设备 absX=长边时坐标轴互换导致触摸点偏移
+  // coord.x ∈ [0, screenX_max], coord.y ∈ [0, screenY_max]（经 S2TX/S2TY 统一）
+  float nx = (screenX_max > 0) ? (coord.x / (float)screenX_max) : 0.0f;
+  float ny = (screenY_max > 0) ? (coord.y / (float)screenY_max) : 0.0f;
+
+  // 判断 absX 对应物理长边还是短边
+  bool absX_is_long = (screenX_max >= screenY_max);
+  // 统一到物理坐标: xt=短边方向归一化, yt=长边方向归一化
+  float xt_norm = absX_is_long ? ny : nx;
+  float yt_norm = absX_is_long ? nx : ny;
+
+  // screenSize = {长边, 短边}（始终）
+  float longSide = screenSize.x;
+  float shortSide = screenSize.y;
+  // 还原原始范围
+  float xt = xt_norm * shortSide;
+  float yt = yt_norm * longSide;
+
+  float x, y;
   if (otherTouch) {
     switch (orientation) {
     case 1:
@@ -442,30 +463,30 @@ My_Vector2 Touch2Screen(const My_Vector2 &coord) {
       break;
     case 2:
       y = yt;
-      x = screenSize.y - xt;
+      x = shortSide - xt;
       break;
     case 3:
-      x = screenSize.y - xt;
-      y = screenSize.x - yt;
+      x = shortSide - xt;
+      y = longSide - yt;
       break;
     default:
       y = xt;
-      x = screenSize.y - yt;
+      x = shortSide - yt;
       break;
     }
   } else {
     switch (orientation) {
     case 1:
       x = yt;
-      y = screenSize.y - xt;
+      y = shortSide - xt;
       break;
     case 2:
-      x = screenSize.y - xt;
-      y = screenSize.x - yt;
+      x = shortSide - xt;
+      y = longSide - yt;
       break;
     case 3:
       y = xt;
-      x = screenSize.x - yt;
+      x = longSide - yt;
       break;
     default:
       x = xt;
