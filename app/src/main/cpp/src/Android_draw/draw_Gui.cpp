@@ -5831,8 +5831,11 @@ void SimulateClick(int x, int y) {
     g_last_touch_time = ImGui::GetTime();
     int fd = open(g_touch_path, O_RDWR);
     if (fd < 0) return;
-    int raw_x = (int)((float)tx / displayInfo.width * g_touch_max_x);
-    int raw_y = (int)((float)ty / displayInfo.height * g_touch_max_y);
+    // ★ v2.43: 用 Screen2Touch 替代手动转换
+    // 原代码 raw_x = tx / displayInfo.width * g_touch_max_x 假设 absX=短边
+    // 当 absX=长边或屏幕旋转时坐标轴错位 → 触摸点偏移
+    int raw_x, raw_y;
+    Touch::Screen2Touch((float)tx, (float)ty, raw_x, raw_y);
     struct input_event ev;
     memset(&ev, 0, sizeof(ev));
     ev.type = EV_ABS; ev.code = ABS_MT_SLOT; ev.value = 0; write(fd, &ev, sizeof(ev));

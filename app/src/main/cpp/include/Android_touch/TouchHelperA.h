@@ -32,4 +32,7 @@ bool GetFinger(int idx, float &outX, float &outY);
 void setOrientation(int orientation);
 void setOtherTouch(bool p_otherTouch);
 void UpdateScreenSize(const My_Vector2 &s);
+// v2.43: 屏幕坐标→触摸驱动原始坐标（Touch2Screen 的逆运算）
+// 用于 SimulateClick：把屏幕显示坐标转换为 /dev/input 的 ABS_MT_POSITION 值
+void Screen2Touch(float sx, float sy, int &out_raw_x, int &out_raw_y);
 } // namespace Touch

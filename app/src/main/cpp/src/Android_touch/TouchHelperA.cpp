@@ -547,4 +547,53 @@ void UpdateScreenSize(const My_Vector2 &s) {
   }
   lock.unlock();
 }
+void Screen2Touch(float sx, float sy, int &out_raw_x, int &out_raw_y) {
+  // ★ v2.43: Touch2Screen 的逆运算
+  // 输入: 屏幕坐标 (sx, sy) — 当前方向，范围 [0, W] × [0, H]
+  // 输出: 触摸驱动原始坐标 — 写入 /dev/input 的 ABS_MT_POSITION 值
+  lock.lock();
+  float longSide = screenSize.x;   // 物理长边
+  float shortSide = screenSize.y;  // 物理短边
+  float xt, yt;  // 物理统一坐标
+
+  // 逆 orientation 变换 (Touch2Screen otherTouch=false 的逆)
+  switch (orientation) {
+  case 1:
+    yt = sx;
+    xt = shortSide - sy;
+    break;
+  case 2:
+    xt = shortSide - sx;
+    yt = longSide - sy;
+    break;
+  case 3:
+    xt = sy;
+    yt = longSide - sx;
+    break;
+  default:  // 0
+    xt = sx;
+    yt = sy;
+    break;
+  }
+
+  // 归一化到 [0,1]
+  float xt_norm = (shortSide > 0) ? (xt / shortSide) : 0.0f;
+  float yt_norm = (longSide > 0) ? (yt / longSide) : 0.0f;
+
+  // 逆物理统一: 判断 absX 对应长边还是短边
+  bool absX_is_long = (screenX_max >= screenY_max);
+  float nx, ny;  // absX/absY 归一化
+  if (absX_is_long) {
+    nx = yt_norm;  // absX=长边
+    ny = xt_norm;  // absY=短边
+  } else {
+    nx = xt_norm;  // absX=短边
+    ny = yt_norm;  // absY=长边
+  }
+
+  // 还原到触摸驱动原始坐标
+  out_raw_x = (int)(nx * (float)screenX_max);
+  out_raw_y = (int)(ny * (float)screenY_max);
+  lock.unlock();
+}
 } // namespace Touch

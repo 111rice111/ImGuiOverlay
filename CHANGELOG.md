@@ -1,5 +1,20 @@
 # 更新日志
 
+## [2026-07-05] — v2.43-stable: SimulateClick 坐标转换修复
+
+### 🐛 修复自动盖板触摸点偏移
+`SimulateClick` 中的坐标转换 `raw_x = tx / displayInfo.width * g_touch_max_x` 存在两个缺陷：
+1. 假设 `absX` 对应短边，当 `absX=长边` 时坐标轴互换
+2. 未做 orientation 旋转变换，旋转后注入坐标错位
+
+### 修复方案
+新增 `Touch::Screen2Touch()` — `Touch2Screen` 的逆运算：
+1. 逆 orientation 变换（屏幕坐标→物理统一坐标）
+2. 归一化 + absX/absY 方向自适应
+3. 还原到触摸驱动原始坐标
+
+`SimulateClick` 改用 `Screen2Touch` 替代手动转换。
+
 ## [2026-07-05] — v2.42-stable: Touch2Screen 坐标轴方向自适应
 
 ### 🐛 修复触摸点偏移

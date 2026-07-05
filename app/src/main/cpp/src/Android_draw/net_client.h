@@ -271,7 +271,7 @@ inline std::string http_post_enc(const std::string& path, const std::string& pla
 }
 
 // ========== 核心 API ==========
-#define CURRENT_VERSION 242  // v2.42 客户端版本号 (用于强制更新检查) ← 发版时必须同步git tag
+#define CURRENT_VERSION 243  // v2.43 客户端版本号 (用于强制更新检查) ← 发版时必须同步git tag
 static LicenseInfo g_license;
 static std::string g_device_id;
 
