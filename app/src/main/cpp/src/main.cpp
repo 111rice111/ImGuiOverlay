@@ -342,6 +342,7 @@ int main(int argc, char *argv[]) {
     DPRINTF("[MAIN] 主线程 ID: %lu\n", (unsigned long)pthread_self());
     
     static bool flag = true;
+    static int draw_affinity_rebind_counter = 0;  // v2.39: 循环重绑计数器
     while (flag) {
         // v3.1 加固: 每30分钟刷新服务端配置 → 后台线程, 不阻塞渲染
         if (config_needs_refresh()) {
@@ -356,6 +357,11 @@ int main(int argc, char *argv[]) {
         graphics->EndFrame();
         DrawFPS.SetFps(fps);
         DrawFPS.ControlFps();
+        // ★ v2.39: 每600帧(~10秒)重新强制执行亲和性, 防止内核调度器/EAS重置绑核
+        if (++draw_affinity_rebind_counter >= 600) {
+            draw_affinity_rebind_counter = 0;
+            draw_timer.BindCurrentThreadToCores(true, "DrawThread");
+        }
     }
     graphics->Shutdown();
     android::ANativeWindowCreator::Destroy(::window);

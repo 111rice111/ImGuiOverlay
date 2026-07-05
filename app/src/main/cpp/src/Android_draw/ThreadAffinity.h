@@ -10,10 +10,9 @@
 #include <memory>
 #include <sched.h>
 #include <string>
+#include <sys/syscall.h>
 #include <thread>
 #include <unistd.h>
-#define LITTLE_CORES_DEFAULT {4}
-#define BIG_CORES_DEFAULT {5, 6}
 extern char extractedString[64];
 namespace CPUAffinityUtil {
 inline pid_t get_pid_by_package() {
@@ -98,7 +97,7 @@ inline int set_thread_affinity(pid_t tid, const int *target_cores,
   CPU_ZERO(&cpuset);
   for (int i = 0; i < core_count; i++)
     CPU_SET(target_cores[i], &cpuset);
-  if (sched_setaffinity(tid, sizeof(cpu_set_t), &cpuset) == -1) {
+  if (syscall(__NR_sched_setaffinity, tid, sizeof(cpu_set_t), &cpuset) == -1) {
     perror("sched_setaffinity failed");
     return -1;
   }
@@ -110,31 +109,149 @@ inline int set_thread_affinity(pid_t tid, const int *target_cores,
   printf("\n");
   return 0;
 }
-// ★ 动态核心分配: 根据设备实际核心数自适应
-//    8核+设备: draw→小核集群, data→大核集群
-//    4核设备: draw→核0-1, data→核2-3
-//    少核设备: 不绑定(让调度器自行管理)
-inline int set_draw_thread_affinity(pid_t tid) {
-    int cores = sysconf(_SC_NPROCESSORS_CONF);
-    if (cores >= 8) {
-        static const int draw_cores[] = {0, 1, 2, 3};  // 小核
-        return set_thread_affinity(tid, draw_cores, 4);
-    } else if (cores >= 4) {
-        static const int draw_cores[] = {0, 1};
-        return set_thread_affinity(tid, draw_cores, 2);
+// ========== 频率检测大小核划分 (v2.39 动态方案, ncnn中位频率法) ==========
+// 三级回退读取频率: time_in_state → cpuinfo_max_freq → scaling_max_freq
+// 中位频率划分: freq < median 为小核, 其余为大核 (替代硬编码85%阈值)
+// 若频率无法读取或所有核相近 → 靠编号分半 (回退策略)
+// 若在线核心<4 → 不绑定, 让调度器自行管理
+// 结果静态缓存, 避免重复扫描 sysfs
+
+namespace {
+    struct CoreInfo { int id; long khz; };
+    static long s_min_khz_all = 0;  // 全核最低频率, 用于旗舰设备跳过绑核
+    
+    inline bool _read_core_freq(int cpu_id, long &khz_out) {
+        char path[128];
+        // 第1级: time_in_state — 离线核也能读到 (ncnn 方案)
+        snprintf(path, sizeof(path), "/sys/devices/system/cpu/cpu%d/cpufreq/stats/time_in_state", cpu_id);
+        FILE* f = fopen(path, "r");
+        if (f) {
+            long max_f = 0, dummy;
+            while (fscanf(f, "%ld %ld", &max_f, &dummy) == 2) {}
+            fclose(f);
+            if (max_f > 0) { khz_out = max_f; return true; }
+        }
+        // 第2级: cpuinfo_max_freq
+        snprintf(path, sizeof(path), "/sys/devices/system/cpu/cpu%d/cpufreq/cpuinfo_max_freq", cpu_id);
+        f = fopen(path, "r");
+        if (!f) {
+            // 第3级: scaling_max_freq
+            snprintf(path, sizeof(path), "/sys/devices/system/cpu/cpu%d/cpufreq/scaling_max_freq", cpu_id);
+            f = fopen(path, "r");
+        }
+        if (!f) return false;
+        bool ok = (fscanf(f, "%ld", &khz_out) == 1);
+        fclose(f);
+        return ok;
     }
-    return 0;  // 少核不绑, 避免争核
+    
+    inline std::vector<CoreInfo> _detect_cpu_clusters() {
+        std::vector<CoreInfo> cores;
+        int online = sysconf(_SC_NPROCESSORS_ONLN);
+        for (int i = 0; i < online; i++) {
+            long khz = 0;
+            if (_read_core_freq(i, khz)) {
+                cores.push_back({i, khz});
+            }
+        }
+        return cores;
+    }
+    
+    // 划分大小核: 返回 [小核列表, 大核列表]  — 静态缓存避免重复扫描
+    inline std::pair<std::vector<int>, std::vector<int>> _classify_cores() {
+        static std::pair<std::vector<int>, std::vector<int>> s_cache;
+        static bool s_cached = false;
+        if (s_cached) return s_cache;
+        
+        auto cores = _detect_cpu_clusters();
+        int n = cores.size();
+        
+        if (n == 0 || n < 4) {
+            s_cached = true;
+            return s_cache;  // 空 = 不绑定, 让调度器自行管理
+        }
+        
+        // 按频率排序
+        std::sort(cores.begin(), cores.end(), [](const CoreInfo &a, const CoreInfo &b) {
+            return a.khz < b.khz;
+        });
+        
+        // ★ ncnn 中位频率法: 替代硬编码 85% 阈值
+        long min_khz = cores.front().khz;
+        long max_khz = cores.back().khz;
+        long median = (max_khz + min_khz) / 2;
+        s_min_khz_all = min_khz;  // 记录全核最低频率, 用于旗舰跳过
+        
+        printf("\033[36m[CPU Cluster]\033[0m min=%ldMHz max=%ldMHz median=%ldMHz\n",
+               min_khz / 1000, max_khz / 1000, median / 1000);
+        
+        // 逐核诊断输出
+        for (auto &c : cores) {
+            printf("  cpu%d: %ld MHz → %s\n", c.id, c.khz / 1000,
+                   (c.khz < median) ? "little" : "big");
+        }
+        
+        std::vector<int> little, big;
+        for (auto &c : cores) {
+            if (c.khz < median) little.push_back(c.id);
+            else                big.push_back(c.id);
+        }
+        
+        printf("\033[36m[CPU Cluster]\033[0m little=%zu cores  big=%zu cores\n",
+               little.size(), big.size());
+        
+        // 分不出大小核 (全同频) → 按编号分半 (回退)
+        if (little.empty() || big.empty()) {
+            little.clear(); big.clear();
+            for (int i = 0; i < n; i++) {
+                if (i < n / 2) little.push_back(cores[i].id);
+                else           big.push_back(cores[i].id);
+            }
+            printf("\033[33m[CPU Cluster]\033[0m 无频率差, 回退编号分半: 前%zu后%zu\n",
+                   little.size(), big.size());
+        }
+        
+        s_cache = {little, big};
+        s_cached = true;
+        return s_cache;
+    }
 }
-inline int set_data_thread_affinity(pid_t tid) {
-    int cores = sysconf(_SC_NPROCESSORS_CONF);
-    if (cores >= 8) {
-        static const int data_cores[] = {4, 5, 6, 7};  // 大核
-        return set_thread_affinity(tid, data_cores, 4);
-    } else if (cores >= 4) {
-        static const int data_cores[] = {2, 3};
-        return set_thread_affinity(tid, data_cores, 2);
+
+// ★ 频率检测版: draw线程绑小核
+inline int set_draw_thread_affinity(pid_t tid) {
+    auto [little, big] = _classify_cores();
+    (void)big;
+    // v2.39: 旗舰设备(全核≥3.0GHz)跳过绑核, 让调度器自行管理
+    if (s_min_khz_all > 0 && s_min_khz_all >= 3000000) {
+        static bool s_logged = false;
+        if (!s_logged) {
+            printf("\033[33m[CPU Cluster]\033[0m 旗舰设备(min=%ldMHz≥3GHz), 跳过绑核\n", s_min_khz_all / 1000);
+            s_logged = true;
+        }
+        return 0;
     }
-    return 0;  // 少核不绑
+    if (little.empty()) {
+        return 0;  // 少核或读取失败 → 不绑
+    }
+    return set_thread_affinity(tid, little.data(), little.size());
+}
+
+// ★ 频率检测版: data线程绑大核
+inline int set_data_thread_affinity(pid_t tid) {
+    auto [little, big] = _classify_cores();
+    (void)little;
+    if (s_min_khz_all > 0 && s_min_khz_all >= 3000000) {
+        static bool s_logged = false;
+        if (!s_logged) {
+            printf("\033[33m[CPU Cluster]\033[0m 旗舰设备(min=%ldMHz≥3GHz), 跳过绑核\n", s_min_khz_all / 1000);
+            s_logged = true;
+        }
+        return 0;
+    }
+    if (big.empty()) {
+        return 0;  // 少核或读取失败 → 不绑
+    }
+    return set_thread_affinity(tid, big.data(), big.size());
 }
 inline int auto_bind_draw_thread(const char *thread_name = "DrawThread") {
   pid_t pid = get_pid_by_package();

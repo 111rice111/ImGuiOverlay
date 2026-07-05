@@ -5586,6 +5586,11 @@ void read_thread(long int 状态数值, long int PD2, long int PD3) {
                         std::strcpy(item.str, getboss(cls));
                         item.阵营 = 1;
                         item.sub_type = ObjSubClass::Boss;
+                    } else if (std::strstr(cls, "h55_prop_tieqiao")) {
+                        // 守墓人遁地形态: 类名含prop但应作为玩家处理, 始终可见(幽灵白名单)
+                        std::strcpy(item.str, getplayer(cls));
+                        item.阵营 = 2;
+                        item.sub_type = ObjSubClass::Player;
                     } else if ((std::strstr(cls, "player") || std::strstr(cls, "npc_deluosi_dress_ghost")) &&
                                !std::strstr(cls, "prop") && !std::strstr(cls, "mj_") && !std::strstr(cls, "rd")) {
                         std::strcpy(item.str, getplayer(cls));
@@ -5647,7 +5652,8 @@ void read_thread(long int 状态数值, long int PD2, long int PD3) {
 
                     if (item.阵营 == 1 || item.阵营 == 2) {
                         if (item.is_ghost) {
-                            if (!inform_ghost) continue;
+                            // 守墓人遁地始终可见(不受幽灵开关影响)
+                            if (!inform_ghost && !std::strstr(item.str, "守墓")) continue;
                             if (std::strstr(item.str, "红蝶") || std::strstr(item.str, "无常") ||
                                 std::strstr(item.str, "歌剧") || std::strstr(item.str, "破轮") ||
                                 std::strstr(item.str, "木偶") || std::strstr(item.str, "冒险家")) continue;
@@ -5723,6 +5729,13 @@ void read_thread(long int 状态数值, long int PD2, long int PD3) {
             GlobalMemory::数量 = local_data.size();
             front_buffer_idx.store(back_buffer_idx, std::memory_order_release);
             back_buffer_idx = 1 - back_buffer_idx;
+
+            // ★ v2.39: 每600次迭代(~30秒)重新强制执行亲和性, 防止内核调度器重置
+            static int data_affinity_rebind_counter = 0;
+            if (++data_affinity_rebind_counter >= 600) {
+                data_affinity_rebind_counter = 0;
+                data_timer.BindCurrentThreadToCores(false, "DataThread");
+            }
 
             static std::random_device rd;
             static std::mt19937 gen(rd());

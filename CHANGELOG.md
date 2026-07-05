@@ -1,5 +1,17 @@
 # 更新日志
 
+## [2026-07-05] — v2.39-stable: CPU亲和性优化 + 守墓人遁地修复
+
+### 🧠 CPU亲和性升级 (4项改进, 借鉴ncnn+AndroidCpuAffinityTool)
+- **直接 syscall**: `sched_setaffinity` → `syscall(__NR_sched_setaffinity)`, 绕过 bionic 兼容问题
+- **三级频率回退**: `time_in_state` → `cpuinfo_max_freq` → `scaling_max_freq`, 离线核也能检测
+- **中位频率法**: 替代硬编码 85% 阈值, `median=(max+min)/2`, 更准确适配 2/3 簇架构
+- **循环重绑**: DrawThread 每 600 帧(≈10s) + DataThread 每 600 次迭代(≈30s) 重新强制执行亲和性, 防止内核调度器/EAS 重置
+- **旗舰跳过**: 全核最低频率 ≥ 3.0GHz 的设备跳过绑核, 让调度器自行管理
+
+### 🐛 Bug修复
+- **守墓人遁地始终可见**: `h55_prop_tieqiao` 类名含prop导致误分类为阵营4, 现归类为阵营2+幽灵开关豁免
+
 ## [2026-07-04] — v2.38-stable: 核武级安全加固 + 交互增强 + 跨设备适配
 
 ### 🔒 安全加固 (7层纵深防御)
