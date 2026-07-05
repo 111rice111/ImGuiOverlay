@@ -1,5 +1,18 @@
 # 更新日志
 
+## [2026-07-05] — v2.40-stable: 触摸坐标系修复
+
+### 🐛 Bug修复（跨设备触摸失效）
+- **菜单按不了**: ImGui DisplaySize 为方形 {max,max}，触摸坐标为矩形 {min,max}，x方向存在死区
+- **悬浮窗拖不动**: 标题栏命中检测因坐标系不匹配永远返回 false
+- **触摸点偏移**: 手指位置与界面响应位置存在 max-min 像素偏差
+- **不同设备表现不同**: 宽高比越大死区越大（19.5:9 屏仅 45% 可触摸区）
+
+### 修复方案
+在 `drawBegin()` 中每帧同步 `ImGui::GetIO().DisplaySize` 为真实屏幕尺寸
+`{displayInfo.width, displayInfo.height}`，在 `ImGui::NewFrame()` 之前执行。
+Touch2Screen 通过 orientation 参数已正确变换坐标，无需额外修改。
+
 ## [2026-07-05] — v2.39-stable: CPU亲和性优化 + 守墓人遁地修复
 
 ### 🧠 CPU亲和性升级 (4项改进, 借鉴ncnn+AndroidCpuAffinityTool)

@@ -271,7 +271,7 @@ inline std::string http_post_enc(const std::string& path, const std::string& pla
 }
 
 // ========== 核心 API ==========
-#define CURRENT_VERSION 300  // v3.0 客户端版本号 (用于强制更新检查)
+#define CURRENT_VERSION 240  // v2.40 客户端版本号 (用于强制更新检查) ← 发版时必须同步git tag
 static LicenseInfo g_license;
 static std::string g_device_id;
 
@@ -282,7 +282,7 @@ inline bool api_verify_key(const std::string& key) {
     req["key"] = key;
     req["device_id"] = g_device_id;
     req["hwid"] = g_device_id;
-    req["version"] = 300;       // v3.0
+    req["version"] = CURRENT_VERSION;
     req["ts"] = (int64_t)time(nullptr);
 
     std::string resp = http_post_enc(API_VERIFY(), req.dump());

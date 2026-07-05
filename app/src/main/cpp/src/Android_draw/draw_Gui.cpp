@@ -462,7 +462,7 @@ bool g_map_enabled = false;
 float g_map_display_size = 800.0f;
 
 static bool  g_use_calib = true;
-static bool  g_show_map_status = true;       // 地图识别状态浮窗开关
+static bool  g_show_map_status = false;       // 地图识别状态浮窗开关（默认关闭）
 static std::string g_save_notification;
 static float g_notification_timer = 0.0f;
 
@@ -1675,6 +1675,20 @@ void InvalidateMapTextures() {
 }
 
 void drawBegin() {
+    // ★ v2.40 修复: 同步 ImGui DisplaySize 为真实屏幕尺寸（当前方向）
+    // 必须在 graphics->NewFrame()/ImGui::NewFrame() 之前执行，否则 ImGui 会用
+    // 初始化时的方形 {max,max} 空间做命中测试，导致触摸点和显示点不一致：
+    //   - 菜单按钮落在触摸死区（x > min 的区域）按不了
+    //   - 标题栏命中检测失败导致悬浮窗拖不动
+    //   - 宽高比越大的设备偏差越严重（19.5:9 屏只有 45% 可触摸区）
+    // Touch2Screen 通过 orientation 参数已正确变换坐标，返回值范围始终匹配
+    // {displayInfo.width, displayInfo.height}，所以只需让 DisplaySize 与之一致。
+    if (ImGui::GetCurrentContext()) {
+        ImGuiIO& io = ImGui::GetIO();
+        io.DisplaySize = ImVec2((float)displayInfo.width, (float)displayInfo.height);
+        io.DisplayFramebufferScale = ImVec2(1.0f, 1.0f);
+    }
+
     if (orientation != displayInfo.orientation) {
         orientation = displayInfo.orientation;
         Touch::setOrientation(displayInfo.orientation);
@@ -5365,6 +5379,8 @@ void read_thread(long int 状态数值, long int PD2, long int PD3) {
         int fail_cnt = 0;
         while (GlobalMemory::MatrixOffset == 0 || GlobalMemory::ArrayaddrOffset == 0) {
             for (long int i = 0; i < GlobalMemory::ModulePagesCount; i++) {
+                // ★ 卡屏修复: 每扫描256页让出CPU, 防DrawThread被饿死
+                if ((i & 0xFF) == 0) sched_yield();
                 vm_readv(result.addr + (i * 4096), buff.data(), 0x1000);
                 for (int ii = 0; ii < 512; ii += 1) {
                     unsigned long val = buff[ii];
