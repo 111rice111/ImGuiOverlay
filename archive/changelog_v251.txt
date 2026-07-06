@@ -1,0 +1,67 @@
+====== v2.51 更新日志 (2026-07-06) ======
+
+【关键修复】真实手指落下时自瞄失效 → 仍走盖板路径,绕过 evdev 缓冲竞争
+
+◆ 用户反馈
+v2.49/v2.50: 开自瞄后真实手指放屏幕上, 自瞄就失效
+W2S 没失败, 滑动 ON, 目标 OK, 但滑动没效果
+v2.50 直写 uinput 被游戏过滤, 必须走盖板路径
+
+◆ 根因分析 (write /dev/input/eventX 的 evdev 缓冲竞争)
+旧链路 (v2.49):
+  AutoAim write(/dev/input/eventX, slot=2)
+    → 真实触摸屏 evdev 缓冲
+    → TypeA read() 读到真实手指+自瞄事件混合流
+    → SYN_REPORT → Upload() 提交到 nowfd
+
+问题:
+  真实手指落下时事件流密集 (slot 0 down + 多个 move)
+  自瞄的 slot 2 事件被挤到后面读取
+  Finger[2].pos 更新延迟或丢失 → Upload 提交旧值 → 自瞄失效
+
+◆ 修复方案: 直接更新 Finger[2] + 调用 Upload() (仍是盖板路径)
+新链路 (v2.51):
+  AutoAim → Touch::InjectAimTouch(screen_x, screen_y, tid, is_down)
+    → lock.lock()
+    → 直接更新 devices[0].Finger[2].pos/isDown/id
+    → 调用 Upload() (盖板路径: SYN_MT_REPORT 分隔 + write(nowfd))
+    → lock.unlock()
+
+关键点:
+1. 仍走盖板路径: Upload 内部 write(nowfd), 提交格式与盖板一致
+   → 不被反作弊过滤
+2. 绕过 evdev 缓冲: 不再 write(/dev/input/eventX), 不与真实手指事件竞争
+   → 真实手指落下时自瞄仍能立即更新 Finger[2]
+3. Upload 遍历所有 isDown 的 Finger, 同时提交:
+   - Finger[0] (真实摇杆 slot 0)
+   - Finger[2] (自瞄 slot 2)
+   游戏收到合法两指 MotionEvent, 互不冲突
+4. lock 保护: AutoAim 的 Upload 与 TypeA 的 Upload 串行执行, 无并发写冲突
+
+◆ 文件改动
+1. TouchHelperA.h: 新增 InjectAimTouch() 接口声明
+2. TouchHelperA.cpp:
+   - 实现 InjectAimTouch(): 更新 devices[0].Finger[2] + 调用 Upload()
+3. AutoAim.cpp:
+   - aim_slide_down/move/up 改为调用 Touch::InjectAimTouch
+   - 删除 g_aim_touch_fd / aim_emit / aim_write_position (不再 write 真实设备)
+4. net_client.h: CURRENT_VERSION 250→251
+
+◆ 部署流程 (参照 ai读.md)
+1. adb push overlay_user → /sdcard/overlay_user_tmp
+2. adb push overlay_user_v251 → /sdcard/overlay_user_v251
+3. adb push version-latest.txt → /sdcard/version-latest.txt
+4. adb push changelog_v251.txt → /sdcard/changelog_v251.txt
+5. su -c 'cp ... /data/local/bin/ && chmod 777 ...'
+6. killall 旧版进程
+7. setsid 后台启动
+
+◆ 版本信息
+版本代码: 251
+MD5: 6f787b11253b2e4ed419ec184b26f71b
+
+◆ 验收测试
+1. 开自瞄 → 真实手指放屏幕上 → 自瞄应持续锁敌不失效
+2. 按摇杆走路 → 视角持续锁敌, 互不干扰
+3. 持续追踪 30 秒以上 → 不中断
+4. 摇杆走位 + 自瞄锁敌 → 两者并行无冲突

@@ -1,0 +1,71 @@
+====== v2.50 更新日志 (2026-07-06) ======
+
+【关键修复】真实手指落下时自瞄失效 → 直写 uinput 绕过 TypeA 链路
+
+◆ 用户反馈
+开自瞄后, 真实手指放到屏幕上时自瞄就失效了
+W2S 没有失败, 滑动一直显示 ON, 目标一直 OK
+即: 状态机正常运行, 但滑动没产生效果
+
+◆ 根因分析 (TypeA + Upload() 的 SYN_MT_REPORT 链路缺陷)
+旧注入链路:
+  AutoAim write(/dev/input/eventX, slot=2)
+    → 真实触摸屏 evdev 缓冲 (被 EVIOCGRAB)
+    → TypeA 线程 read() 读到真实手指+自瞄事件混合流
+    → SYN_REPORT 时 Upload() 提交, 只提交当前 latest 对应 Finger[]
+    → 自瞄 pointer 被遗漏或 tracking_id 错乱
+    → 真实手指落下时自瞄完全失效
+
+关键问题:
+1. 自瞄事件与真实手指事件混合在 TypeA 读取流
+2. Upload() 用 SYN_MT_REPORT (Type A 协议) 顺序提交
+3. 真实手指落下时 latest 变量在 slot 0/2 间切换
+4. SYN_REPORT 只提交当前 latest 对应 Finger, 自瞄被遗漏
+
+◆ 修复方案: 自瞄直写 uinput (nowfd), 绕过 TypeA/Upload
+新注入链路:
+  AutoAim → Touch::InjectAimTouch(screen_x, screen_y, tid, is_down)
+    → 直接 write(nowfd, ev[], ...) 写 uinput 虚拟设备
+    → Android InputReader 给 uinput 分配独立 deviceId
+    → 真实手指(经 TypeA→Upload→nowfd, slot 0)与自瞄(slot 2)
+       在 InputReader 层合并为合法多指 MotionEvent
+    → 物理隔离, 真实手指落下时自瞄仍持续工作
+
+◆ 文件改动
+1. TouchHelperA.h
+   - 新增 InjectAimTouch() 接口声明
+2. TouchHelperA.cpp
+   - 实现 InjectAimTouch(): 构造完整一帧事件数组(slot 2 + tracking_id +
+     位置 + 压力 + 接触面积 + SYN_REPORT), 一次 write 原子提交
+3. AutoAim.cpp
+   - aim_slide_down/move/up 改为调用 Touch::InjectAimTouch
+   - 删除 g_aim_touch_fd / aim_emit / aim_write_position (不再写真实设备)
+   - 删除 aim_end_slide 中的 close(fd) (无 fd 需要 close)
+4. net_client.h: CURRENT_VERSION 249→250
+
+◆ 关键技术点
+- uinput 已注册 ABS_MT_SLOT/TRACKING_ID/POSITION_X/Y (Init 中 UI_SET_ABSBIT)
+- 自瞄用 slot 2, 真实手指经 Upload 提交 slot 0
+- 一次 write 提交完整一帧 (slot + tracking_id + 位置 + 按键 + SYN_REPORT)
+  避免半帧被 InputReader 消费导致指针错位
+- 自瞄 tracking_id 从 1000 起步自增, 避免与真实手指低位 id 冲突
+
+◆ 部署流程 (参照 ai读.md)
+1. adb push overlay_user → /sdcard/overlay_user_tmp
+2. adb push overlay_user_v250 → /sdcard/overlay_user_v250
+3. adb push version-latest.txt → /sdcard/version-latest.txt
+4. adb push changelog_v250.txt → /sdcard/changelog_v250.txt
+5. su -c 'cp ... /data/local/bin/ && chmod 777 ...'
+6. killall 旧版进程
+7. setsid 后台启动
+
+◆ 版本信息
+版本代码: 250
+MD5: f60cee4eeacbfa072d4a5a98816c4b7f
+
+◆ 验收测试
+1. 开自瞄 → 真实手指放屏幕上 → 自瞄应持续锁敌不失效
+2. 按摇杆走路 → 视角持续锁敌, 互不干扰
+3. 持续追踪 30 秒以上 → 不中断
+4. W2S 失败时保持当前位置, 目标回屏立即继续追踪
+5. 摇杆走位 + 自瞄锁敌 + 技能按钮 → 三者并行无冲突

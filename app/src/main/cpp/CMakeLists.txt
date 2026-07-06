@@ -36,6 +36,8 @@ file(GLOB_RECURSE ALL_SOURCES
 
 # 移除不必要的 Demo 文件，减小体积
 list(REMOVE_ITEM ALL_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/ImGui/imgui_demo.cpp")
+# AutoAim.cpp 使用 include 模式（由 draw_Gui.cpp 末尾 #include），不独立编译
+list(REMOVE_ITEM ALL_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/Android_draw/AutoAim.cpp")
 add_executable(overlay ${ALL_SOURCES})
 
 

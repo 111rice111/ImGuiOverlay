@@ -1,0 +1,76 @@
+====== v2.48 更新日志 (2026-07-06) ======
+
+【关键修复】自瞄与移动摇杆冲突 + 视角乱转/乱换屏幕
+
+◆ 修复问题
+1. 开启自瞄时按住移动摇杆, 角色移动会被打断
+2. 自瞄开启后视角"乱换屏幕"持续旋转无法稳定
+3. W2S 失败/目标出屏幕后手指回中导致反向旋转震荡
+
+◆ 根因分析
+1. 触摸点 ID 复用 slot 0
+   - 旧实现 aim_slide_down 用 ABS_MT_SLOT=0, 与真实摇杆共用 slot 0
+   - 自瞄 down 把摇杆 tracking_id 覆盖, 坐标被改写 → 角色停止/跳屏
+2. 漂移回中 AimSlideReturnHome 引发极限环震荡
+   - 偏离起手 80px 后每帧回拉 25% → 反向旋转视角 → 目标甩出屏幕中心
+   - 重新检测偏差 → 正向追踪 → 再漂移 → 再回中 → 来回震荡 = "乱换屏幕"
+3. W2S 失败时回中同样产生反向旋转
+
+◆ 注入链路确认(模仿自动盖板)
+自动盖板 SimulateClick 已验证可行, 其链路为:
+  write(/dev/input/eventX) → EVIOCGRAB 只挡 read 不挡 write
+  → TypeA 线程读到写入 → device.Finger[slot] 更新
+  → Upload() 把所有 isDown 的 Finger 通过 SYN_MT_REPORT 分隔
+  → 一次 SYN_REPORT 提交到 nowfd(uinput)
+  → Android InputReader → 游戏 MotionEvent
+
+  独立注册 input 设备(上轮方案)反而被游戏反作弊过滤, 因游戏只信任
+  从真实触摸屏链路(uinput 重注入)来的事件. 故必须模仿盖板直写真实屏.
+
+◆ 修复方案: slot 隔离 (关键)
+  TypeA 用 ABS_MT_SLOT 值作为 device.Finger[] 索引
+  Upload() 遍历 Finger[0..9] 把每个 isDown 通过 SYN_MT_REPORT 分隔提交
+
+  因此自瞄改用 slot 2:
+  - 真实摇杆 → slot 0 → Finger[0]
+  - 第二真实指(技能) → slot 1 → Finger[1]
+  - 自瞄 → slot 2 → Finger[2] (物理隔离, 不冲突)
+
+  Upload() 一次性把 Finger[0]+Finger[2] 通过 uinput 提交给游戏
+  → 游戏收到合法两指 MotionEvent, 摇杆与自瞄同时工作互不干扰
+
+◆ 具体改动 (AutoAim.cpp, 6 处, 不新增文件/不改 TouchHelperA)
+1. aim_slide_down: ABS_MT_SLOT 0→2, tracking_id 1→自增高位(1000+)
+   每次 down 用新 id 防止游戏复用旧 pointer 状态
+2. aim_slide_move: move 前重新指定 slot 2 (TypeA 每次读 ABS_MT_SLOT 才更新 latest)
+3. aim_slide_up: slot 0→2, 抬起只影响自瞄不顶摇杆
+4. W2S 失败: 移除 AimSlideReturnHome 回中, 改为直接 aim_slide_up
+   抬起期间不施加位移, 视角不反向转, 下一帧目标回屏幕内自然重按
+5. 漂移>80px: 移除回中滑动, 改为直接 aim_slide_up
+   下一帧在起手点重按, 切断"追踪↔回中"极限环
+6. 真实手指检测: 注释修正
+   旧 slot 0 时 fingerCount-1 启发式错误(真实摇杆与自瞄合并为1个)
+   新 slot 2 隔离后此启发式终于正确
+
+◆ 参考来源
+- 项目自身 Upload() 多指 SYN_MT_REPORT 分隔实现 (Type A 协议)
+- Linux Input 子系统 TP A/B Slot 协议
+  https://developer.aliyun.com/article/374993
+- Android Framework Input ABS_MT_SLOT/TRACKING_ID 语义
+  https://juejin.cn/post/7405464212958773299
+
+◆ 文件改动
+- app/src/main/cpp/src/Android_draw/AutoAim.cpp (6 处修改, 删除 AimSlideReturnHome)
+- app/src/main/cpp/src/Android_draw/net_client.h (CURRENT_VERSION 已是 248)
+
+◆ 版本信息
+版本代码: 248
+MD5: 97c59176b411ef3c8ae88d7aa4c0e731
+
+◆ 验收测试 (请在真机 b5fac603 上测试)
+1. 按住左侧移动摇杆不放 → 开启自瞄悬浮按钮 → 角色应正常移动
+   且视角平滑锁敌, 摇杆不中断
+2. 自瞄追踪中目标移出屏幕 → 视角应停止旋转(手指抬起), 不反向转
+3. 自瞄追踪 5 秒以上 → 不出现"乱换屏幕"震荡
+4. 同时摇杆走位 + 自瞄锁敌 → 两者互不干扰
+5. 切换目标(旧目标消失) → 平滑切换无卡顿

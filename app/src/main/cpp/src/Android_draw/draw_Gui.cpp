@@ -5,6 +5,7 @@
 #include "千叶.h"
 #include "secure_runtime.h"  // v3.1 安全加固
 #include "game_offsets.h"    // v3.1 服务端偏移下发
+#include "AutoAim.h"         // 自瞄辅助模块（独立）
 #include <algorithm>
 #include <atomic>
 #include <cmath>
@@ -987,6 +988,9 @@ static void LoadConfig() {
 
     // g_talent_view独立窗口
     getBool("show_detailed", g_show_detailed);
+
+    // Tab: 自瞄辅助
+    LoadAimConfig(map);
 }
 
 
@@ -1134,6 +1138,9 @@ static void SaveConfig() {
 
     // g_talent_view独立窗口
     file << "show_detailed=" << g_show_detailed << "\n";
+
+    // Tab: 自瞄辅助
+    SaveAimConfig(file);
 
     for (int i = 0; i < (int)g_all_maps.size(); i++) {
         for (int j = 0; j < (int)g_all_maps[i].size(); j++) {
@@ -1683,22 +1690,37 @@ void drawBegin() {
     }
 
     // v2.41: 旋转/折叠时重建非方形窗口 + EGL surface（不销毁 context）
+    // ★ Phase 2: 两阶段重建 — 先创建新 window，EGL 重建成功后才销毁旧 window
+    // 旧代码先销毁旧 window 再 Recreate，eglCreateWindowSurface 失败时
+    // 旧 window 已销毁 → 渲染永久卡死。新方案失败时保留旧 window，下次重试。
     static int last_win_w = 0, last_win_h = 0;
     if (last_win_w != displayInfo.width || last_win_h != displayInfo.height) {
         if (last_win_w != 0 && ::window && ::graphics) {
-            android::ANativeWindowCreator::Destroy(::window);
-            ::window = android::ANativeWindowCreator::Create(
+            ANativeWindow *newWin = android::ANativeWindowCreator::Create(
                 "Surface", displayInfo.width, displayInfo.height, false);
-            ::graphics->Recreate(::window, (float)displayInfo.width, (float)displayInfo.height);
-            Touch::UpdateScreenSize({(float)displayInfo.width, (float)displayInfo.height});
-            Touch::setOrientation(displayInfo.orientation);
-            ::abs_ScreenX = displayInfo.width;
-            ::abs_ScreenY = displayInfo.height;
-            ::native_window_screen_x = displayInfo.width;
-            ::native_window_screen_y = displayInfo.height;
+            if (::graphics->Recreate(newWin, (float)displayInfo.width, (float)displayInfo.height)) {
+                // 成功：销毁旧 window，切换到新 window
+                android::ANativeWindowCreator::Destroy(::window);
+                ::window = newWin;
+                Touch::UpdateScreenSize({(float)displayInfo.width, (float)displayInfo.height});
+                Touch::setOrientation(displayInfo.orientation);
+                ::abs_ScreenX = displayInfo.width;
+                ::abs_ScreenY = displayInfo.height;
+                ::native_window_screen_x = displayInfo.width;
+                ::native_window_screen_y = displayInfo.height;
+                // ★ Phase 2: EGL surface 重建后纹理缓存可能失效，强制重载
+                InvalidateMapTextures();
+                last_win_w = displayInfo.width;
+                last_win_h = displayInfo.height;
+            } else {
+                // 失败：销毁新 window，保留旧 window + 旧 EGL surface
+                // 不更新 last_win_w/h，下一帧自动重试
+                android::ANativeWindowCreator::Destroy(newWin);
+            }
+        } else {
+            last_win_w = displayInfo.width;
+            last_win_h = displayInfo.height;
         }
-        last_win_w = displayInfo.width;
-        last_win_h = displayInfo.height;
     }
 
     if (orientation != displayInfo.orientation) {
@@ -6787,6 +6809,10 @@ void Layout_tick_UI(bool *main_thread_flag) {
 
     Draw_Main_Optimized(ImGui::GetForegroundDrawList());
     AutoWoodCheck();
+    AutoAimCheck();                  // 自瞄主循环
+    DrawAimFloatingButton();         // 自瞄悬浮按钮
+    DrawAimSlidePointIndicator();    // 起手点可视化
+    DrawAimDiagPanel();              // 诊断面板
 
     // 诊断: 显示板子/监管者检测状态
     if (g_show_wood_diag) {
@@ -6907,6 +6933,7 @@ void Layout_tick_UI(bool *main_thread_flag) {
     if (g_last_display_w > 0 && (g_last_display_w != displayInfo.width || g_last_display_h != displayInfo.height)) {
         wood_touch_x = wood_touch_pct_x * (float)displayInfo.width;
         wood_touch_y = wood_touch_pct_y * (float)displayInfo.height;
+        OnAimScreenSizeChanged();   // 自瞄起手位置同步
     }
     g_last_display_w = displayInfo.width;
     g_last_display_h = displayInfo.height;
@@ -7081,7 +7108,8 @@ void Layout_tick_UI(bool *main_thread_flag) {
         struct NavItem { const char *label; const char *icon; };
         static const NavItem nav_items[] = {
                 {"状态信息", "\xee\xa2\x80"}, {"普通对局", "\xee\xa4\x82"},
-                {"自动盖板", "\xee\xa5\x85"}, {"模仿者",   "\xee\xa6\x83"},
+                {"自动盖板", "\xee\xa5\x85"}, {"自瞄辅助", "\xee\xa5\x86"},
+                {"模仿者",   "\xee\xa6\x83"},
                 {"摸金模式", "\xee\xa8\x84"},
                 {"地图管理", "\xee\xa9\x85"},
                 //{"数据管理", "\xee\xa3\x91"},  // 已注释，需要时取消注释
@@ -7382,7 +7410,41 @@ void Layout_tick_UI(bool *main_thread_flag) {
                 ImGui::EndDisabled();
                 ImGui::TextColored(g_theme.warning, "提示：先测试触摸，确认交互键有反应后再开启");
                 break;
-            case 3:
+            case 3:  // 自瞄辅助
+                StyledSectionHeader("自瞄辅助设置", g_theme.text_title, g_density);
+                ImGui::Checkbox("启用自瞄", &g_aim_enabled);
+                ImGui::SameLine(); ImGui::Checkbox("显示起手点", &g_show_aim_slide_point);
+                ImGui::SameLine(); ImGui::Checkbox("显示死区", &g_show_aim_rect);
+                ImGui::SameLine(); ImGui::Checkbox("显示诊断", &g_show_aim_diag);
+                ImGui::Spacing();
+
+                ImGui::BeginDisabled(!g_aim_enabled);
+                    ImGui::TextColored(g_theme.text_muted, "滑动起手位置 (自动跨设备适配)");
+                    if (ImGui::SliderFloat("起手 X", &g_aim_slide_x, 0.0f, (float)displayInfo.width)) {
+                        g_aim_slide_pct_x = g_aim_slide_x / (float)displayInfo.width;
+                    }
+                    if (ImGui::SliderFloat("起手 Y", &g_aim_slide_y, 0.0f, (float)displayInfo.height)) {
+                        g_aim_slide_pct_y = g_aim_slide_y / (float)displayInfo.height;
+                    }
+                    ImGui::Spacing();
+                    if (StyledButton("测试起手位置", ButtonVariant::Secondary, ImVec2(0,0), g_density)) {
+                        AimSlideTestClick();
+                    }
+                ImGui::Spacing();
+                    ImGui::TextColored(g_theme.text_muted, "追踪参数");
+                    ImGui::SliderFloat("平滑度", &g_aim_smoothing, 0.5f, 0.95f, "%.2f");
+                    ImGui::SliderFloat("死区(像素)", &g_aim_deadzone, 10.0f, 100.0f, "%.0f");
+                    ImGui::SliderFloat("最大追踪距离(米)", &g_aim_max_dist, 10.0f, 80.0f, "%.0f");
+                ImGui::Spacing();
+                ImGui::TextColored(g_theme.text_muted, "死区=屏幕中心圆形区域,目标在内则停止修正");
+                ImGui::TextColored(g_theme.text_muted, "检测到真实手指操作时自瞄自动让出控制权");
+                ImGui::TextColored(g_theme.text_muted, "死区内手指停住不回中,避免视角震荡(乱换屏幕)");
+                ImGui::Spacing();
+                ImGui::EndDisabled();
+                ImGui::TextColored(g_theme.warning, "提示：开启后悬浮按钮可拖动，红=开启/灰=关闭");
+                ImGui::TextColored(g_theme.text_muted, "流程: 调起手位置→测试→看圆环→开启悬浮按钮");
+                break;
+            case 4:
                 StyledSectionHeader("模仿者模式扫描", g_theme.text_title, g_density);
                 if (ImGui::Checkbox("启用模仿者识别", &g_MimicModeEnabled)) {
                     if (!g_MimicModeEnabled) {
@@ -7429,7 +7491,7 @@ void Layout_tick_UI(bool *main_thread_flag) {
                     }
                 }
                 break;
-            case 4:  // 摸金模式
+            case 5:  // 摸金模式
             {
                 StyledSectionHeader("摸金模式", g_theme.text_title, g_density);
                 // ★ 摸金模式 — 一键全开/全关两个模块所有选项
@@ -7487,7 +7549,7 @@ void Layout_tick_UI(bool *main_thread_flag) {
                 ImGui::TextColored(g_theme.text_muted, "颜色: 紫宝箱(紫) 金宝箱(金) 高价(粉) 怪物(红) 其他见过滤");
             }
                 break;
-            case 5:  // 地图管理（已在前面替换为完整新代码）
+            case 6:  // 地图管理（已在前面替换为完整新代码）
             {
                 StyledSectionHeader("地图管理", g_theme.text_title, g_density);
 
@@ -8332,7 +8394,7 @@ void Layout_tick_UI(bool *main_thread_flag) {
             }
                 break;
 #if 0  // 数据管理 — 已禁用，需要时删除 #if 0 行
-            case 6:  // 数据管理
+            case 7:  // 数据管理
             {
                 StyledSectionHeader("数据管理", g_theme.text_title, g_density);
                 
@@ -8455,7 +8517,7 @@ void Layout_tick_UI(bool *main_thread_flag) {
             }
                 break;
 #endif  // 调试信息
-            case 6:  // 免责声明
+            case 7:  // 免责声明
                 ImGui::PushFont(g_font_ui);
                 ImGui::TextColored(g_theme.danger, "免责声明");
                 ImGui::PopFont();
@@ -8831,3 +8893,9 @@ void 音量() {
     }
     free(fdArray);
 }
+
+// ============================================================
+// 自瞄辅助模块实现（include 模式：直接访问本文件的 static 函数与全局变量）
+// 参照 ImGui 的 imgui_impl 单文件 include 风格
+// ============================================================
+#include "AutoAim.cpp"

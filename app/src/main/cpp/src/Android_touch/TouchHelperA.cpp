@@ -2,6 +2,7 @@
 #include "Utils.h"
 #include "imgui.h"
 #include "spinlock.h"
+#include <atomic>
 #include <cmath>
 #include <dirent.h>
 #include <fcntl.h>
@@ -17,6 +18,41 @@
 #define GRAB 1
 // TODO 触摸穿透
 namespace Touch {
+
+// ★ Phase 1: 无锁单生产者单消费者环形缓冲区
+// 生产者 = TypeA 触摸读取线程, 消费者 = 渲染线程 (PumpEvents)
+// 容量 256 = power-of-2, 240Hz 触摸面板约 1 秒容量, 足够吸收渲染抖动
+// Push 失败(满)时丢弃新事件 —— 渲染恢复后靠下一次 SYN_REPORT 修正状态
+template <typename T, size_t Cap>
+class SPSCRingBuffer {
+  static_assert((Cap & (Cap - 1)) == 0, "Cap must be power of 2");
+  T buf_[Cap];
+  std::atomic<size_t> head_{0};  // 写入位（生产者）
+  std::atomic<size_t> tail_{0};  // 读取位（消费者）
+public:
+  bool Push(const T &item) noexcept {
+    size_t h = head_.load(std::memory_order_relaxed);
+    size_t next = (h + 1) & (Cap - 1);
+    if (next == tail_.load(std::memory_order_acquire)) {
+      return false;  // 满，丢弃新事件
+    }
+    buf_[h] = item;
+    head_.store(next, std::memory_order_release);
+    return true;
+  }
+  bool Pop(T &out) noexcept {
+    size_t t = tail_.load(std::memory_order_relaxed);
+    if (t == head_.load(std::memory_order_acquire)) {
+      return false;  // 空
+    }
+    out = buf_[t];
+    tail_.store((t + 1) & (Cap - 1), std::memory_order_release);
+    return true;
+  }
+};
+
+// 触摸事件队列（TypeA 线程 push, 渲染线程 drain）
+static SPSCRingBuffer<FingerEvent, 256> g_eventQueue;
 static struct {
   input_event downEvent[2]{{{}, EV_KEY, BTN_TOUCH, 1},
                            {{}, EV_KEY, BTN_TOOL_FINGER, 1}};
@@ -192,15 +228,15 @@ static void *TypeA(void *arg) {
         }
       }
       if (ie.code == SYN_REPORT) {
-        if (ImGui::GetCurrentContext() != nullptr) {
-          ImGuiIO &io = ImGui::GetIO();
-          if (device.Finger[latest].isDown) {
-            auto pos = Touch2Screen(device.Finger[latest].pos);
-            io.MousePos = ImVec2(pos.x, pos.y);
-            io.MouseDown[0] = true;
-          } else {
-            io.MouseDown[0] = false;
-          }
+        // ★ Phase 1: 不再直写 io.MousePos/io.MouseDown (竞态根因)
+        // 改为 push FingerEvent 到无锁队列，由渲染线程 PumpEvents 消费
+        // Touch2Screen 在 lock 内调用，安全读取 screenSize/orientation 等共享变量
+        touchObj &f = device.Finger[latest];
+        if (f.isDown) {
+          auto pos = Touch2Screen(f.pos);
+          g_eventQueue.Push({true, pos.x, pos.y});
+        } else {
+          g_eventQueue.Push({false, 0.0f, 0.0f});
         }
         if (!readOnly) {
           if (callback) {
@@ -540,6 +576,11 @@ void UpdateScreenSize(const My_Vector2 &s) {
   if (!devices.empty()) {
     int screenX = devices[0].absX.maximum;
     int screenY = devices[0].absY.maximum;
+    // ★ 修复根因 E: 旋转后部分设备 absX/absY.maximum 会变化
+    // 旧代码只在 Init() 设置一次 screenX_max/screenY_max，旋转后 Touch2Screen
+    // 归一化基准错误 → 触摸偏移。此处同步更新。
+    screenX_max = screenX;
+    screenY_max = screenY;
     if (size.x > size.y) std::swap(size.x, size.y);
     if (otherTouch) std::swap(size.x, size.y);
     touch_scale.x = (float)screenX / size.x;
@@ -609,6 +650,58 @@ void Screen2Touch(float sx, float sy, int &out_raw_x, int &out_raw_y) {
   // 还原到触摸驱动原始坐标
   out_raw_x = (int)(nx * (float)screenX_max);
   out_raw_y = (int)(ny * (float)screenY_max);
+  lock.unlock();
+}
+
+// ★ Phase 1: 渲染线程在 ImGui::NewFrame 前调用
+// drain 触摸事件队列，走 ImGui 官方事件 API
+// ImGui 内部会把事件 push 到 g.InputEventsQueue，NewFrame() 统一消费
+//   - AddMousePosEvent: 最后一个事件的位置生效
+//   - AddMouseButtonEvent: 按状态翻转更新 MouseDown[]
+// 即使一帧内 push 多个事件，ImGui 也能正确处理 down/up 时序
+void PumpEvents() {
+  if (!initialized) return;
+  if (ImGui::GetCurrentContext() == nullptr) return;
+  ImGuiIO &io = ImGui::GetIO();
+  FingerEvent e;
+  while (g_eventQueue.Pop(e)) {
+    if (e.isDown) {
+      io.AddMousePosEvent(e.screenX, e.screenY);
+      io.AddMouseButtonEvent(0, true);
+    } else {
+      io.AddMouseButtonEvent(0, false);
+    }
+  }
+}
+
+// ★ v2.50: 自瞄专用注入 — 直接更新 devices[0].Finger[2] + 调用 Upload()
+//   必须走盖板路径(Upload→nowfd), 直写 uinput 会被游戏反作弊过滤.
+//   旧方案 write(/dev/input/eventX) 的缺陷:
+//     自瞄事件与真实手指事件混合在真实触摸屏 evdev 缓冲,
+//     真实手指落下时事件流密集, 自瞄事件被挤压/延迟读取,
+//     Finger[2].pos 不更新 → Upload 提交旧位置 → 自瞄失效.
+//   新方案: 直接在 lock 下更新 devices[0].Finger[2].pos/isDown/id,
+//     然后调用 Upload() 提交到 nowfd (盖板路径, 不被过滤).
+//     不依赖 evdev 缓冲, 真实手指落下时自瞄仍持续更新 Finger[2] 最新位置.
+//     Upload 遍历所有 isDown 的 Finger, 同时提交 Finger[0](真实摇杆 slot0) +
+//     Finger[2](自瞄 slot2), 游戏收到合法两指 MotionEvent, 互不冲突.
+void InjectAimTouch(float screen_x, float screen_y, int tid, bool is_down) {
+  if (!initialized || nowfd <= 0) return;
+  if (devices.empty()) return;
+  lock.lock();
+  Device &dev = devices[0];
+  touchObj &f = dev.Finger[2];   // ★ slot 2: 与真实手指 slot 0 隔离
+  if (is_down) {
+    f.isDown = true;
+    f.pos.x = screen_x;
+    f.pos.y = screen_y;
+    f.id = tid;            // 自瞄 tid 从 1000 起, 与真实手指低位 id 隔离
+  } else {
+    f.isDown = false;
+  }
+  // ★ 走盖板路径: Upload 把所有 isDown 的 Finger (含真实手指+自瞄)
+  //   通过 SYN_MT_REPORT 分隔, 一次 write(nowfd) 提交. 不被反作弊过滤.
+  Upload();
   lock.unlock();
 }
 } // namespace Touch

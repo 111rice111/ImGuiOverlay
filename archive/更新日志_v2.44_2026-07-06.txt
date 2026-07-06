@@ -1,0 +1,67 @@
+====== v2.44 更新日志 (2026-07-06) ======
+
+【底层重构】触摸输入路径事件队列化 + EGL 两阶段重建
+
+◆ 修复问题
+1. 不同设备菜单点击无反应 / 悬浮窗拖拽失效
+2. 旋转/折叠屏幕后卡屏（小米 Pad6 等设备尤甚）
+3. 快速点击丢失、触摸点与显示点不一致
+
+◆ 根因分析
+问题 A：触摸线程直写 io.MousePos/io.MouseDown[0]，与渲染线程采样窗口产生竞态
+  - 快速点击在一帧内 down→up 被丢失 → 菜单点不动
+  - 多次翻转 MouseDown → IsMouseClicked 永不触发 → 拖拽启动失败
+  - 240Hz 触摸面板竞态概率指数上升 → "不同设备表现不同"
+
+问题 B：EGL RecreateSurface 先销毁旧 surface 再创建新的
+  - eglCreateWindowSurface 失败时无旧 surface 可回退
+  - eglSwapBuffers 持续失败 → 卡屏
+  - 各厂商 EGL 驱动严格度不同 → 部分设备必现
+
+问题 C：UpdateScreenSize 未同步更新 screenX_max/screenY_max
+  - 旋转后部分设备 absX/absY.maximum 变化，归一化基准错误 → 触摸偏移
+
+◆ 修复方案（底层架构重构）
+
+■ Phase 1: 触摸输入路径事件队列化（消除竞态根因）
+  - 新增 FingerEvent 结构 + SPSCRingBuffer<256> 无锁队列
+  - TypeA 触摸线程不再直写 io，改为 push 事件到队列
+  - 新增 Touch::PumpEvents()，渲染线程在 ImGui::NewFrame 前 drain
+  - 走 io.AddMousePosEvent / io.AddMouseButtonEvent 官方事件 API
+  - 调用点: main.cpp 主循环 drawBegin() 后、NewFrame() 前
+  - 行为对齐桌面版（单线程事件队列），从根本上消除竞态
+
+■ Phase 2: EGL Surface 两阶段重建（消除卡屏根因）
+  - OpenGLGraphics::RecreateSurface 改为先创建新 surface 再销毁旧的
+  - eglCreateWindowSurface 失败时保留旧 surface，渲染继续
+  - eglMakeCurrent 失败时回退到旧 surface
+  - Render() 在 EGL_NO_SURFACE 时跳过 eglSwapBuffers
+  - drawBegin() 两阶段：先创建新 window，Recreate 成功才销毁旧 window
+  - 失败时保留旧 window，下一帧自动重试
+  - EGL 重建后调用 InvalidateMapTextures() 强制纹理重载
+
+■ 附带修复
+  - UpdateScreenSize 同步更新 screenX_max/screenY_max（修复根因 C）
+  - ThreadAffinity.h 补 #include <vector>（预先存在的缺失）
+
+◆ 文件改动
+  - app/src/main/cpp/include/Android_touch/TouchHelperA.h
+  - app/src/main/cpp/src/Android_touch/TouchHelperA.cpp
+  - app/src/main/cpp/include/Android_my_imgui/AndroidImgui.h
+  - app/src/main/cpp/src/Android_my_imgui/AndroidImgui.cpp
+  - app/src/main/cpp/include/Android_Graphics/OpenGLGraphics.h
+  - app/src/main/cpp/src/Android_Graphics/OpenGLGraphics.cpp
+  - app/src/main/cpp/src/Android_draw/draw_Gui.cpp
+  - app/src/main/cpp/src/Android_draw/net_client.h (CURRENT_VERSION 243→244)
+  - app/src/main/cpp/src/Android_draw/ThreadAffinity.h
+  - app/src/main/cpp/src/main.cpp
+
+◆ 版本信息
+版本代码: 244
+MD5: d534d08ec0abaaba865d3c2568f7f954
+
+◆ 测试建议
+1. 快速连续点击菜单按钮 → 验证事件队列
+2. 长按标题栏拖拽悬浮窗 → 验证拖拽启动
+3. 旋转屏幕后立即操作 → 验证 EGL 两阶段重建
+4. 折叠屏展开/折叠后操作 → 验证窗口重建不卡屏

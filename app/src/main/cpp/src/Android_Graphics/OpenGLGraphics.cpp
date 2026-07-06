@@ -44,30 +44,43 @@ bool OpenGLGraphics::Create() {
 void OpenGLGraphics::Setup() { ImGui_ImplOpenGL3_Init("#version 300 es"); }
 void OpenGLGraphics::PrepareFrame(bool resize) { ImGui_ImplOpenGL3_NewFrame(); }
 void OpenGLGraphics::Render(ImDrawData *drawData) {
+  // ★ Phase 2: surface 无效时跳过渲染，避免 eglSwapBuffers 失败导致卡屏
+  if (m_EglSurface == EGL_NO_SURFACE) return;
   glClear(GL_COLOR_BUFFER_BIT);
   ImGui_ImplOpenGL3_RenderDrawData(drawData);
   eglSwapBuffers(m_EglDisplay, m_EglSurface);
 }
 void OpenGLGraphics::PrepareShutdown() { ImGui_ImplOpenGL3_Shutdown(); }
-void OpenGLGraphics::RecreateSurface(ANativeWindow *newWindow, float width, float height) {
-  // ★ 旋转时重建 EGL surface，不销毁 context，保留所有纹理和 ImGui 状态
-  if (m_EglSurface != EGL_NO_SURFACE) {
-    eglMakeCurrent(m_EglDisplay, EGL_NO_SURFACE, EGL_NO_SURFACE, m_EglContext);
-    eglDestroySurface(m_EglDisplay, m_EglSurface);
-    m_EglSurface = EGL_NO_SURFACE;
-  }
-  // 设置新窗口的 buffer 格式
+bool OpenGLGraphics::RecreateSurface(ANativeWindow *newWindow, float width, float height) {
+  // ★ Phase 2: 两阶段重建 — 先创建新 surface，成功后才销毁旧 surface
+  // 旧代码先销毁旧 surface 再创建新的，eglCreateWindowSurface 失败时
+  // 无旧 surface 可回退 → eglSwapBuffers 持续失败 → 卡屏
   ANativeWindow_setBuffersGeometry(newWindow, 0, 0, m_EglFormat);
-  // 创建新 EGL surface
-  m_EglSurface = eglCreateWindowSurface(m_EglDisplay, m_EglConfig, newWindow, nullptr);
-  if (m_EglSurface == EGL_NO_SURFACE) {
-    __android_log_print(ANDROID_LOG_ERROR, "ImGui", "[-] RecreateSurface: eglCreateWindowSurface failed");
-    return;
+  EGLSurface newSurface = eglCreateWindowSurface(m_EglDisplay, m_EglConfig, newWindow, nullptr);
+  if (newSurface == EGL_NO_SURFACE) {
+    __android_log_print(ANDROID_LOG_ERROR, "ImGui",
+                        "[-] RecreateSurface: eglCreateWindowSurface failed, keep old surface");
+    return false;  // 旧 surface 保留，渲染继续用旧的
   }
   // 绑定新 surface 到现有 context
-  eglMakeCurrent(m_EglDisplay, m_EglSurface, m_EglSurface, m_EglContext);
+  if (!eglMakeCurrent(m_EglDisplay, newSurface, newSurface, m_EglContext)) {
+    __android_log_print(ANDROID_LOG_ERROR, "ImGui",
+                        "[-] RecreateSurface: eglMakeCurrent failed, rollback");
+    eglDestroySurface(m_EglDisplay, newSurface);
+    // 恢复旧 surface 绑定
+    eglMakeCurrent(m_EglDisplay, m_EglSurface, m_EglSurface, m_EglContext);
+    return false;
+  }
+  // 成功：销毁旧 surface，切换到新 surface
+  EGLSurface oldSurface = m_EglSurface;
+  m_EglSurface = newSurface;
+  if (oldSurface != EGL_NO_SURFACE) {
+    eglDestroySurface(m_EglDisplay, oldSurface);
+  }
   glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
-  __android_log_print(ANDROID_LOG_INFO, "ImGui", "[+] RecreateSurface: %dx%d", (int)width, (int)height);
+  __android_log_print(ANDROID_LOG_INFO, "ImGui",
+                      "[+] RecreateSurface: %dx%d", (int)width, (int)height);
+  return true;
 }
 void OpenGLGraphics::Cleanup() {
   eglMakeCurrent(m_EglDisplay, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);

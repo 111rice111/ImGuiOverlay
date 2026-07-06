@@ -42,7 +42,9 @@ public:
   void NewFrame(bool resize = false);
   void EndFrame();
   void Shutdown();
-  void Recreate(ANativeWindow *window, float width, float height);
+  // ★ Phase 2: 返回 true=重建成功已切换, false=失败保留旧 surface
+  // 调用方失败时不应销毁旧 window，需保留以维持渲染
+  bool Recreate(ANativeWindow *window, float width, float height);
   TextureInfo LoadTextureFromFile(const char *filepath);
   TextureInfo LoadTextureFromMemory(void *data, int len);
   TextureInfo_gif LoadTextureFromMemory_gif(void *data, int len);
@@ -59,6 +61,7 @@ private:
   virtual void Cleanup() = 0;
   virtual BaseTexData *LoadTexture(BaseTexData *tex_data, void *pixel_data) = 0;
   virtual void RemoveTexture(BaseTexData *tex_data) = 0;
-  virtual void RecreateSurface(ANativeWindow *newWindow, float width, float height) {}
+  // ★ Phase 2: 返回 true=成功切换到新 surface, false=失败保留旧 surface
+  virtual bool RecreateSurface(ANativeWindow *newWindow, float width, float height) { return true; }
 };
 #endif // ANDROIDIMGUI_ANDROIDIMGUI_H

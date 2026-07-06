@@ -1,0 +1,57 @@
+====== v2.45 更新日志 (2026-07-06) ======
+
+【新增功能】自瞄辅助模块（独立模块，最小侵入）
+
+◆ 功能概述
+参照自动盖板实现路径（内核只读内存 → 监管者坐标+矩阵 → W2S → 触摸滑动注入），
+新增求生者自瞄监管者功能，纯视角修正，不联动攻击。
+
+◆ 实现路径
+1. 内核级只读内存：复用 vm_readv + 三跳指针链读取 matrix[16] 与实体数组
+2. 获取监管者坐标：getObjectCoordinates(阵营==1) + 最近距离+粘滞目标选择
+3. 数学换算屏幕坐标：复用 optimizedWorldToScreen
+4. 系统级触摸注入：新建 aim_slide_down/move/up 三阶段增量滑动函数
+
+◆ 核心特性
+- 单指增量滑动：起手(0.8W,0.8H)可配置，每帧微调，限幅±80px防猛跳
+- 屏幕中心死区：默认10px (5~20可调)，避免抖动
+- 平滑度参数：0.05~1.0 默认0.15，吸收设备灵敏度差异
+- W2S失败保护：连续10帧失败自动停止滑动
+- 粘滞目标：锁定后不切换，除非目标消失/超距/变幽灵
+- 48x48可拖动悬浮按钮：红=开启/灰=关闭，点击切换，拖动不触发切换
+- 起手位置可视化：暖金圆环+扩散波纹动画+测试按钮
+- 死区可视化：屏幕中心青色圆圈
+- 诊断面板：实时显示目标/距离/滑动状态/坐标
+- 跨设备百分比持久化：分辨率变化自动重算起手坐标
+
+◆ 文件改动
+- 新增 app/src/main/cpp/src/Android_draw/AutoAim.h (接口声明)
+- 新增 app/src/main/cpp/src/Android_draw/AutoAim.cpp (完整实现, include模式集成)
+- 修改 app/src/main/cpp/src/Android_draw/draw_Gui.cpp (7处集成点)
+  · include AutoAim.h
+  · LoadConfig 调用 LoadAimConfig
+  · SaveConfig 调用 SaveAimConfig
+  · 主循环加 AutoAimCheck + 可视化调用
+  · Tab导航新增"自瞄辅助"项
+  · case 3 新增自瞄UI面板, 后续case重编号
+  · 分辨率变化回调 OnAimScreenSizeChanged
+  · 末尾 #include "AutoAim.cpp"
+- 修改 app/src/main/cpp/CMakeLists.txt (排除AutoAim.cpp独立编译)
+- 修改 app/src/main/cpp/src/Android_draw/net_client.h (CURRENT_VERSION 244→245)
+
+◆ 使用流程
+1. Tab「自瞄辅助」→ 调起手位置滑条 → 看暖金圆环确认位置
+2. 点「测试起手位置」验证触摸有反应
+3. 拖动悬浮按钮到顺手位置 → 点击变红 → 自动追踪最近监管者
+4. 诊断面板实时显示目标/距离/滑动状态
+
+◆ 版本信息
+版本代码: 245
+MD5: 03c6c85185ab388a2af13cd958dcad5f
+
+◆ 测试建议
+1. 调整起手位置 → 验证暖金圆环显示正确
+2. 点击测试按钮 → 验证触摸注入有效
+3. 开启悬浮按钮 → 验证追踪监管者视角平滑转向
+4. 监管者进入屏幕外 → 验证W2S失败后停止滑动
+5. 旋转/折叠屏幕 → 验证起手位置自动重算

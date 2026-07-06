@@ -13,6 +13,7 @@
 #include <sys/syscall.h>
 #include <thread>
 #include <unistd.h>
+#include <vector>
 extern char extractedString[64];
 namespace CPUAffinityUtil {
 inline pid_t get_pid_by_package() {

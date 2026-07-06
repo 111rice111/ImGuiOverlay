@@ -357,6 +357,10 @@ int main(int argc, char *argv[]) {
             }).detach();
         }
         drawBegin();
+        // ★ Phase 1: 在 ImGui::NewFrame 前 drain 触摸事件队列
+        // 事件经 io.AddMousePosEvent/AddMouseButtonEvent 进入 ImGui 官方队列
+        // 解决旧代码触摸线程直写 io 导致的竞态 (点击/拖拽无反应)
+        Touch::PumpEvents();
         graphics->NewFrame();
         Layout_tick_UI(&flag);
         graphics->EndFrame();
