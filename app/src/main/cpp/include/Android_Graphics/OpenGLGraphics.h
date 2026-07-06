@@ -24,7 +24,6 @@ public:
   void Cleanup() override;
   BaseTexData *LoadTexture(BaseTexData *tex_data, void *pixel_data) override;
   void RemoveTexture(BaseTexData *tex_data) override;
-  // ★ Phase 2: 两阶段重建，失败保留旧 surface
-  bool RecreateSurface(ANativeWindow *newWindow, float width, float height) override;
+  void RecreateSurface(ANativeWindow *newWindow, float width, float height) override;
 };
 #endif // ANDROIDIMGUI_OPENGLGRAPHICS_H

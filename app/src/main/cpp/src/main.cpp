@@ -294,12 +294,16 @@ int main(int argc, char *argv[]) {
 
     ::graphics = GraphicsManager::getGraphicsInterface(GraphicsManager::OPENGL);
     ::screen_config();
-    // v2.41: 创建真实屏幕尺寸的非方形窗口（替代方形 {max,max}）
-    // 方形窗口导致渲染区域和屏幕可见区域不匹配 → 悬浮窗显示位置偏移
-    ::native_window_screen_x = ::displayInfo.width;
-    ::native_window_screen_y = ::displayInfo.height;
-    ::abs_ScreenX = ::displayInfo.width;
-    ::abs_ScreenY = ::displayInfo.height;
+    // v2.44: 恢复方形窗口（非方形窗口在某些设备导致 EGL 重建失败→卡屏）
+    // 方形窗口从 (0,0) 开始，glViewport 控制渲染区域到屏幕可见部分
+    ::native_window_screen_x =
+            (::displayInfo.height > ::displayInfo.width ? ::displayInfo.height
+                                                        : ::displayInfo.width);
+    ::native_window_screen_y = ::native_window_screen_x;
+    ::abs_ScreenX = ::native_window_screen_x;
+    ::abs_ScreenY =
+            (::displayInfo.height < ::displayInfo.width ? ::displayInfo.height
+                                                        : ::displayInfo.width);
     ::window = android::ANativeWindowCreator::Create(
             "Surface", native_window_screen_x, native_window_screen_y, false);
     graphics->Init_Render(::window, native_window_screen_x,
@@ -356,11 +360,8 @@ int main(int argc, char *argv[]) {
                 api_fetch_game_offsets();
             }).detach();
         }
+        screen_config();  // v2.44: 确保 drawBegin 用最新 displayInfo
         drawBegin();
-        // ★ Phase 1: 在 ImGui::NewFrame 前 drain 触摸事件队列
-        // 事件经 io.AddMousePosEvent/AddMouseButtonEvent 进入 ImGui 官方队列
-        // 解决旧代码触摸线程直写 io 导致的竞态 (点击/拖拽无反应)
-        Touch::PumpEvents();
         graphics->NewFrame();
         Layout_tick_UI(&flag);
         graphics->EndFrame();

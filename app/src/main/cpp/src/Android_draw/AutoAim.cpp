@@ -1,11 +1,39 @@
 // ============================================================
-//  AutoAim.cpp — 自瞄辅助实现
+//  AutoAim.cpp — 自瞄辅助实现 (v2.54 完全重写: 直接 write eventX)
 //  集成方式: 在 draw_Gui.cpp 末尾 #include "AutoAim.cpp"
-//  这样可直接访问 draw_Gui.cpp 内的 static 函数与全局变量:
+//  可直接访问 draw_Gui.cpp 内的 static 函数与全局变量:
 //    - optimizedWorldToScreen / getObjectCoordinates / isValidCoordinate
-//    - SimulateClick / InitTouch / AddNotification
+//    - SimulateClick / InitTouch / AddNotification / Touch::Screen2Touch
 //    - matrix / data_buffers / displayInfo / Z / g_ui_density / GlobalMemory
-//  参照 AutoWoodCheck 的实现路径
+//    - g_touch_path / g_touch_ready / g_touch_max_x / g_touch_max_y
+// ============================================================
+//
+//  ★ v2.54 根本性重写 — 放弃 Touch 模块, 参照 SimulateClick 直接 write eventX
+//
+//    根本原因: main.cpp 中 Touch::Init(..., readOnly=true)
+//      → 不创建 uinput(nowfd=0), 不 EVIOCGRAB
+//      → TypeA 的 SYN_REPORT 处 `if (!readOnly)` 全部跳过
+//      → SetCallBack 设置的 callback 永远不会被调用
+//      → Upload() 永远不会被调用
+//      → v2.52/v2.53 的 "在 TypeA 回调中执行" 方案完全无效
+//
+//    盖板 SimulateClick 有效的原因:
+//      它完全独立于 Touch 模块, 直接 open(/dev/input/eventX) + write(EV_ABS/EV_SYN)
+//      用 Type B 协议 (ABS_MT_SLOT + ABS_MT_TRACKING_ID + SYN_REPORT)
+//      游戏直接 read eventX (因为没 EVIOCGRAB), 收到触摸事件
+//
+//    v2.54 方案: 完全模仿 SimulateClick 的写入方式
+//      1. 用 g_touch_path + InitTouch() (draw_Gui.cpp 已有)
+//      2. 用 Touch::Screen2Touch() 转换屏幕坐标 → 驱动原始坐标
+//      3. 直接 write eventX, Type B 协议, SLOT=1 (避开真实摇杆 SLOT=0 和盖板 SLOT=0)
+//      4. 三态: down(发完整事件) → move(只发位置) → up(只发 TRACKING_ID=-1)
+//      5. 持久 fd (降低 open/close 开销), write 失败时重开
+//      6. up 时不发 BTN_TOUCH=0 (避免误判真实手指抬起)
+//
+//    防干扰: 在 TouchHelperA.cpp TypeA 的 SYN_REPORT 处加过滤
+//      `if (latest >= 1) continue;`  跳过自瞄 slot 的 ImGui 事件
+//      (自瞄 SLOT=1 不应影响 ImGui 鼠标, 否则 UI 无法操作)
+//
 // ============================================================
 
 #include "AutoAim.h"
@@ -18,12 +46,14 @@
 #include <linux/input.h>
 #include <cstring>
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 
 // ---------- 全局状态定义 ----------
 bool g_aim_enabled = false;
-float g_aim_smoothing = 0.7f;      // ★ v2.49: 0.85→0.7 (系数0.3, 更激进的追踪, 减少延迟)
-float g_aim_deadzone  = 5.0f;      // ★ v2.49: 15→5px (仅防1-2px抖动, 不再"稍偏就停")
-float g_aim_max_dist  = 50.0f;     // ★ v2.49: 30→50米 (扩大追踪范围)
+float g_aim_smoothing = 0.7f;      // 平滑度: 越大越柔和(系数=1-smoothing)
+float g_aim_deadzone  = 5.0f;      // 屏幕中心死区(像素), 仅防1-2px抖动
+float g_aim_max_dist  = 50.0f;     // 最大追踪距离(米)
 float g_aim_slide_pct_x = 0.8f;
 float g_aim_slide_pct_y = 0.8f;
 float g_aim_slide_x = 0.0f;
@@ -41,57 +71,122 @@ static bool   g_aim_btn_dragging = false;
 static ImVec2 g_aim_btn_drag_offset;
 static ImVec2 g_aim_btn_press_pos;
 
+// 速度预测状态
+static Vector3A g_aim_prev_world;          // 上一帧目标世界坐标
+static Vector3A g_aim_velocity;            // 目标速度 (世界坐标/秒)
+static double   g_aim_prev_time = 0;       // 上一帧时间戳
+
 // ============================================================
-//  内部辅助：滑动事件注入（直接写 /dev/input）
-//  复用 SimulateClick 的校准与 Screen2Touch 逻辑，但拆为
-//  Down/Move/Up 三阶段以支持跨帧持续滑动
+//  ★ v2.56 核心: 持久 fd + 单次 write (原子性) + max_slots 诊断
+//  - 持久 fd (降低 open/close 开销, write 失败时重开)
+//  - 单次 write 提交完整事件序列 (内核不会拆散单个 write)
+//  - 不发 BTN_TOUCH=0 (避免误判真实手指抬起)
+//  - 诊断面板显示 max_slots (确认驱动是否支持多 slot)
 // ============================================================
+static int  g_aim_inject_fd   = -1;        // 持久 fd
+static int  g_aim_slot        = 0;         // ★ v2.60: SLOT=0 (和 SimulateClick 一致, 游戏只认 slot 0)
+static int  g_aim_tracking_id = 1000;      // 自瞄专用 tracking_id
+static bool g_aim_finger_down = false;      // 自瞄虚拟手指是否按下
+static int  g_aim_max_slots   = -1;        // 驱动 max_slots (-1=未检测)
 
-static int g_aim_tracking_id = -1;     // -1=已抬起, 1=已按下 (仅状态机标记)
+// 检测驱动 max_slots (EVIOCGABS(ABS_MT_SLOT).maximum)
+static int AimDetectMaxSlots() {
+    if (!g_touch_ready) {
+        if (!InitTouch()) return -1;
+    }
+    int fd = open(g_touch_path, O_RDWR);
+    if (fd < 0) return -1;
+    struct input_absinfo info;
+    int max = -1;
+    if (ioctl(fd, EVIOCGABS(ABS_MT_SLOT), &info) == 0) {
+        max = info.maximum;  // max_slots = absinfo.maximum + 1 (0..maximum)
+    }
+    close(fd);
+    return max;
+}
 
-// ★ v2.50: 注入路径改为 Touch::InjectAimTouch (直接写 nowfd/uinput)
-//   旧路径: write(/dev/input/eventX) → TypeA 读到 → Upload() 提交
-//   旧路径问题: 真实手指事件与自瞄事件混合在 TypeA 读取流, SYN_REPORT 时
-//              Upload() 只提交当前 latest 对应 Finger, 自瞄 pointer 被遗漏.
-//              真实手指落下时自瞄完全失效(用户反馈"手指放上去就不锁了").
-//   新路径: 直接写 nowfd(uinput 虚拟设备), 绕过 TypeA/Upload.
-//   uinput 已注册 ABS_MT_SLOT, 自瞄用 slot 2, 真实手指经 Upload 提交 slot 0,
-//   在 Android InputReader 层合并为合法多指 MotionEvent, 物理隔离不冲突.
-#define AIM_TID_BASE 1000
-static int g_aim_kernel_tid = AIM_TID_BASE;
+// 确保注入 fd 可用 (失败返回 false)
+static bool AimEnsureFd() {
+    if (g_aim_inject_fd >= 0) return true;
+    if (!g_touch_ready) {
+        if (!InitTouch()) return false;
+    }
+    g_aim_inject_fd = open(g_touch_path, O_RDWR);
+    return g_aim_inject_fd >= 0;
+}
 
-// 按下虚拟手指（开启滑动序列）
-static bool aim_slide_down(float sx, float sy) {
-    // tracking_id 自增: 每次 down 用新 id, 避免与真实手指低位 id 冲突
-    g_aim_kernel_tid = (g_aim_kernel_tid < 100000) ? (g_aim_kernel_tid + 1) : AIM_TID_BASE;
-    Touch::InjectAimTouch(sx, sy, g_aim_kernel_tid, true);
-    g_aim_tracking_id = 1;   // 仅作"已按下"状态机标记
-    g_aim_slide.cur_screen_x = sx;
-    g_aim_slide.cur_screen_y = sy;
+// 单次 write 提交完整事件序列 (原子性)
+static inline bool AimWriteBatch(const struct input_event* ev, int count) {
+    if (g_aim_inject_fd < 0) return false;
+    ssize_t expect = (ssize_t)(sizeof(struct input_event) * count);
+    ssize_t r = write(g_aim_inject_fd, ev, expect);
+    if (r != expect) {
+        close(g_aim_inject_fd);
+        g_aim_inject_fd = -1;
+        return false;
+    }
     return true;
 }
 
-// 移动虚拟手指（每帧增量）
-static void aim_slide_move(float sx, float sy) {
-    if (g_aim_tracking_id < 0) return;
-    // move 时传当前 tid (不重新 down), is_down=true 保持按下并更新位置
-    Touch::InjectAimTouch(sx, sy, g_aim_kernel_tid, true);
-    g_aim_slide.cur_screen_x = sx;
-    g_aim_slide.cur_screen_y = sy;
-    g_aim_slide.last_move_time = ImGui::GetTime();
+// ============================================================
+//  ★ v2.58: 持续按下方案 (回退到 v2.54 验证有效的方案)
+//  v2.57 闪现式无效 (down→up 太快, 游戏当作 tap 不当作 drag)
+//  回到持续按下: down 一次, 之后每帧 move 更新位置
+//  真实手指落下时仍维持 slot 1 按下 (不停止)
+// ============================================================
+
+// 按下自瞄手指 (单次 write 完整事件序列)
+static void AimInjectDown(float screen_x, float screen_y) {
+    if (!AimEnsureFd()) return;
+    int raw_x, raw_y;
+    Touch::Screen2Touch(screen_x, screen_y, raw_x, raw_y);
+
+    struct input_event ev[9];
+    memset(ev, 0, sizeof(ev));
+    int i = 0;
+    ev[i].type = EV_ABS; ev[i].code = ABS_MT_SLOT;            ev[i].value = g_aim_slot;        i++;
+    ev[i].type = EV_ABS; ev[i].code = ABS_MT_TRACKING_ID;      ev[i].value = g_aim_tracking_id; i++;
+    ev[i].type = EV_ABS; ev[i].code = ABS_MT_POSITION_X;       ev[i].value = raw_x;             i++;
+    ev[i].type = EV_ABS; ev[i].code = ABS_MT_POSITION_Y;       ev[i].value = raw_y;             i++;
+    ev[i].type = EV_ABS; ev[i].code = ABS_MT_TOUCH_MAJOR;      ev[i].value = 10;                i++;
+    ev[i].type = EV_ABS; ev[i].code = ABS_MT_PRESSURE;         ev[i].value = 50;                i++;
+    ev[i].type = EV_KEY; ev[i].code = BTN_TOOL_FINGER;        ev[i].value = 1;                 i++;
+    ev[i].type = EV_KEY; ev[i].code = BTN_TOUCH;               ev[i].value = 1;                 i++;
+    ev[i].type = EV_SYN; ev[i].code = SYN_REPORT;              ev[i].value = 0;                 i++;
+    AimWriteBatch(ev, i);
+
+    g_aim_finger_down = true;
+    g_aim_tracking_id++;
 }
 
-// 抬起虚拟手指（结束滑动序列）
-static void aim_slide_up() {
-    if (g_aim_tracking_id < 0) return;
-    // is_down=false, tid 任意(内核会设 -1)
-    Touch::InjectAimTouch(g_aim_slide.cur_screen_x, g_aim_slide.cur_screen_y, g_aim_kernel_tid, false);
-    g_aim_tracking_id = -1;
+// 移动自瞄手指 (单次 write, SLOT+POSITION+SYN)
+static void AimInjectMove(float screen_x, float screen_y) {
+    if (!g_aim_finger_down || !AimEnsureFd()) return;
+    int raw_x, raw_y;
+    Touch::Screen2Touch(screen_x, screen_y, raw_x, raw_y);
+
+    struct input_event ev[4];
+    memset(ev, 0, sizeof(ev));
+    ev[0].type = EV_ABS; ev[0].code = ABS_MT_SLOT;        ev[0].value = g_aim_slot;
+    ev[1].type = EV_ABS; ev[1].code = ABS_MT_POSITION_X;  ev[1].value = raw_x;
+    ev[2].type = EV_ABS; ev[2].code = ABS_MT_POSITION_Y;  ev[2].value = raw_y;
+    ev[3].type = EV_SYN; ev[3].code = SYN_REPORT;          ev[3].value = 0;
+    AimWriteBatch(ev, 4);
 }
 
-static void aim_end_slide() {
-    aim_slide_up();
-    g_aim_slide.tracking_id = -1;
+// 抬起自瞄手指 (单次 write, SLOT+TRACKING_ID=-1+SYN)
+static void AimInjectUp() {
+    if (!g_aim_finger_down) return;
+    if (!AimEnsureFd()) { g_aim_finger_down = false; return; }
+
+    struct input_event ev[3];
+    memset(ev, 0, sizeof(ev));
+    ev[0].type = EV_ABS; ev[0].code = ABS_MT_SLOT;         ev[0].value = g_aim_slot;
+    ev[1].type = EV_ABS; ev[1].code = ABS_MT_TRACKING_ID;  ev[1].value = -1;
+    ev[2].type = EV_SYN; ev[2].code = SYN_REPORT;          ev[2].value = 0;
+    AimWriteBatch(ev, 3);
+
+    g_aim_finger_down = false;
 }
 
 // ============================================================
@@ -134,108 +229,177 @@ static bool aim_target_still_valid(const std::vector<DataStruct>& data) {
     return false;
 }
 
-// ============================================================
-//  主循环入口
-// ============================================================
+// 前向声明
+void InitAimMaxSlots();
 
+// ============================================================
+//  渲染线程入口 (每帧由 draw_Gui.cpp 调用)
+//  在渲染线程执行: 读目标 → W2S → 速度预测 → 增量滑动 → write eventX
+//  ★ 不依赖 Touch 模块的 callback/Upload (因为 readOnly=true 它们不触发)
+//  ★ 完全独立 write eventX, 参照 SimulateClick
+// ============================================================
 void AutoAimCheck() {
+    // 启动时检测一次 max_slots (诊断用)
+    InitAimMaxSlots();
+
+    // 首次运行: 把 cur_screen 初始化为起手点
+    static bool aim_slide_initialized = false;
+    if (!aim_slide_initialized) {
+        g_aim_slide.cur_screen_x = g_aim_slide_x;
+        g_aim_slide.cur_screen_y = g_aim_slide_y;
+        aim_slide_initialized = true;
+    }
+
     if (!g_aim_enabled) {
-        aim_end_slide();
-        g_aim_target.valid = false;
-        g_aim_target.obj = 0;
+        // 自瞄关闭: 抬起自瞄手指(如果按下)
+        if (g_aim_finger_down) {
+            AimInjectUp();
+        }
         return;
     }
 
-    // ★ v2.49: 移除"真实手指让权"机制
-    //   旧逻辑: 检测到真实手指(摇杆/技能) → aim_slide_up 让权 → 自瞄停止
-    //   这正是"走路时不瞄"的根因, 与用户需求"走路也要一直瞄"冲突.
-    //   slot 2 已与真实摇杆 slot 0 物理隔离(TypeA 用 slot 值作 Finger[] 索引,
-    //   Upload 把 Finger[0]+Finger[2] 通过 SYN_MT_REPORT 分隔同时提交给游戏),
-    //   自瞄与摇杆可在不同 slot 并行工作, 无需让权.
-    //   真实手指仅用于诊断显示, 不再干预自瞄.
+    // 自瞄开启
+    if (GlobalMemory::自身 == 0) {
+        if (g_aim_finger_down) AimInjectUp();
+        return;
+    }
 
+    // matrix 有效性检查 (渲染线程通过 vm_readv 读取 matrix, 首次可能未读到)
+    if (std::abs(matrix[0]) < 0.0001f && std::abs(matrix[1]) < 0.0001f) {
+        if (g_aim_finger_down) AimInjectUp();
+        return;
+    }
+
+    // ★ v2.60: 真实手指落下时让位 (slot 0 冲突避免)
+    //   问题: 游戏只认 slot 0 的视角控制, 真实手指落在左下摇杆(也在 slot 0)
+    //         自瞄和真实手指共用 slot 0 会冲突
+    //   方案: 真实手指落下时, 自瞄抬起让位 (不干扰摇杆)
+    //         真实手指抬起后, 自瞄立即重新 down (抢占 slot 0 视角控制)
+    //   限制: 走路时(摇杆按下)自瞄暂停滑动, 摇杆抬起后恢复
+    //         但摇杆抬起时角色停止移动 → 自瞄立即滑动视角
+    //         用户需求是"持续瞄准", 但物理上 slot 0 冲突无法避免
+    //         这是 v2.60 的折中方案, 先验证游戏是否认 slot 0
+    static int prev_real_finger_count = 0;
+    int real_finger_count = Touch::GetFingerCount();
+    if (real_finger_count > 0) {
+        // 有真实手指 → 让位 (抬起自瞄)
+        if (g_aim_finger_down) {
+            AimInjectUp();
+        }
+        prev_real_finger_count = real_finger_count;
+        return;  // 真实手指在时不注入
+    }
+    // 真实手指全部抬起 → 如果之前有, 重新 down (抢占 slot 0)
+    if (prev_real_finger_count > 0 && !g_aim_finger_down) {
+        // 下面的逻辑会 AimInjectDown
+    }
+    prev_real_finger_count = real_finger_count;
+
+    // 1. 目标选择 + 粘滞 (data_buffers 由数据线程更新, 原子读取)
     const auto& data = data_buffers[front_buffer_idx.load(std::memory_order_acquire)];
-    if (GlobalMemory::自身 == 0) { aim_end_slide(); return; }
-
-    // 目标选择 + 粘滞
     if (!aim_target_still_valid(data)) {
         g_aim_target = aim_select_nearest_hunter(data);
         if (!g_aim_target.valid) {
-            aim_end_slide();
+            if (g_aim_finger_down) AimInjectUp();
             return;
         }
+        // 新目标: 重置速度预测
+        g_aim_prev_world = g_aim_target.worldPos;
+        g_aim_velocity = {0, 0, 0};
+        g_aim_prev_time = ImGui::GetTime();
     }
 
-    // W2S 换算
+    // 2. 速度预测 (基于世界坐标变化)
+    double now = ImGui::GetTime();
+    float dt = (float)(now - g_aim_prev_time);
+    if (dt > 0.001f && dt < 0.5f) {
+        float dvx = g_aim_target.worldPos.X - g_aim_prev_world.X;
+        float dvy = g_aim_target.worldPos.Y - g_aim_prev_world.Y;
+        float dvz = g_aim_target.worldPos.Z - g_aim_prev_world.Z;
+        // 速度 = 位移/时间, 限幅防异常跳变
+        g_aim_velocity.X = std::clamp(dvx / dt, -500.0f, 500.0f);
+        g_aim_velocity.Y = std::clamp(dvy / dt, -500.0f, 500.0f);
+        g_aim_velocity.Z = std::clamp(dvz / dt, -500.0f, 500.0f);
+    }
+    g_aim_prev_world = g_aim_target.worldPos;
+    g_aim_prev_time = now;
+
+    // 3. 预测下一帧目标位置 (当前坐标 + 速度 * 预测时间)
+    float predict_time = 0.016f;
+    Vector3A predicted_pos;
+    predicted_pos.X = g_aim_target.worldPos.X + g_aim_velocity.X * predict_time;
+    predicted_pos.Y = g_aim_target.worldPos.Y + g_aim_velocity.Y * predict_time;
+    predicted_pos.Z = g_aim_target.worldPos.Z + g_aim_velocity.Z * predict_time;
+
+    // 4. W2S 换算 (用预测后的位置)
     float sx, sy, sw;
-    bool ok = optimizedWorldToScreen(g_aim_target.worldPos, matrix,
+    bool ok = optimizedWorldToScreen(predicted_pos, matrix,
                                      displayInfo.width * 0.5f, displayInfo.height * 0.5f,
                                      sx, sy, sw);
     if (!ok) {
+        // W2S 失败: 目标出屏幕, 连续失败30帧则抬起自瞄手指
         g_aim_slide.w2s_fail_count++;
-        // ★ v2.49: W2S 失败/目标出屏幕 → 不抬起, 不施加位移, 等待目标回屏
-        //   旧逻辑 aim_slide_up 会导致目标回屏后需重新 down, 期间完全不修正.
-        //   新逻辑: 手指保持在当前位置(不再 move), 视角不动, 目标回到屏幕内
-        //   立即从当前位置继续追踪, 无重按间隙.
-        //   连续失败 30 帧(~0.5秒)才彻底结束本次滑动(防永久占 slot).
-        if (g_aim_slide.w2s_fail_count >= 30) aim_end_slide();
+        if (g_aim_slide.w2s_fail_count >= 30 && g_aim_finger_down) {
+            AimInjectUp();
+        }
         return;
     }
     g_aim_slide.w2s_fail_count = 0;
 
-    // 屏幕中心死区
+    // 5. 计算屏幕中心差值
     float cx = displayInfo.width * 0.5f;
     float cy = displayInfo.height * 0.5f;
     float dx = sx - cx;
     float dy = sy - cy;
     float dist = sqrtf(dx * dx + dy * dy);
 
-    // ★ v2.49: 死区内不停止, 改为按距离衰减系数微调
-    //   旧逻辑: dist < deadzone 直接 return → 目标稍偏中心就完全不修正
-    //   用户反馈"稍微离开一点距离就不瞄了" 即此根因.
-    //   新逻辑: 死区内 step 乘 (dist/deadzone) 衰减, 越接近中心修正越弱,
-    //   既不停止追踪(持续锁敌), 又避免中心微抖(死区防抖本意).
-    //   死区半径默认缩小到 5px(原15px), 仅防止 1-2 像素抖动.
+    // 6. 死区衰减 (死区内不停止, 衰减系数使中心微调更柔和)
     float deadzone_factor = 1.0f;
     if (dist < g_aim_deadzone) {
-        deadzone_factor = dist / g_aim_deadzone;   // 0~1 线性衰减
+        deadzone_factor = dist / g_aim_deadzone;
     }
 
-    // ★ v2.49: 漂移控制 - 改为软回中(本帧 step 叠加回中分量), 不再抬起
-    //   旧逻辑: 漂移>80px 直接 aim_slide_up → 下一帧重按 → 持续追踪会反复抬起
-    //   用户反馈"持续几秒后就不瞄了" 即此根因(频繁抬起期间不修正).
-    //   新逻辑: 偏离起手点越远, 本帧 step 叠加越大的回中分量(向起手点拉),
-    //   既持续追踪目标, 又缓慢回中防漂移, 无抬起间隙.
-    //   回中分量方向 = 起手点 - 当前位置, 与追踪 step 叠加后限幅.
-    float home_pull_x = 0.0f, home_pull_y = 0.0f;
-    if (g_aim_tracking_id >= 0) {
+    // 7. 计算滑动增量 (平滑 + 死区衰减)
+    float step_x = dx * (1.0f - g_aim_smoothing) * deadzone_factor;
+    float step_y = dy * (1.0f - g_aim_smoothing) * deadzone_factor;
+
+    // 8. 软回中 (防漂移, 不抬起)
+    if (g_aim_finger_down) {
         float home_dx = g_aim_slide_x - g_aim_slide.cur_screen_x;
         float home_dy = g_aim_slide_y - g_aim_slide.cur_screen_y;
         float drift = sqrtf(home_dx * home_dx + home_dy * home_dy);
-        if (drift > 30.0f) {   // 偏离>30px 才开始软回中, 避免小幅修正被抵消
-            // 回中强度 = 偏离量的 15%, 与追踪 step 同量级, 平滑叠加
+        if (drift > 30.0f) {
             float pull_strength = std::min(0.15f, drift / 200.0f);
-            home_pull_x = home_dx * pull_strength;
-            home_pull_y = home_dy * pull_strength;
+            step_x += home_dx * pull_strength;
+            step_y += home_dy * pull_strength;
         }
     }
 
-    // 增量位移：平滑度越大移动越慢（系数 = 1 - smoothing）
-    // 叠加死区衰减系数(死区内弱化) + 软回中分量(防漂移)
-    float step_x = dx * (1.0f - g_aim_smoothing) * deadzone_factor + home_pull_x;
-    float step_y = dy * (1.0f - g_aim_smoothing) * deadzone_factor + home_pull_y;
-    // 单帧限幅 ±12px（60fps下最大720px/秒，避免overshoot震荡）
+    // 9. 单帧限幅 ±12px (60fps下最大720px/秒, 避免overshoot)
     step_x = std::clamp(step_x, -12.0f, 12.0f);
     step_y = std::clamp(step_y, -12.0f, 12.0f);
 
-    // 起手或增量移动
-    if (g_aim_tracking_id < 0) {
-        if (!aim_slide_down(g_aim_slide_x, g_aim_slide_y)) return;
-        g_aim_slide.tracking_id = g_aim_tracking_id;
+    // 10. 更新虚拟手指位置
+    g_aim_slide.cur_screen_x = std::clamp(g_aim_slide.cur_screen_x + step_x,
+                                          0.0f, (float)displayInfo.width);
+    g_aim_slide.cur_screen_y = std::clamp(g_aim_slide.cur_screen_y + step_y,
+                                          0.0f, (float)displayInfo.height);
+    g_aim_slide.last_move_time = now;
+
+    // 11. ★ 持续按下注入: down 一次, 之后每帧 move 更新位置
+    //    真实手指落下时仍维持 slot 1 按下 (不停止)
+    if (!g_aim_finger_down) {
+        AimInjectDown(g_aim_slide.cur_screen_x, g_aim_slide.cur_screen_y);
+    } else {
+        AimInjectMove(g_aim_slide.cur_screen_x, g_aim_slide.cur_screen_y);
     }
-    float new_x = std::clamp(g_aim_slide.cur_screen_x + step_x, 0.0f, (float)displayInfo.width);
-    float new_y = std::clamp(g_aim_slide.cur_screen_y + step_y, 0.0f, (float)displayInfo.height);
-    aim_slide_move(new_x, new_y);
+}
+
+// 初始化: 检测 max_slots (启动时调用一次)
+void InitAimMaxSlots() {
+    if (g_aim_max_slots < 0) {
+        g_aim_max_slots = AimDetectMaxSlots();
+    }
 }
 
 // ============================================================
@@ -307,10 +471,13 @@ void DrawAimFloatingButton() {
             if (move_dist < 5.0f) {
                 bool new_state = !g_aim_enabled;
                 g_aim_enabled = new_state;
+                // 关闭自瞄时立即抬起手指
+                if (!new_state && g_aim_finger_down) {
+                    AimInjectUp();
+                }
                 AddNotification(new_state ? "自瞄已开启" : "自瞄已关闭",
                                 1.2f, new_state ? ImVec4(0.3f, 1.0f, 0.3f, 1.0f)
                                                 : ImVec4(1.0f, 0.5f, 0.3f, 1.0f));
-                if (!new_state) aim_end_slide();
             }
             g_aim_btn_dragging = false;
         }
@@ -323,7 +490,7 @@ void DrawAimFloatingButton() {
 void DrawAimSlidePointIndicator() {
     if (!g_show_aim_slide_point) return;
     ImVec2 center;
-    bool moving = (g_aim_tracking_id >= 0);
+    bool moving = g_aim_finger_down;
     if (moving) {
         center = ImVec2(g_aim_slide.cur_screen_x, g_aim_slide.cur_screen_y);
     } else {
@@ -381,11 +548,13 @@ void DrawAimDiagPanel() {
                 g_aim_target.valid ? "OK" : "无",
                 g_aim_target.distance);
     ImGui::Text("滑动:%s W2S失败:%d 手指:(%.0f,%.0f)",
-                g_aim_tracking_id >= 0 ? "ON" : "OFF",
+                g_aim_finger_down ? "ON" : "OFF",
                 g_aim_slide.w2s_fail_count,
                 g_aim_slide.cur_screen_x, g_aim_slide.cur_screen_y);
-    ImGui::Text("平滑:%.2f 死区:%.0f 起手:(%.0f,%.0f)",
-                g_aim_smoothing, g_aim_deadzone, g_aim_slide_x, g_aim_slide_y);
+    ImGui::Text("速度:(%.0f,%.0f,%.0f) 平滑:%.2f",
+                g_aim_velocity.X, g_aim_velocity.Y, g_aim_velocity.Z,
+                g_aim_smoothing);
+    ImGui::Text("注入fd:%d SLOT:%d tid:%d max_slots:%d", g_aim_inject_fd, g_aim_slot, g_aim_tracking_id, g_aim_max_slots);
     ImGui::End();
 }
 
@@ -449,9 +618,9 @@ void SaveAimConfig(std::ofstream& file) {
     file << "aim_slide_pct_y=" << g_aim_slide_pct_y << "\n";
     file << "aim_slide_x=" << g_aim_slide_x << "\n";
     file << "aim_slide_y=" << g_aim_slide_y << "\n";
-    file << "show_aim_slide_point=" << g_show_aim_slide_point << "\n";
-    file << "show_aim_rect=" << g_show_aim_rect << "\n";
-    file << "show_aim_diag=" << g_show_aim_diag << "\n";
+    file << "show_aim_slide_point=" << (g_show_aim_slide_point ? 1 : 0) << "\n";
+    file << "show_aim_rect=" << (g_show_aim_rect ? 1 : 0) << "\n";
+    file << "show_aim_diag=" << (g_show_aim_diag ? 1 : 0) << "\n";
 }
 
 void OnAimScreenSizeChanged() {

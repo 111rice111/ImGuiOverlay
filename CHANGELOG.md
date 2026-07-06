@@ -1,5 +1,16 @@
 # 更新日志
 
+## [2026-07-05] — v2.44-stable: 修复卡屏 + 恢复方形窗口
+
+### 🐛 修复小米Pad6等设备卡屏
+v2.41 旋转重建 EGL surface 在部分设备失败导致界面冻结。
+
+### 修复方案
+1. 恢复方形窗口 {max,max}（不重建，无卡屏风险）
+2. drawBegin 移除窗口重建逻辑，仅同步 DisplaySize
+3. Render 显式设置 glViewport = DisplaySize
+4. 主循环 drawBegin 前先调 screen_config()
+
 ## [2026-07-05] — v2.43-stable: SimulateClick 坐标转换修复
 
 ### 🐛 修复自动盖板触摸点偏移

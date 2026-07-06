@@ -37,21 +37,16 @@ void AndroidImgui::EndFrame() {
   ImGui::Render();
   Render(ImGui::GetDrawData());
 }
-bool AndroidImgui::Recreate(ANativeWindow *window, float width, float height) {
-  // ★ Phase 2: 先重建 surface，成功才更新 m_Window/DisplaySize
-  // 失败时保留旧 window + 旧 surface，调用方不应销毁旧 window
-  if (!RecreateSurface(window, width, height)) {
-    return false;
-  }
+void AndroidImgui::Recreate(ANativeWindow *window, float width, float height) {
   m_Window = window;
   m_Width = width;
   m_Height = height;
+  RecreateSurface(window, width, height);
   if (ImGui::GetCurrentContext()) {
     ImGuiIO &io = ImGui::GetIO();
     io.DisplaySize = {width, height};
     io.DisplayFramebufferScale = ImVec2(1.0f, 1.0f);
   }
-  return true;
 }
 void AndroidImgui::Shutdown() {
   for (auto &texture : m_Textures) {
