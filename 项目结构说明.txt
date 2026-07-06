@@ -1,0 +1,218 @@
+======================================================================
+  ImGuiOverlay 项目目录结构说明
+  最后更新：2026-07-06
+======================================================================
+
+【项目概述】
+  游戏辅助 Overlay 项目，基于 ImGui 框架，Android NDK/C++ 编译。
+  注入到目标游戏中实现透视、自瞄、地图导航等功能。
+  最新版本：v2.45-stable
+
+======================================================================
+一、根目录文件
+======================================================================
+
+  📄 README.md                    项目说明文档
+  📄 CHANGELOG.md                 详细更新日志（Markdown格式，最全面）
+  📄 AI发版指南.md                 AI 智能体发版操作手册
+  📄 使用说明书.txt                用户安装使用说明书
+  📄 项目结构说明.txt              本文件 - 项目目录结构索引
+  📄 version-latest.txt           当前版本号信息
+  📄 地图配置-手机版.json          手机端地图配置文件
+  📄 音乐盒凳子配置.json           音乐盒指纹数据库（32个条目）
+  📄 skills-lock.json             AI技能锁定文件
+  📄 license.enc                  加密许可证文件
+  📄 overlay                      ★ 核心ELF可执行文件（ARM64）
+  📄 deploy.sh                    部署推送脚本
+  📄 build.gradle.kts             根Gradle构建配置
+  📄 settings.gradle.kts          Gradle项目设置
+  📄 gradle.properties            Gradle属性配置
+  📄 gradlew / gradlew.bat        Gradle包装器
+  📄 local.properties             Android SDK路径
+  📄 .gitignore                   Git忽略规则
+  📄 .last_deploy_md5             上次部署MD5校验值
+
+======================================================================
+二、源代码 (app/)
+======================================================================
+
+  app/src/main/cpp/               C++源代码（核心）
+  ├── main.cpp                    程序入口点
+  ├── CMakeLists.txt              CMake构建配置（NDK交叉编译）
+  ├── Android.mk                  ndk-build构建配置
+  ├── Application.mk              NDK应用配置
+  ├── include/                    头文件
+  │   ├── ImGui/                  ImGui图形库（v1.89+）
+  │   ├── Android_Graphics/       图形渲染（OpenGL/Vulkan）
+  │   ├── Android_draw/           游戏UI绘制核心
+  │   ├── Android_my_imgui/       ImGui Android适配
+  │   ├── Android_touch/          触摸输入处理
+  │   ├── My_Utils/               工具库（stb_image等）
+  │   └── native_surface/         Native窗口管理
+  └── src/                        源文件实现
+      ├── draw_Gui.cpp            ★ 核心UI绘制（~450KB，~10000行）
+      ├── AutoAim.cpp/h           自动瞄准逻辑
+      ├── DataManager.cpp/h       数据存取管理
+      ├── Structs.h               共享数据结构
+      ├── Name.h                  游戏实体名称定义
+      ├── game_offsets.h          游戏内存偏移量
+      ├── 千叶.h                  千叶功能模块
+      ├── driver_*.h              内核驱动通信
+      ├── net_*.h                 网络客户端（卡密验证）
+      ├── anti_debug.h            反调试保护
+      ├── anti_re.h               反逆向保护
+      ├── crypto.h                加密模块
+      ├── stealth.h               隐身/反检测
+      ├── secure_runtime.h        安全运行时
+      ├── ThreadAffinity.h        CPU线程亲和性
+      ├── Android_Graphics/       OpenGL/Vulkan渲染实现
+      ├── Android_my_imgui/       ImGui Android后端
+      ├── Android_touch/          触摸辅助实现
+      ├── ImGui/                  ImGui核心实现
+      └── My_Utils/               图像加载实现
+
+  app/src/main/assets/           应用资源
+  ├── map_config_new.json         新版地图配置
+  └── musicbox_stools.json        音乐盒工具配置
+
+  app/build.gradle.kts            App模块Gradle构建
+  app/proguard-rules.pro          ProGuard混淆规则
+
+======================================================================
+三、历史归档 (archive/)
+======================================================================
+
+  📁 历史版本二进制/               21个历史版本ELF文件
+  ├── overlay-v2.9 至 v2.45      开发版/用户版各版本二进制
+  ├── overlay_user_v249~v251     用户版版本代码备份
+  └── *.md5                      对应版本的MD5校验文件
+
+  📁 历史源码备份/                 历史源代码备份
+  ├── draw_Gui.cpp-v2.9-backup   v2.9源码备份
+  └── draw_Gui.cpp-v2.11-backup  v2.11源码备份
+
+  📁 更新日志归档/                 所有历史更新日志
+  ├── 完整更新日志汇总.txt         ★ 合并版，按版本号排序
+  ├── 构建交付记录.txt             构建部署时间戳记录
+  ├── 部署报告.txt                 单次部署报告
+  ├── [更新日志] v1.8~v2.20       早期版本更新日志（9个文件）
+  ├── 更新日志_v2.40~v2.49        近期版本更新日志（10个文件）
+  └── changelog_v249~v251         版本代码版更新日志（3个文件）
+
+======================================================================
+四、服务端 (backend/)
+======================================================================
+
+  📄 server_v3.py                 ★ 主服务器（Python，82KB）
+  📄 server_v2.py                 v2版服务器
+  📄 server.py                    原始服务器
+  📄 server_v3.php                PHP版服务器
+  📄 api.php                      API入口
+  📄 encrypt_key.py               密钥加密工具
+  📄 health_monitor.py            健康监控
+  📄 watchdog.py                  看门狗进程
+  📄 overlay.db                   ★ SQLite用户数据库
+  📄 schema.sql                   数据库Schema v1
+  📄 schema_v2.sql                数据库Schema v2
+  📄 overlay_config.txt           服务器连接配置（IP:端口）
+  📄 server_v3.b64                服务端Base64编码
+  📄 b64_lines.txt                Base64编码行数据
+  📄 DEPLOY_GUIDE.md              服务端部署指南
+  📄 QUICKSTART.md                服务端快速开始
+  📄 nginx-baota.conf             宝塔面板Nginx配置
+  📄 nginx-ssl.conf               SSL Nginx配置
+
+  📁 部署脚本/
+  ├── deploy.sh / deploy.bat      多平台部署脚本
+  ├── deploy.ps1                  PowerShell部署
+  ├── deploy_one_click.bat        一键部署完整版
+  ├── deploy_single.ps1           单文件部署
+  └── deploy_click.bat            快速部署
+
+======================================================================
+五、内核模块 (kernel_module/)
+======================================================================
+
+  📄 mem_rw.c                     ★ Linux内核内存读写驱动
+  📄 mem_rw_client.h              用户空间客户端接口
+  📄 Makefile                     Kbuild Makefile
+
+======================================================================
+六、逆向工具集 (tools/)
+======================================================================
+
+  📄 yr_helper                    ★ ELF辅助工具（ARM64，1.68MB）
+  📄 hjm_v2.3.sh                  哈基米v2.3脚本（超大Shell脚本）
+  📄 trace_action_id.py           动作ID追踪
+  📄 trace_scan.py                内存扫描追踪
+  📄 trace_self.py                自追踪
+  📄 trace_write.py               写入追踪
+  📄 analyze_hjm_actionid.py      动作ID分析
+  📄 analyze_v3.py                v3数据分析
+  📄 diag_adrp.py                 ADRP指令诊断
+  📄 diag_v2.py                   v2诊断
+  📄 extract_paths.py             路径提取（像素坐标→世界坐标）
+  📄 find_action_ui.py            查找动作UI
+  📄 search_rodata_refs.py        搜索.rodata引用
+  📄 search_strings_v2.py         字符串搜索v2
+  📄 start_server.sh              服务端启动脚本
+
+======================================================================
+七、地图数据 (maps/)
+======================================================================
+
+  📄 map2_floor1.png               地图2 一楼纹理（122KB）
+  📄 map2_floor1_main.txt         地图2 一楼主路径
+  📄 map2_floor1_sub.txt          地图2 一楼子路径
+  📄 map10_floor1.png              地图10 一楼纹理（118KB）
+  📄 map10_floor1_main.txt        地图10 一楼主路径
+  📄 map10_floor1_sub.txt         地图10 一楼子路径
+  📄 map19_floor1.png              地图19 一楼纹理（90KB）
+  📄 map19_floor1_main.txt        地图19 一楼主路径
+  📄 map19_floor1_sub.txt         地图19 一楼子路径
+
+======================================================================
+八、日志分析 (log_analysis/)
+======================================================================
+
+  📄 build_fingerprints.py         指纹数据库构建脚本
+  📄 enhanced_fingerprints.json    增强指纹数据
+  📄 fingerprint_summary.txt       指纹摘要
+  📁 log/                          游戏运行时日志
+  ├── 1.log ~ 52.log              52个主日志文件
+  ├── debug_0.log ~ debug_13.log  14个调试日志
+  └── debug_*_副本*.log           6个日志副本
+
+======================================================================
+九、构建产物 (build/)
+======================================================================
+
+  📁 reports/                      Gradle构建报告
+  └── problems-report.html        构建问题报告
+
+======================================================================
+十、版本历史速览
+======================================================================
+
+  v1.8 ~ v1.9      2026-06-27   出口拖拽冲突修复、路径保存
+  v2.0             2026-06-27   全面架构重构（Structs/DataManager/CoordTransform）
+  v2.2             2026-06-27   110分制评分系统（及格60分）
+  v2.3             2026-06-27   修复首次地图识别误显示
+  v2.9-stable      2026-06-27   指纹映射覆盖、SWITCH冷却、防抖
+  v2.12            2026-06-29   启动画面品牌重命名
+  v2.13            2026-06-29   路径导入功能（像素→世界坐标）
+  v2.16            2026-06-30   板子扫描、自身检测、触摸校准
+  v2.19            2026-06-30   内核模块隐身
+  v2.34            2026-07-01   修复评分18却匹配地图1 Bug
+  v2.36-stable     2026-07-01   移除诊断代码，恢复干净版本
+  v2.40            2026-07-05   触摸坐标系修复
+  v2.41            2026-07-05   非方形窗口+旋转重建EGL
+  v2.42            2026-07-05   Touch2Screen坐标轴自适应
+  v2.43            2026-07-05   SimulateClick坐标转换修复
+  v2.44            2026-07-05   修复卡屏+恢复方形窗口
+  v2.45-stable ★   2026-07-06   彻底修复跨设备触摸失效（坐标系统一）
+
+======================================================================
+  ImGuiOverlay (C) 2026 大米饭先生
+  Telegram: https://t.me/+67uRf9NT_04xMGM1
+======================================================================

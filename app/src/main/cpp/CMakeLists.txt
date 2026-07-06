@@ -1,5 +1,13 @@
 cmake_minimum_required(VERSION 3.10)
 project(ImGuiOverlay)
+
+# ========================================
+# ★ 版本号硬编码 — 每次发版前必须更新这 4 行！
+# ========================================
+set(OVERLAY_VERSION "v2.45-stable")
+set(OVERLAY_VERSION_CODE 245)
+set(OVERLAY_VERSION_STR "v2.45")
+
 # 默认用 Release 模式，优化体积和速度
 if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
@@ -71,7 +79,7 @@ SUBDIRLIST(IMGUI_SUBDIRS "${CMAKE_CURRENT_SOURCE_DIR}/imgui")
 target_include_directories(overlay PRIVATE ${IMGUI_SUBDIRS})
 
 # 关键：定义 VK_NO_PROTOTYPES，避免与 NDK 自带的 Vulkan 函数原型冲突
-target_compile_definitions(overlay PRIVATE VK_NO_PROTOTYPES VK_USE_PLATFORM_ANDROID_KHR IMGUI_DISABLE_DEBUG_TOOLS)
+target_compile_definitions(overlay PRIVATE VK_NO_PROTOTYPES VK_USE_PLATFORM_ANDROID_KHR IMGUI_DISABLE_DEBUG_TOOLS OVERLAY_VERSION="${OVERLAY_VERSION}" OVERLAY_VERSION_CODE=${OVERLAY_VERSION_CODE} OVERLAY_VERSION_STR="${OVERLAY_VERSION_STR}")
 # 链接系统库
 find_library(log-lib log)
 find_library(android-lib android)
@@ -112,7 +120,7 @@ target_include_directories(overlay_user PRIVATE
 target_include_directories(overlay_user PRIVATE ${ALL_INCLUDE_DIRS})
 target_include_directories(overlay_user PRIVATE ${INCLUDE_SUBDIRS})
 target_include_directories(overlay_user PRIVATE ${IMGUI_SUBDIRS})
-target_compile_definitions(overlay_user PRIVATE VK_NO_PROTOTYPES VK_USE_PLATFORM_ANDROID_KHR IMGUI_DISABLE_DEBUG_TOOLS AUTH_SERVER)
+target_compile_definitions(overlay_user PRIVATE VK_NO_PROTOTYPES VK_USE_PLATFORM_ANDROID_KHR IMGUI_DISABLE_DEBUG_TOOLS AUTH_SERVER OVERLAY_VERSION="${OVERLAY_VERSION}" OVERLAY_VERSION_CODE=${OVERLAY_VERSION_CODE} OVERLAY_VERSION_STR="${OVERLAY_VERSION_STR}")
 target_link_libraries(overlay_user
         ${log-lib}
         ${android-lib}

@@ -1,4 +1,3 @@
-v2.60
-MD5: 31401f63dffa5d6fea4a80ae86c68a67
-日期: 2026-07-06
-版本代码: 260
+v2.45-stable
+245
+e20fb148ffbb71f3ecb71549d2a7fc92

@@ -26,6 +26,10 @@ static My_Vector2 touch_scale;
 static My_Vector2 screenSize;
 static int screenX_max = 0;  // v2.42: 触摸驱动 absX.maximum（用于判断 absX 对应长/短边）
 static int screenY_max = 0;  // v2.42: 触摸驱动 absY.maximum
+static int screenX_min = 0;  // ★ v2.45: absX.minimum（部分设备非零）
+static int screenY_min = 0;  // ★ v2.45: absY.minimum
+static int screenX_range = 0; // ★ v2.45: absX.max - absX.min
+static int screenY_range = 0; // ★ v2.45: absY.max - absY.min
 static std::vector<Device> devices;
 static int nowfd;
 static int orientation = 0;
@@ -299,6 +303,10 @@ bool Init(const My_Vector2 &s, bool p_readOnly) {
   int screenY = devices[0].absY.maximum;
   screenX_max = screenX;  // v2.42: 保存用于 Touch2Screen 方向判断
   screenY_max = screenY;
+  screenX_min   = devices[0].absX.minimum;  // ★ v2.45: 处理非零最小值设备
+  screenY_min   = devices[0].absY.minimum;
+  screenX_range = screenX_max - screenX_min;
+  screenY_range = screenY_max - screenY_min;
   if (!readOnly) {
     struct uinput_user_dev ui_dev;
     nowfd = open("/dev/uinput", O_WRONLY | O_NONBLOCK);
@@ -379,14 +387,14 @@ bool Init(const My_Vector2 &s, bool p_readOnly) {
     devices[i].S2TY = (float)screenY / (float)devices[i].absY.maximum;
     pthread_create(&t, nullptr, TypeA, (void *)(long)i);
   }
-  if (size.x > size.y) {
-    std::swap(size.x, size.y);
-  }
-  if (otherTouch) {
-    std::swap(size.x, size.y);
-  }
-  touch_scale.x = (float)screenX / size.x;
-  touch_scale.y = (float)screenY / size.y;
+  // ★ v2.45: touch_scale 根据 absX 对应长边/短边正确映射
+  bool absX_is_long_ts = (screenX_max >= screenY_max);
+  float ref_short = absX_is_long_ts ? (float)screenY_max : (float)screenX_max;
+  float ref_long  = absX_is_long_ts ? (float)screenX_max : (float)screenY_max;
+  if (size.x > size.y) std::swap(size.x, size.y);
+  if (otherTouch) std::swap(size.x, size.y);
+  touch_scale.x = ref_short / size.x;
+  touch_scale.y = ref_long  / size.y;
   // system("chmod 000 -R /proc/bus/input/*");
   return true;
 }
@@ -435,11 +443,10 @@ void SetCallBack(const std::function<void(std::vector<Device> *)> &cb) {
   callback = cb;
 }
 My_Vector2 Touch2Screen(const My_Vector2 &coord) {
-  // ★ v2.42: 使用归一化坐标，自动适配 absX/absY 对应物理长边还是短边
-  // 原代码假设 absX=短边，当设备 absX=长边时坐标轴互换导致触摸点偏移
-  // coord.x ∈ [0, screenX_max], coord.y ∈ [0, screenY_max]（经 S2TX/S2TY 统一）
-  float nx = (screenX_max > 0) ? (coord.x / (float)screenX_max) : 0.0f;
-  float ny = (screenY_max > 0) ? (coord.y / (float)screenY_max) : 0.0f;
+  // ★ v2.45: 使用 (value-min)/range 归一化，处理非零最小值设备
+  // coord.x ∈ [screenX_min, screenX_max], coord.y ∈ [screenY_min, screenY_max]
+  float nx = (screenX_range > 0) ? ((coord.x - (float)screenX_min) / (float)screenX_range) : 0.0f;
+  float ny = (screenY_range > 0) ? ((coord.y - (float)screenY_min) / (float)screenY_range) : 0.0f;
 
   // 判断 absX 对应物理长边还是短边
   bool absX_is_long = (screenX_max >= screenY_max);
@@ -538,12 +545,13 @@ void UpdateScreenSize(const My_Vector2 &s) {
     screenSize = {size.y, size.x};
   }
   if (!devices.empty()) {
-    int screenX = devices[0].absX.maximum;
-    int screenY = devices[0].absY.maximum;
+    bool absX_is_long_ts = (screenX_max >= screenY_max);
+    float ref_short = absX_is_long_ts ? (float)screenY_max : (float)screenX_max;
+    float ref_long  = absX_is_long_ts ? (float)screenX_max : (float)screenY_max;
     if (size.x > size.y) std::swap(size.x, size.y);
     if (otherTouch) std::swap(size.x, size.y);
-    touch_scale.x = (float)screenX / size.x;
-    touch_scale.y = (float)screenY / size.y;
+    touch_scale.x = ref_short / size.x;
+    touch_scale.y = ref_long  / size.y;
   }
   lock.unlock();
 }
@@ -606,9 +614,9 @@ void Screen2Touch(float sx, float sy, int &out_raw_x, int &out_raw_y) {
     ny = yt_norm;
   }
 
-  // 还原到触摸驱动原始坐标
-  out_raw_x = (int)(nx * (float)screenX_max);
-  out_raw_y = (int)(ny * (float)screenY_max);
+  // 还原到触摸驱动原始坐标 (★ v2.45: 使用 min+range)
+  out_raw_x = (int)(nx * (float)screenX_range + (float)screenX_min);
+  out_raw_y = (int)(ny * (float)screenY_range + (float)screenY_min);
   lock.unlock();
 }
 } // namespace Touch

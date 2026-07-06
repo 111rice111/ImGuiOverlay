@@ -30,7 +30,8 @@ bool OpenGLGraphics::Create() {
   eglChooseConfig(m_EglDisplay, egl_attributes, &m_EglConfig, 1, &num_configs);
   eglGetConfigAttrib(m_EglDisplay, m_EglConfig, EGL_NATIVE_VISUAL_ID,
                      &m_EglFormat);
-  ANativeWindow_setBuffersGeometry(m_Window, 0, 0, m_EglFormat);
+  // ★ v2.45: 显式传尺寸，确保 buffer 与屏幕 1:1（修复部分设备 EGL 重建失败）
+  ANativeWindow_setBuffersGeometry(m_Window, (int)m_Width, (int)m_Height, m_EglFormat);
   const EGLint egl_context_attributes[] = {EGL_CONTEXT_CLIENT_VERSION, 3,
                                            EGL_NONE};
   m_EglContext = eglCreateContext(m_EglDisplay, m_EglConfig, EGL_NO_CONTEXT,
@@ -44,10 +45,7 @@ bool OpenGLGraphics::Create() {
 void OpenGLGraphics::Setup() { ImGui_ImplOpenGL3_Init("#version 300 es"); }
 void OpenGLGraphics::PrepareFrame(bool resize) { ImGui_ImplOpenGL3_NewFrame(); }
 void OpenGLGraphics::Render(ImDrawData *drawData) {
-  // v2.44: 显式设置 glViewport 为 DisplaySize
-  // 方形窗口 {max,max} 不变，viewport 裁剪到屏幕可见区域
-  ImGuiIO& io = ImGui::GetIO();
-  glViewport(0, 0, (GLsizei)io.DisplaySize.x, (GLsizei)io.DisplaySize.y);
+  // glViewport 由 ImGui_ImplOpenGL3_RenderDrawData 内部 SetupRenderState 设置
   glClear(GL_COLOR_BUFFER_BIT);
   ImGui_ImplOpenGL3_RenderDrawData(drawData);
   eglSwapBuffers(m_EglDisplay, m_EglSurface);
@@ -60,8 +58,8 @@ void OpenGLGraphics::RecreateSurface(ANativeWindow *newWindow, float width, floa
     eglDestroySurface(m_EglDisplay, m_EglSurface);
     m_EglSurface = EGL_NO_SURFACE;
   }
-  // 设置新窗口的 buffer 格式
-  ANativeWindow_setBuffersGeometry(newWindow, 0, 0, m_EglFormat);
+  // ★ v2.45: 显式传宽高，确保 buffer 尺寸与屏幕一致
+  ANativeWindow_setBuffersGeometry(newWindow, (int)width, (int)height, m_EglFormat);
   // 创建新 EGL surface
   m_EglSurface = eglCreateWindowSurface(m_EglDisplay, m_EglConfig, newWindow, nullptr);
   if (m_EglSurface == EGL_NO_SURFACE) {

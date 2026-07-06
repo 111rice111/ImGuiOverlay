@@ -1,0 +1,1074 @@
+======================================================================
+  ImGuiOverlay 项目完整更新日志（合并版）
+  合并时间：2026-07-06
+======================================================================
+
+--- [更新日志] v1.9_2026-06-27_路线终点强制为出口+出口拖拽冲突修复.txt ---
+========================================
+  ImGuiOverlay - 构建交付记录
+========================================
+构建日期: 2026-06-27 11:57
+编译方式: gradlew assembleRelease
+编译结果: BUILD SUCCESSFUL
+二进制大小: ~1.15MB
+
+[修复] 手动路线终点强制为出口
+  - 手动标记物品时（勾选路线规划后点击物品），
+    路线终点自动追加到最近出口
+  - 出口段使用金色双线，与普通物品段区分
+  - 地图上显示出口标记 + "[出口终点]"标签
+
+[修复] 出口图标拖动冲突（强化版）
+  - 使用全局阻断标记 g_map_drag_blocked
+  - 点击出口时立即阻止地图拖拽事件穿透
+  - 不再依赖代码执行顺序
+
+[修复] 路径数据重启后消失
+[修复] 出口标记改用 UV 空间直接渲染
+========================================
+
+--- [更新日志] v2.0_2026-06-27_全面重构与修复.txt ---
+=== ImGuiOverlay v2.0 — 全面重构版 (2026-06-27) ===
+
+【架构重构】
+  • 新增 Structs.h — 共享数据结构头文件，统一 Vector3A、MapConfig 等核心类型
+  • 新增 DataManager.h/cpp — 数据管理层，集中处理所有 JSON 序列化/反序列化
+  • 新增 CoordTransform 命名空间 — 世界坐标↔UV 坐标统一转换管道
+  • 重构 draw_Gui.cpp 中全部重复坐标转换代码为 CoordTransform 调用
+
+【核心 Bug 修复】
+  ★ 路径数据重启后消失: LoadMapConfigFromJSON 不再无条件清除出口/路径数据
+  ★ 坐标映射偏移: 所有 UV↔世界坐标转换使用统一的 CoordTransform 管道
+  ★ 出口拖拽与地图拖动冲突: 出口拖拽期间彻底禁用地图拖动（不再依赖 g_map_drag_blocked）
+  ★ 地图识别误报: 新增 g_locked_stable_frames 计数器，音乐盒移动检测需稳定 ≥30 帧
+  ★ 修复 g_map_drag_blocked 过早重置: 改为直接检查 g_drag_exit_idx
+  ★ 修复三处重复坐标变换: LongPressPopup 中"标记为出口"/"设为途经点"/UI 按钮
+  ★ 修复 text1_pos/title_size 变量作用域错误(Draw_Main_Optimized)
+
+【新增功能】
+  • 新增"数据管理"标签页 — 显示各地图/出口/路径统计，支持全部数据导出和备份恢复
+  • 新增"调试信息"标签页 — 实时显示坐标、地图识别阶段、稳定帧数、评分调试信息
+  • 小地图左上角增加地图/楼层/校准状态标识（绿色=已校准，黄色=未校准）
+
+【UI 优化】
+  • 路径列表按钮已从"X"改为"删除"（清晰表意）
+  • 路径列表增加选中高亮（★）和删除确认弹窗
+  • 数据管理页显示 JSON 配置文件和指纹数据库完整状态
+  • 调试信息页可切换出口调试十字和通行网络显示
+
+【构建与交付】
+  • CMakeLists.txt 使用 GLOB_RECURSE 自动编译所有新 .cpp 文件
+  • 每次构建自动生成中文更新日志（本文件）
+
+【技术限制说明】
+  • 坐标校准需要用户手动点选参考点后保存，自动校准功能暂未实现
+  • 游戏 SceneID/地图名称的内存地址未找到，仍以物体指纹匹配为主
+  • 路径强制终点为出口的功能保留在路线规划层，手动绘制路径不做强制
+
+========================================
+
+--- [更新日志] v2.0_2026-06-27_路径按地图楼层隔离.txt ---
+========================================
+  ImGuiOverlay - 构建交付记录
+========================================
+构建日期: 2026-06-27 12:18
+编译方式: gradlew assembleRelease
+编译结果: BUILD SUCCESSFUL
+二进制大小: ~1.16MB
+
+[重构] 路径数据改为按地图/楼层隔离存储
+  - 新增 g_saved_paths_by_map 全量存储结构
+  - 不同地图/楼层的路径自动隔离，切换时自动加载
+  - 绘制路径时自动关联当前地图和楼层标识
+  - 保存时按地图+楼层分组写入 JSON，互不覆盖
+  - 加载时自动将路径归入对应地图/楼层
+
+[修复] 手动路线终点强制为出口（金色双线）
+[修复] 出口拖拽冲突（全局阻断标记）
+========================================
+
+--- [更新日志] v2.3_2026-06-27_修复首次地图识别为地图1的问题.txt ---
+========================================
+  [更新日志] v2.3 - 修复首次地图识别为"地图1"
+========================================
+构建日期: 2026-06-27 16:34
+编译方式: gradlew clean assembleRelease
+编译结果: BUILD SUCCESSFUL
+
+变更内容:
+
+1. [修复] g_current_map_index 默认值 0 → -1
+   - 原来启动后默认显示 g_all_maps[0].name = "地图1 一楼"
+   - 现在显示"无地图"直到自动识别完成
+
+2. [修复] 移除 config 对 g_current_map_index 的持久化恢复
+   - 不再从 overlay_config.txt 恢复旧地图索引
+   - 每次启动强制重检测
+
+3. [修复] LOCKED 状态新增首次检测逻辑
+   - 当 g_current_map_index == -1 且评分 ≥ 60 分、无并列时
+   - ExecuteMapSwitch 自动切换到正确地图
+
+根因:
+- g_current_map_index = 0 始终指向"地图1"
+- LOCKED 只在"重检"(60帧+15分差距×3秒)时才切换
+- 首次进入游戏从未执行完整识别→切换流程
+
+安装:
+- 推送至 /data/local/tmp/overlay (chmod 777)
+- 重启 overlay 即可生效
+
+========================================
+
+--- [更新日志] v2.4_2026-06-27_修复一楼误判为二楼.txt ---
+========================================
+  [更新日志] v2.4 - 修复一楼误判为二楼
+========================================
+构建日期: 2026-06-27 16:50
+编译方式: gradlew assembleRelease（增量编译）
+编译结果: BUILD SUCCESSFUL
+
+变更内容:
+
+1. [修复] ★ GetFloorFromPlayerZ 使用地图专属阈值
+   - 移除硬编码 Z > 190 判定为 2 楼
+   - 改为使用 g_all_maps[当前地图索引][0].floorZThreshold
+   - 每张地图有自己的 floor_z_threshold（来自 map_config.json）
+
+2. [原因]
+   - 部分游戏地图的 1 楼海拔本身就超过 190（例如建在山坡上）
+   - 硬编码 190 阈值总是把这部分地图的 1 楼判为 2 楼
+
+3. [影响范围]
+   - 玩家楼层检测 GetFloorFromPlayerZ
+   - 瞬移时楼层同步（SWITCH_DETECTED）
+   - 楼层切换（FLOOR_CHANGE）
+   - 常规验证 UpdateCurrentFloor
+   - ExecuteMapSwitch 首次设定楼层
+
+4. [默认值]
+   - 无地图时（g_current_map_index < 0）回退 250
+   - JSON 中未设 floor_z_threshold 时默认 250
+   - 可在 地图管理 → 校准参数 中调整
+
+安装:
+- 推送至 /data/local/tmp/overlay (chmod 777)
+- 重启 overlay 即可生效
+
+========================================
+
+--- changelog_v249.txt ---
+====== v2.49 更新日志 (2026-07-06) ======
+
+【关键修复】持续锁敌不中断 + 走路同时自瞄 + 移除抖动机制
+
+◆ 用户反馈
+1. 自瞄效果不好, 稍微离开一点距离就不瞄准了
+2. 希望持续瞄准, 走路时也要一直瞄
+3. 不要加抖动机制
+
+◆ 根因分析 (3 处停止追踪的代码路径)
+1. 真实手指让权 → 走路时停止
+   - 旧逻辑: Touch::GetFingerCount() > 0 → aim_slide_up 抬起让权 → 自瞄停
+   - 用户走路时摇杆 finger=1, 触发让权, 自瞄完全不工作
+   - 这正是"走路时不瞄"的根因
+
+2. 死区内直接 return → 稍偏就停
+   - 旧逻辑: dist < 15px 直接 return, 不再修正
+   - 目标在屏幕中心 15px 内完全不追踪 → "稍微离开就不瞄"
+   - 用户感知为"自瞄距离稍远就失效"
+
+3. 漂移>80px 抬起重按 → 持续追踪间隙不修正
+   - 旧逻辑: 漂移超 80px → aim_slide_up 抬起 → 下一帧重按
+   - 持续追踪几秒后频繁抬起, 期间不修正 → 追踪不连续
+
+◆ 修复方案
+1. 移除"真实手指让权"机制 (核心)
+   - slot 2 已与真实摇杆 slot 0 物理隔离(TypeA 用 slot 值作 Finger[] 索引,
+     Upload 把 Finger[0]+Finger[2] 通过 SYN_MT_REPORT 分隔同时提交给游戏)
+   - 自瞄与摇杆可在不同 slot 并行工作, 无需让权
+   - 真实手指仅用于诊断显示, 不再干预自瞄
+   - 效果: 走路按摇杆时自瞄持续锁敌
+
+2. 死区改为衰减系数 (不再停止)
+   - 旧: dist < deadzone 直接 return
+   - 新: dist < deadzone 时 step 乘 (dist/deadzone) 衰减系数
+     越接近中心修正越弱, 但不停止
+   - 既持续追踪目标, 又避免中心 1-2px 抖动
+   - 死区默认 15→5px (仅防 1-2px 抖动)
+
+3. 漂移改为软回中 (不再抬起)
+   - 旧: 漂移>80px → aim_slide_up 抬起 → 重按间隙不修正
+   - 新: 偏离起手点>30px 时, 本帧 step 叠加 15% 回中分量
+     既持续追踪目标, 又缓慢回中防漂移, 无抬起间隙
+
+4. W2S 失败改为保持等待 (不再抬起)
+   - 旧: W2S 失败 → aim_slide_up → 重按间隙不修正
+   - 新: W2S 失败 → 手指保持当前位置不 move, 等待目标回屏
+   - 连续失败 30 帧(~0.5秒)才彻底结束(防永久占 slot)
+
+5. 默认参数优化
+   - 平滑度 0.85→0.7 (系数 0.15→0.3, 更激进追踪, 减少延迟)
+   - 死区 15→5px (仅防 1-2px 抖动, 不再"稍偏就停")
+   - 最大追踪距离 30→50 米 (扩大追踪范围)
+
+◆ 文件改动
+- app/src/main/cpp/src/Android_draw/AutoAim.cpp (5 处核心修改)
+- app/src/main/cpp/src/Android_draw/net_client.h (CURRENT_VERSION 248→249)
+
+◆ 部署流程 (参照使用说明书)
+1. adb push overlay_user /sdcard/overlay_user_tmp
+2. su -c 'cp /sdcard/overlay_user_tmp /data/local/bin/overlay_user && chmod 777 ... && rm ...'
+3. setsid 后台启动 (避免 ADB 断开 SIGHUP)
+
+◆ 版本信息
+版本代码: 249
+MD5: 8497b772843aa4a593ff2654f383f634
+
+◆ 验收测试
+1. 开自瞄 → 走路按摇杆 → 视角应持续锁敌不中断
+2. 目标在屏幕中心附近 → 仍持续微调(不再"稍偏就停")
+3. 持续追踪 10 秒以上 → 不出现间隙性停顿
+4. 目标出屏幕 → 视角停止, 目标回屏立即继续追踪
+5. 摇杆走位 + 自瞄锁敌 → 两者持续并行, 互不干扰
+
+--- changelog_v250.txt ---
+====== v2.50 更新日志 (2026-07-06) ======
+
+【关键修复】真实手指落下时自瞄失效 → 直写 uinput 绕过 TypeA 链路
+
+◆ 用户反馈
+开自瞄后, 真实手指放到屏幕上时自瞄就失效了
+W2S 没有失败, 滑动一直显示 ON, 目标一直 OK
+即: 状态机正常运行, 但滑动没产生效果
+
+◆ 根因分析 (TypeA + Upload() 的 SYN_MT_REPORT 链路缺陷)
+旧注入链路:
+  AutoAim write(/dev/input/eventX, slot=2)
+    → 真实触摸屏 evdev 缓冲 (被 EVIOCGRAB)
+    → TypeA 线程 read() 读到真实手指+自瞄事件混合流
+    → SYN_REPORT 时 Upload() 提交, 只提交当前 latest 对应 Finger[]
+    → 自瞄 pointer 被遗漏或 tracking_id 错乱
+    → 真实手指落下时自瞄完全失效
+
+关键问题:
+1. 自瞄事件与真实手指事件混合在 TypeA 读取流
+2. Upload() 用 SYN_MT_REPORT (Type A 协议) 顺序提交
+3. 真实手指落下时 latest 变量在 slot 0/2 间切换
+4. SYN_REPORT 只提交当前 latest 对应 Finger, 自瞄被遗漏
+
+◆ 修复方案: 自瞄直写 uinput (nowfd), 绕过 TypeA/Upload
+新注入链路:
+  AutoAim → Touch::InjectAimTouch(screen_x, screen_y, tid, is_down)
+    → 直接 write(nowfd, ev[], ...) 写 uinput 虚拟设备
+    → Android InputReader 给 uinput 分配独立 deviceId
+    → 真实手指(经 TypeA→Upload→nowfd, slot 0)与自瞄(slot 2)
+       在 InputReader 层合并为合法多指 MotionEvent
+    → 物理隔离, 真实手指落下时自瞄仍持续工作
+
+◆ 文件改动
+1. TouchHelperA.h
+   - 新增 InjectAimTouch() 接口声明
+2. TouchHelperA.cpp
+   - 实现 InjectAimTouch(): 构造完整一帧事件数组(slot 2 + tracking_id +
+     位置 + 压力 + 接触面积 + SYN_REPORT), 一次 write 原子提交
+3. AutoAim.cpp
+   - aim_slide_down/move/up 改为调用 Touch::InjectAimTouch
+   - 删除 g_aim_touch_fd / aim_emit / aim_write_position (不再写真实设备)
+   - 删除 aim_end_slide 中的 close(fd) (无 fd 需要 close)
+4. net_client.h: CURRENT_VERSION 249→250
+
+◆ 关键技术点
+- uinput 已注册 ABS_MT_SLOT/TRACKING_ID/POSITION_X/Y (Init 中 UI_SET_ABSBIT)
+- 自瞄用 slot 2, 真实手指经 Upload 提交 slot 0
+- 一次 write 提交完整一帧 (slot + tracking_id + 位置 + 按键 + SYN_REPORT)
+  避免半帧被 InputReader 消费导致指针错位
+- 自瞄 tracking_id 从 1000 起步自增, 避免与真实手指低位 id 冲突
+
+◆ 部署流程 (参照 ai读.md)
+1. adb push overlay_user → /sdcard/overlay_user_tmp
+2. adb push overlay_user_v250 → /sdcard/overlay_user_v250
+3. adb push version-latest.txt → /sdcard/version-latest.txt
+4. adb push changelog_v250.txt → /sdcard/changelog_v250.txt
+5. su -c 'cp ... /data/local/bin/ && chmod 777 ...'
+6. killall 旧版进程
+7. setsid 后台启动
+
+◆ 版本信息
+版本代码: 250
+MD5: f60cee4eeacbfa072d4a5a98816c4b7f
+
+◆ 验收测试
+1. 开自瞄 → 真实手指放屏幕上 → 自瞄应持续锁敌不失效
+2. 按摇杆走路 → 视角持续锁敌, 互不干扰
+3. 持续追踪 30 秒以上 → 不中断
+4. W2S 失败时保持当前位置, 目标回屏立即继续追踪
+5. 摇杆走位 + 自瞄锁敌 + 技能按钮 → 三者并行无冲突
+
+--- changelog_v251.txt ---
+====== v2.51 更新日志 (2026-07-06) ======
+
+【关键修复】真实手指落下时自瞄失效 → 仍走盖板路径,绕过 evdev 缓冲竞争
+
+◆ 用户反馈
+v2.49/v2.50: 开自瞄后真实手指放屏幕上, 自瞄就失效
+W2S 没失败, 滑动 ON, 目标 OK, 但滑动没效果
+v2.50 直写 uinput 被游戏过滤, 必须走盖板路径
+
+◆ 根因分析 (write /dev/input/eventX 的 evdev 缓冲竞争)
+旧链路 (v2.49):
+  AutoAim write(/dev/input/eventX, slot=2)
+    → 真实触摸屏 evdev 缓冲
+    → TypeA read() 读到真实手指+自瞄事件混合流
+    → SYN_REPORT → Upload() 提交到 nowfd
+
+问题:
+  真实手指落下时事件流密集 (slot 0 down + 多个 move)
+  自瞄的 slot 2 事件被挤到后面读取
+  Finger[2].pos 更新延迟或丢失 → Upload 提交旧值 → 自瞄失效
+
+◆ 修复方案: 直接更新 Finger[2] + 调用 Upload() (仍是盖板路径)
+新链路 (v2.51):
+  AutoAim → Touch::InjectAimTouch(screen_x, screen_y, tid, is_down)
+    → lock.lock()
+    → 直接更新 devices[0].Finger[2].pos/isDown/id
+    → 调用 Upload() (盖板路径: SYN_MT_REPORT 分隔 + write(nowfd))
+    → lock.unlock()
+
+关键点:
+1. 仍走盖板路径: Upload 内部 write(nowfd), 提交格式与盖板一致
+   → 不被反作弊过滤
+2. 绕过 evdev 缓冲: 不再 write(/dev/input/eventX), 不与真实手指事件竞争
+   → 真实手指落下时自瞄仍能立即更新 Finger[2]
+3. Upload 遍历所有 isDown 的 Finger, 同时提交:
+   - Finger[0] (真实摇杆 slot 0)
+   - Finger[2] (自瞄 slot 2)
+   游戏收到合法两指 MotionEvent, 互不冲突
+4. lock 保护: AutoAim 的 Upload 与 TypeA 的 Upload 串行执行, 无并发写冲突
+
+◆ 文件改动
+1. TouchHelperA.h: 新增 InjectAimTouch() 接口声明
+2. TouchHelperA.cpp:
+   - 实现 InjectAimTouch(): 更新 devices[0].Finger[2] + 调用 Upload()
+3. AutoAim.cpp:
+   - aim_slide_down/move/up 改为调用 Touch::InjectAimTouch
+   - 删除 g_aim_touch_fd / aim_emit / aim_write_position (不再 write 真实设备)
+4. net_client.h: CURRENT_VERSION 250→251
+
+◆ 部署流程 (参照 ai读.md)
+1. adb push overlay_user → /sdcard/overlay_user_tmp
+2. adb push overlay_user_v251 → /sdcard/overlay_user_v251
+3. adb push version-latest.txt → /sdcard/version-latest.txt
+4. adb push changelog_v251.txt → /sdcard/changelog_v251.txt
+5. su -c 'cp ... /data/local/bin/ && chmod 777 ...'
+6. killall 旧版进程
+7. setsid 后台启动
+
+◆ 版本信息
+版本代码: 251
+MD5: 6f787b11253b2e4ed419ec184b26f71b
+
+◆ 验收测试
+1. 开自瞄 → 真实手指放屏幕上 → 自瞄应持续锁敌不失效
+2. 按摇杆走路 → 视角持续锁敌, 互不干扰
+3. 持续追踪 30 秒以上 → 不中断
+4. 摇杆走位 + 自瞄锁敌 → 两者并行无冲突
+
+--- [更新日志] v1.8+_2026-06-27_修复出口拖拽冲突与路径保存问题.txt ---
+========================================
+  ImGuiOverlay - 构建交付记录
+========================================
+构建日期: 2026-06-27 11:50
+编译方式: gradlew assembleRelease（增量编译）
+编译结果: BUILD SUCCESSFUL（0 error）
+二进制大小: 1,152,488 bytes
+
+--- 本次变更内容 ---
+
+[修复] 出口图标拖动时小地图也跟着移动的冲突
+  - 根因: 点击出口时，点击事件同时触发了出口拖拽和地图拖拽
+  - 修复: 出口拖拽开始时设置阻断标记 g_map_drag_blocked，
+    地图拖拽逻辑检测到标记后跳过执行，实现事件拦截
+
+[修复] 路径数据重启后消失
+  - 根因: g_saved_paths.clear() 在 JSON 加载循环内部被调用
+  - 修复: 移到循环外部
+
+[重构] 出口标记改用 UV 空间直接渲染
+[新增] 出口标记可拖拽调整位置
+[新增] Json 配置备份保护
+[新增] 每次推送附带中文版更新日志
+
+--- 手机端文件 ---
+/data/local/tmp/overlay                                     (二进制)
+/data/local/tmp/[更新日志] v1.8+_2026-06-27_修复出口拖拽冲突与路径保存问题.txt
+
+========================================
+
+--- [更新日志] v2.12_2026-06-29_启动画面品牌重命名.txt ---
+=== [更新日志] v2.12 — 2026-06-29 20:22 ===
+
+🎨 品牌更新
+============
+- 启动画面改为品牌横幅显示：
+  标题：大米饭先生
+  Telegram：https://t.me/+67uRf9NT_04xMGM1
+- 系统状态提示保留在横幅下方
+
+--- [更新日志] v2.19_2026-06-30_内核模块隐身+删除用户层备胎.txt ---
+=== v2.19 更新日志 ===
+日期: 2026-06-30
+Git commit: c50011dd
+
+【内核模块隐身】
+  - 设备名 /dev/mem_rw → /dev/sztch0 (6字符纯字母, 伪装为Synaptics触摸屏驱动)
+  - MODULE_AUTHOR → "Synaptics Inc."
+  - MODULE_DESCRIPTION → "Synaptics TCM Touchscreen Firmware Driver"
+  - 删除所有 printk(), dmesg 不再留痕
+  - ioctl 接口保持与 driver_rt.h 兼容 (OP_READ=0x801, OP_WRITE=0x802)
+
+【删除用户层备胎代码】
+  - 千叶.h 中 process_vm_readv 系统调用路径全部删除
+  - PhysicalAddressCache 类删除 (pagemap 验证不再需要)
+  - MemoryBatchReader 类删除
+  - mem_rw_client.h 死代码文件删除
+  - draw_Gui.cpp 中 local_mimic_cache 引用移除
+
+【只保留内核路径】
+  - vm_readv/vm_writev 现在仅通过 driver_rt.h → ioctl → /dev/sztch0 这一条路
+  - 不再有任何用户层 fallback
+
+【其他】
+  - kernel_module/Makefile 更新 insmod/rmmod 命令匹配新模块名
+
+--- [更新日志] v2.20_2026-06-30_四项优化.txt ---
+v2.20 更新日志 — 2026-06-30
+
+=== 四项 UI/功能优化 ===
+
+1. 木诊断浮窗开关
+   - 自动盖板设置新增「显示诊断」复选框
+   - 控制"监管者:X 板子:X 判区:OK 冷却:X.X"浮窗显隐
+   - 默认关闭，不占屏幕
+
+2. 监管者自动关闭盖板
+   - 检测到自己是监管者时，自动关闭自动盖板所有功能
+   - 避免监管者误触发砸板
+
+3. 地图识别状态浮窗开关
+   - 地图管理新增「显示识别状态」复选框
+   - 控制左上角 LOCKED/已识别 浮窗显隐
+
+4. 校准便利化
+   - 勾选「启用校准」时小地图自动放大至屏幕75%并居中
+   - 取消勾选时恢复到之前的位置和大小
+
+--- 更新日志_v2.40_2026-07-05.txt ---
+====== v2.40 更新日志 (2026-07-05) ======
+
+【重要修复】触摸系统坐标系对齐
+
+◆ 修复问题
+1. 不同设备菜单按不了 — 已修复
+2. 悬浮窗标题栏不能拖动 — 已修复
+3. 触摸点和显示点不一致 — 已修复
+
+◆ 根因
+ImGui DisplaySize 在初始化时被设置为方形 {max, max}，
+但触摸注入坐标范围为 {min, max} 矩形空间，两者不匹配。
+导致触摸 x 方向存在"死区"（min 到 max 之间的区域无法触摸），
+宽高比越大的设备死区越大（19.5:9 屏只有 45% 可触摸区域）。
+
+◆ 修复方案
+在 drawBegin() 中每帧同步 ImGui DisplaySize 为真实屏幕尺寸
+(displayInfo.width × displayInfo.height)，确保：
+- ImGui 渲染空间与触摸坐标系统完全一致
+- Touch2Screen 通过 orientation 参数已正确变换坐标
+- 旋转时 setOrientation 已处理坐标变换
+
+◆ 影响范围
+- 菜单按钮命中测试恢复正常
+- 悬浮窗标题栏拖动恢复正常
+- 触摸点精度提升（所有设备）
+- 旋转后一帧内自动校正
+
+◆ 版本信息
+版本代码: 240
+MD5: 374706be8dec228c66032a0842148cbf
+
+--- 更新日志_v2.41_2026-07-05.txt ---
+====== v2.41 更新日志 (2026-07-05) ======
+
+【重要修复】非方形窗口 + 旋转重建 EGL Surface
+
+◆ v2.40 遗留问题
+v2.40 仅同步了 ImGui DisplaySize，但 native window 仍是方形 {max,max}。
+方形窗口在屏幕上的渲染位置可能与屏幕可见区域不匹配，
+导致"悬浮窗显示位置和实际位置不一样"。
+
+◆ v2.41 彻底修复
+1. 创建真实屏幕尺寸的非方形窗口 {width, height}
+2. 旋转/折叠时重建 native window + EGL surface（不销毁 GL context）
+3. 新增 OpenGLGraphics::RecreateSurface() — 保留所有纹理和 ImGui 状态
+4. 新增 Touch::UpdateScreenSize() — 轻量更新触摸坐标系，不重开设备
+5. 新增 AndroidImgui::Recreate() — 统一重建入口
+
+◆ 修改文件
+- main.cpp: 非方形窗口创建
+- OpenGLGraphics.h/cpp: 保存 EGLConfig + RecreateSurface 实现
+- AndroidImgui.h/cpp: Recreate 虚方法
+- TouchHelperA.h/cpp: UpdateScreenSize 轻量更新
+- draw_Gui.cpp: drawBegin 旋转重建逻辑
+
+◆ 版本信息
+版本代码: 241
+MD5: 66659f847675261500a286f932f294f9
+
+--- 更新日志_v2.42_2026-07-05.txt ---
+====== v2.42 更新日志 (2026-07-05) ======
+
+【修复】Touch2Screen 坐标轴方向自适应
+
+◆ 修复问题
+触摸点和显示点不一致（部分设备）
+
+◆ 根因
+原 Touch2Screen 假设触摸驱动 absX 对应屏幕短边。
+当设备 absX 对应长边时，X/Y 坐标轴互换，导致触摸点偏移。
+
+◆ 修复方案
+用归一化坐标重写 Touch2Screen：
+1. 保存触摸驱动 absX/absY.maximum
+2. 归一化坐标到 [0,1]
+3. 判断 absX 对应物理长边还是短边
+4. 自动交换坐标轴，确保 xt=短边方向、yt=长边方向
+
+◆ 版本信息
+版本代码: 242
+MD5: cb84c4e879f55af07d75221119d13227
+
+--- 更新日志_v2.43_2026-07-05.txt ---
+====== v2.43 更新日志 (2026-07-05) ======
+
+【修复】SimulateClick 坐标转换修复
+
+◆ 修复问题
+自动盖板"测试触摸"显示位置和实际注入位置不一致
+
+◆ 根因
+SimulateClick 中坐标转换存在两个缺陷：
+1. raw_x = tx / displayInfo.width * g_touch_max_x 假设 absX=短边
+2. 未做 orientation 旋转变换
+
+◆ 修复方案
+新增 Touch::Screen2Touch() — Touch2Screen 的逆运算：
+1. 逆 orientation 变换（屏幕坐标→物理统一坐标）
+2. 归一化 + absX/absY 方向自适应
+3. 还原到触摸驱动原始坐标
+
+SimulateClick 改用 Screen2Touch 替代手动转换。
+
+◆ 补充修复
+Screen2Touch 补全 otherTouch=true 分支的逆变换
+
+◆ 版本信息
+版本代码: 243
+MD5: fa5e5c4cc462db8b6964a64d241e954e
+
+--- 更新日志_v2.44_2026-07-06.txt ---
+====== v2.44 更新日志 (2026-07-06) ======
+
+【底层重构】触摸输入路径事件队列化 + EGL 两阶段重建
+
+◆ 修复问题
+1. 不同设备菜单点击无反应 / 悬浮窗拖拽失效
+2. 旋转/折叠屏幕后卡屏（小米 Pad6 等设备尤甚）
+3. 快速点击丢失、触摸点与显示点不一致
+
+◆ 根因分析
+问题 A：触摸线程直写 io.MousePos/io.MouseDown[0]，与渲染线程采样窗口产生竞态
+  - 快速点击在一帧内 down→up 被丢失 → 菜单点不动
+  - 多次翻转 MouseDown → IsMouseClicked 永不触发 → 拖拽启动失败
+  - 240Hz 触摸面板竞态概率指数上升 → "不同设备表现不同"
+
+问题 B：EGL RecreateSurface 先销毁旧 surface 再创建新的
+  - eglCreateWindowSurface 失败时无旧 surface 可回退
+  - eglSwapBuffers 持续失败 → 卡屏
+  - 各厂商 EGL 驱动严格度不同 → 部分设备必现
+
+问题 C：UpdateScreenSize 未同步更新 screenX_max/screenY_max
+  - 旋转后部分设备 absX/absY.maximum 变化，归一化基准错误 → 触摸偏移
+
+◆ 修复方案（底层架构重构）
+
+■ Phase 1: 触摸输入路径事件队列化（消除竞态根因）
+  - 新增 FingerEvent 结构 + SPSCRingBuffer<256> 无锁队列
+  - TypeA 触摸线程不再直写 io，改为 push 事件到队列
+  - 新增 Touch::PumpEvents()，渲染线程在 ImGui::NewFrame 前 drain
+  - 走 io.AddMousePosEvent / io.AddMouseButtonEvent 官方事件 API
+  - 调用点: main.cpp 主循环 drawBegin() 后、NewFrame() 前
+  - 行为对齐桌面版（单线程事件队列），从根本上消除竞态
+
+■ Phase 2: EGL Surface 两阶段重建（消除卡屏根因）
+  - OpenGLGraphics::RecreateSurface 改为先创建新 surface 再销毁旧的
+  - eglCreateWindowSurface 失败时保留旧 surface，渲染继续
+  - eglMakeCurrent 失败时回退到旧 surface
+  - Render() 在 EGL_NO_SURFACE 时跳过 eglSwapBuffers
+  - drawBegin() 两阶段：先创建新 window，Recreate 成功才销毁旧 window
+  - 失败时保留旧 window，下一帧自动重试
+  - EGL 重建后调用 InvalidateMapTextures() 强制纹理重载
+
+■ 附带修复
+  - UpdateScreenSize 同步更新 screenX_max/screenY_max（修复根因 C）
+  - ThreadAffinity.h 补 #include <vector>（预先存在的缺失）
+
+◆ 文件改动
+  - app/src/main/cpp/include/Android_touch/TouchHelperA.h
+  - app/src/main/cpp/src/Android_touch/TouchHelperA.cpp
+  - app/src/main/cpp/include/Android_my_imgui/AndroidImgui.h
+  - app/src/main/cpp/src/Android_my_imgui/AndroidImgui.cpp
+  - app/src/main/cpp/include/Android_Graphics/OpenGLGraphics.h
+  - app/src/main/cpp/src/Android_Graphics/OpenGLGraphics.cpp
+  - app/src/main/cpp/src/Android_draw/draw_Gui.cpp
+  - app/src/main/cpp/src/Android_draw/net_client.h (CURRENT_VERSION 243→244)
+  - app/src/main/cpp/src/Android_draw/ThreadAffinity.h
+  - app/src/main/cpp/src/main.cpp
+
+◆ 版本信息
+版本代码: 244
+MD5: d534d08ec0abaaba865d3c2568f7f954
+
+◆ 测试建议
+1. 快速连续点击菜单按钮 → 验证事件队列
+2. 长按标题栏拖拽悬浮窗 → 验证拖拽启动
+3. 旋转屏幕后立即操作 → 验证 EGL 两阶段重建
+4. 折叠屏展开/折叠后操作 → 验证窗口重建不卡屏
+
+--- 更新日志_v2.45_2026-07-06.txt ---
+====== v2.45 更新日志 (2026-07-06) ======
+
+【新增功能】自瞄辅助模块（独立模块，最小侵入）
+
+◆ 功能概述
+参照自动盖板实现路径（内核只读内存 → 监管者坐标+矩阵 → W2S → 触摸滑动注入），
+新增求生者自瞄监管者功能，纯视角修正，不联动攻击。
+
+◆ 实现路径
+1. 内核级只读内存：复用 vm_readv + 三跳指针链读取 matrix[16] 与实体数组
+2. 获取监管者坐标：getObjectCoordinates(阵营==1) + 最近距离+粘滞目标选择
+3. 数学换算屏幕坐标：复用 optimizedWorldToScreen
+4. 系统级触摸注入：新建 aim_slide_down/move/up 三阶段增量滑动函数
+
+◆ 核心特性
+- 单指增量滑动：起手(0.8W,0.8H)可配置，每帧微调，限幅±80px防猛跳
+- 屏幕中心死区：默认10px (5~20可调)，避免抖动
+- 平滑度参数：0.05~1.0 默认0.15，吸收设备灵敏度差异
+- W2S失败保护：连续10帧失败自动停止滑动
+- 粘滞目标：锁定后不切换，除非目标消失/超距/变幽灵
+- 48x48可拖动悬浮按钮：红=开启/灰=关闭，点击切换，拖动不触发切换
+- 起手位置可视化：暖金圆环+扩散波纹动画+测试按钮
+- 死区可视化：屏幕中心青色圆圈
+- 诊断面板：实时显示目标/距离/滑动状态/坐标
+- 跨设备百分比持久化：分辨率变化自动重算起手坐标
+
+◆ 文件改动
+- 新增 app/src/main/cpp/src/Android_draw/AutoAim.h (接口声明)
+- 新增 app/src/main/cpp/src/Android_draw/AutoAim.cpp (完整实现, include模式集成)
+- 修改 app/src/main/cpp/src/Android_draw/draw_Gui.cpp (7处集成点)
+  · include AutoAim.h
+  · LoadConfig 调用 LoadAimConfig
+  · SaveConfig 调用 SaveAimConfig
+  · 主循环加 AutoAimCheck + 可视化调用
+  · Tab导航新增"自瞄辅助"项
+  · case 3 新增自瞄UI面板, 后续case重编号
+  · 分辨率变化回调 OnAimScreenSizeChanged
+  · 末尾 #include "AutoAim.cpp"
+- 修改 app/src/main/cpp/CMakeLists.txt (排除AutoAim.cpp独立编译)
+- 修改 app/src/main/cpp/src/Android_draw/net_client.h (CURRENT_VERSION 244→245)
+
+◆ 使用流程
+1. Tab「自瞄辅助」→ 调起手位置滑条 → 看暖金圆环确认位置
+2. 点「测试起手位置」验证触摸有反应
+3. 拖动悬浮按钮到顺手位置 → 点击变红 → 自动追踪最近监管者
+4. 诊断面板实时显示目标/距离/滑动状态
+
+◆ 版本信息
+版本代码: 245
+MD5: 03c6c85185ab388a2af13cd958dcad5f
+
+◆ 测试建议
+1. 调整起手位置 → 验证暖金圆环显示正确
+2. 点击测试按钮 → 验证触摸注入有效
+3. 开启悬浮按钮 → 验证追踪监管者视角平滑转向
+4. 监管者进入屏幕外 → 验证W2S失败后停止滑动
+5. 旋转/折叠屏幕 → 验证起手位置自动重算
+
+--- 更新日志_v2.46_2026-07-06.txt ---
+====== v2.46 更新日志 (2026-07-06) ======
+
+【紧急修复】自瞄视角乱转/震荡问题
+
+◆ 修复问题
+自瞄开启后视角"一直乱换屏幕"——持续旋转或来回震荡无法稳定。
+
+◆ 根因分析
+1. 滑动位移过大导致 overshoot 震荡
+   - 原代码: step = dx * (1 - smoothing), smoothing默认0.15 → 系数0.85
+   - 目标偏离中心500px时, step=425px/帧
+   - 限幅±80px → 80px/帧 = 4800px/秒 = 每秒滑4.4屏
+   - 视角过度修正 → 目标跑到屏幕另一侧 → 反向修正 → 来回震荡
+
+2. 虚拟手指位置无限累加漂移导致卡边界
+   - 手指位置每帧累加 step, 永远不回中
+   - 追踪几秒后手指贴在屏幕边界被 clamp 钉死
+   - 视角持续向某方向转 → "一直乱换"
+
+3. 死区内停止滑动但手指不回中
+   - 目标进入死区时直接 return, 手指漂在偏离起手位置
+   - 下一帧目标移出死区时基准点已错乱
+
+◆ 修复方案
+1. 默认平滑度 0.15 → 0.85（系数0.85→0.15, 位移缩小近6倍）
+2. 单帧限幅 ±80px → ±12px（60fps下最大720px/秒, 消除overshoot）
+3. 新增回中机制 AimSlideReturnHome():
+   - 目标进入死区时手指以25%/帧速度回到起手位置
+   - W2S失败/目标在屏幕外时同样回中
+   - 回到起手位置3px内自动抬起手指
+4. 死区默认 10px → 15px（减少边缘抖动）
+5. UI Slider范围调整:
+   - 平滑度: 0.05~1.0 → 0.5~0.95（避免用户调出过大位移）
+   - 死区: 5~20 → 10~30
+
+◆ 文件改动
+- app/src/main/cpp/src/Android_draw/AutoAim.cpp (核心修复)
+- app/src/main/cpp/src/Android_draw/draw_Gui.cpp (Slider范围调整)
+- app/src/main/cpp/src/Android_draw/net_client.h (CURRENT_VERSION 245→246)
+
+◆ 版本信息
+版本代码: 246
+MD5: 3af687168d2f56343c000825430279dd
+
+◆ 验证建议
+1. 开启自瞄 → 视角应平滑追踪而非震荡
+2. 目标移出屏幕 → 手指应回到起手位置后抬起
+3. 目标进入死区 → 视角停止修正, 手指回中
+4. 调整平滑度0.85→0.95 → 追踪更柔和
+
+--- 更新日志_v2.47_2026-07-06.txt ---
+====== v2.47 更新日志 (2026-07-06) ======
+
+【关键修复】自瞄不再影响用户移动与操作
+
+◆ 修复问题
+自瞄开启时虚拟手指持续按住右半屏滑动,与用户真实手指冲突,
+导致用户无法正常移动/操作技能/交互。
+
+◆ 根因
+虚拟手指从(0.8W,0.8H)起手持续滑动转视角,占用右半屏触摸热区。
+第五人格右半屏既要滑视角又要点技能/交互键,
+两个手指同时触摸右半屏 → 手势冲突 → 影响操作。
+
+◆ 修复方案
+新增用户触摸检测:
+- AutoAimCheck开头检测 io.MouseDown[0]
+- 用户触摸屏幕时立即抬起虚拟手指(aim_end_slide)
+- 本帧不干预,让用户完全操控
+- 用户松手后自瞄自动恢复追踪
+
+◆ 死区说明
+死区 = 屏幕正中心圆形区域(半径可调)
+- 目标投影落在死区内 → 自瞄停止修正(已瞄得差不多)
+- 作用: 防止目标在中心附近时反复微调造成抖动
+- UI范围调整: 10~30 → 10~100(可设更大不修正区域)
+
+◆ 文件改动
+- app/src/main/cpp/src/Android_draw/AutoAim.cpp (用户触摸检测)
+- app/src/main/cpp/src/Android_draw/draw_Gui.cpp (死区UI范围+说明文字)
+- app/src/main/cpp/src/Android_draw/net_client.h (CURRENT_VERSION 246→247)
+
+◆ 版本信息
+版本代码: 247
+MD5: dd735ed9870bb1fec9df27b033f90519
+
+◆ 使用说明
+- 开启自瞄后,你正常触摸屏幕操作时自瞄自动暂停
+- 松手后自瞄恢复追踪
+- 死区建议保持15~30,设太大则目标偏离中心很远才修正
+
+--- 更新日志_v2.48_2026-07-06.txt ---
+====== v2.48 更新日志 (2026-07-06) ======
+
+【关键修复】自瞄与移动摇杆冲突 + 视角乱转/乱换屏幕
+
+◆ 修复问题
+1. 开启自瞄时按住移动摇杆, 角色移动会被打断
+2. 自瞄开启后视角"乱换屏幕"持续旋转无法稳定
+3. W2S 失败/目标出屏幕后手指回中导致反向旋转震荡
+
+◆ 根因分析
+1. 触摸点 ID 复用 slot 0
+   - 旧实现 aim_slide_down 用 ABS_MT_SLOT=0, 与真实摇杆共用 slot 0
+   - 自瞄 down 把摇杆 tracking_id 覆盖, 坐标被改写 → 角色停止/跳屏
+2. 漂移回中 AimSlideReturnHome 引发极限环震荡
+   - 偏离起手 80px 后每帧回拉 25% → 反向旋转视角 → 目标甩出屏幕中心
+   - 重新检测偏差 → 正向追踪 → 再漂移 → 再回中 → 来回震荡 = "乱换屏幕"
+3. W2S 失败时回中同样产生反向旋转
+
+◆ 注入链路确认(模仿自动盖板)
+自动盖板 SimulateClick 已验证可行, 其链路为:
+  write(/dev/input/eventX) → EVIOCGRAB 只挡 read 不挡 write
+  → TypeA 线程读到写入 → device.Finger[slot] 更新
+  → Upload() 把所有 isDown 的 Finger 通过 SYN_MT_REPORT 分隔
+  → 一次 SYN_REPORT 提交到 nowfd(uinput)
+  → Android InputReader → 游戏 MotionEvent
+
+  独立注册 input 设备(上轮方案)反而被游戏反作弊过滤, 因游戏只信任
+  从真实触摸屏链路(uinput 重注入)来的事件. 故必须模仿盖板直写真实屏.
+
+◆ 修复方案: slot 隔离 (关键)
+  TypeA 用 ABS_MT_SLOT 值作为 device.Finger[] 索引
+  Upload() 遍历 Finger[0..9] 把每个 isDown 通过 SYN_MT_REPORT 分隔提交
+
+  因此自瞄改用 slot 2:
+  - 真实摇杆 → slot 0 → Finger[0]
+  - 第二真实指(技能) → slot 1 → Finger[1]
+  - 自瞄 → slot 2 → Finger[2] (物理隔离, 不冲突)
+
+  Upload() 一次性把 Finger[0]+Finger[2] 通过 uinput 提交给游戏
+  → 游戏收到合法两指 MotionEvent, 摇杆与自瞄同时工作互不干扰
+
+◆ 具体改动 (AutoAim.cpp, 6 处, 不新增文件/不改 TouchHelperA)
+1. aim_slide_down: ABS_MT_SLOT 0→2, tracking_id 1→自增高位(1000+)
+   每次 down 用新 id 防止游戏复用旧 pointer 状态
+2. aim_slide_move: move 前重新指定 slot 2 (TypeA 每次读 ABS_MT_SLOT 才更新 latest)
+3. aim_slide_up: slot 0→2, 抬起只影响自瞄不顶摇杆
+4. W2S 失败: 移除 AimSlideReturnHome 回中, 改为直接 aim_slide_up
+   抬起期间不施加位移, 视角不反向转, 下一帧目标回屏幕内自然重按
+5. 漂移>80px: 移除回中滑动, 改为直接 aim_slide_up
+   下一帧在起手点重按, 切断"追踪↔回中"极限环
+6. 真实手指检测: 注释修正
+   旧 slot 0 时 fingerCount-1 启发式错误(真实摇杆与自瞄合并为1个)
+   新 slot 2 隔离后此启发式终于正确
+
+◆ 参考来源
+- 项目自身 Upload() 多指 SYN_MT_REPORT 分隔实现 (Type A 协议)
+- Linux Input 子系统 TP A/B Slot 协议
+  https://developer.aliyun.com/article/374993
+- Android Framework Input ABS_MT_SLOT/TRACKING_ID 语义
+  https://juejin.cn/post/7405464212958773299
+
+◆ 文件改动
+- app/src/main/cpp/src/Android_draw/AutoAim.cpp (6 处修改, 删除 AimSlideReturnHome)
+- app/src/main/cpp/src/Android_draw/net_client.h (CURRENT_VERSION 已是 248)
+
+◆ 版本信息
+版本代码: 248
+MD5: 97c59176b411ef3c8ae88d7aa4c0e731
+
+◆ 验收测试 (请在真机 b5fac603 上测试)
+1. 按住左侧移动摇杆不放 → 开启自瞄悬浮按钮 → 角色应正常移动
+   且视角平滑锁敌, 摇杆不中断
+2. 自瞄追踪中目标移出屏幕 → 视角应停止旋转(手指抬起), 不反向转
+3. 自瞄追踪 5 秒以上 → 不出现"乱换屏幕"震荡
+4. 同时摇杆走位 + 自瞄锁敌 → 两者互不干扰
+5. 切换目标(旧目标消失) → 平滑切换无卡顿
+
+--- 更新日志_v2.49_2026-07-06.txt ---
+====== v2.49 更新日志 (2026-07-06) ======
+
+【关键修复】持续锁敌不中断 + 走路同时自瞄 + 移除抖动机制
+
+◆ 用户反馈
+1. 自瞄效果不好, 稍微离开一点距离就不瞄准了
+2. 希望持续瞄准, 走路时也要一直瞄
+3. 不要加抖动机制
+
+◆ 根因分析 (3 处停止追踪的代码路径)
+1. 真实手指让权 → 走路时停止
+   - 旧逻辑: Touch::GetFingerCount() > 0 → aim_slide_up 抬起让权 → 自瞄停
+   - 用户走路时摇杆 finger=1, 触发让权, 自瞄完全不工作
+   - 这正是"走路时不瞄"的根因
+
+2. 死区内直接 return → 稍偏就停
+   - 旧逻辑: dist < 15px 直接 return, 不再修正
+   - 目标在屏幕中心 15px 内完全不追踪 → "稍微离开就不瞄"
+   - 用户感知为"自瞄距离稍远就失效"
+
+3. 漂移>80px 抬起重按 → 持续追踪间隙不修正
+   - 旧逻辑: 漂移超 80px → aim_slide_up 抬起 → 下一帧重按
+   - 持续追踪几秒后频繁抬起, 期间不修正 → 追踪不连续
+
+◆ 修复方案
+1. 移除"真实手指让权"机制 (核心)
+   - slot 2 已与真实摇杆 slot 0 物理隔离(TypeA 用 slot 值作 Finger[] 索引,
+     Upload 把 Finger[0]+Finger[2] 通过 SYN_MT_REPORT 分隔同时提交给游戏)
+   - 自瞄与摇杆可在不同 slot 并行工作, 无需让权
+   - 真实手指仅用于诊断显示, 不再干预自瞄
+   - 效果: 走路按摇杆时自瞄持续锁敌
+
+2. 死区改为衰减系数 (不再停止)
+   - 旧: dist < deadzone 直接 return
+   - 新: dist < deadzone 时 step 乘 (dist/deadzone) 衰减系数
+     越接近中心修正越弱, 但不停止
+   - 既持续追踪目标, 又避免中心 1-2px 抖动
+   - 死区默认 15→5px (仅防 1-2px 抖动)
+
+3. 漂移改为软回中 (不再抬起)
+   - 旧: 漂移>80px → aim_slide_up 抬起 → 重按间隙不修正
+   - 新: 偏离起手点>30px 时, 本帧 step 叠加 15% 回中分量
+     既持续追踪目标, 又缓慢回中防漂移, 无抬起间隙
+
+4. W2S 失败改为保持等待 (不再抬起)
+   - 旧: W2S 失败 → aim_slide_up → 重按间隙不修正
+   - 新: W2S 失败 → 手指保持当前位置不 move, 等待目标回屏
+   - 连续失败 30 帧(~0.5秒)才彻底结束(防永久占 slot)
+
+5. 默认参数优化
+   - 平滑度 0.85→0.7 (系数 0.15→0.3, 更激进追踪, 减少延迟)
+   - 死区 15→5px (仅防 1-2px 抖动, 不再"稍偏就停")
+   - 最大追踪距离 30→50 米 (扩大追踪范围)
+
+◆ 文件改动
+- app/src/main/cpp/src/Android_draw/AutoAim.cpp (5 处核心修改)
+- app/src/main/cpp/src/Android_draw/net_client.h (CURRENT_VERSION 248→249)
+
+◆ 部署流程 (参照使用说明书)
+1. adb push overlay_user /sdcard/overlay_user_tmp
+2. su -c 'cp /sdcard/overlay_user_tmp /data/local/bin/overlay_user && chmod 777 ... && rm ...'
+3. setsid 后台启动 (避免 ADB 断开 SIGHUP)
+
+◆ 版本信息
+版本代码: 249
+MD5: 8497b772843aa4a593ff2654f383f634
+
+◆ 验收测试
+1. 开自瞄 → 走路按摇杆 → 视角应持续锁敌不中断
+2. 目标在屏幕中心附近 → 仍持续微调(不再"稍偏就停")
+3. 持续追踪 10 秒以上 → 不出现间隙性停顿
+4. 目标出屏幕 → 视角停止, 目标回屏立即继续追踪
+5. 摇杆走位 + 自瞄锁敌 → 两者持续并行, 互不干扰
+
+--- 构建交付记录.txt ---
+========================================
+  ImGuiOverlay - 构建交付记录
+========================================
+
+--- v2.13-stable (2026-06-29 21:36) ---
+MD5: 356479c671652fa56d290228d00ea2fd
+新增: Tab 7「路径导入」— 从攻略图像素坐标 txt 导入世界坐标导航线
+  - 像素→世界坐标转换 (CoordTransform::UVToWorld)
+  - 黄色虚线预览 (确认无误后再导入)
+  - 导入后持久化到 map_config.json + 参与寻路
+基础设施: g_map_texture_w/h[][] 纹理尺寸存储
+Tab 编号变更: 7→路径导入, 8→调试信息, 9→关于
+
+--- v2.12-stable (2026-06-29 20:22) ---
+MD5: 09d19bd6b23fff7f58437a9fad0e8853
+变更: 启动画面品牌重命名 → "大米饭先生" + Telegram 链接
+文件: main.cpp (启动画面), deploy.sh, README
+
+--- v2.11-stable (2026-06-29) ---
+新增: 交互式启动流程 (TTY检测 → 驱动选择 → 后台模式选择)
+文件: main.cpp, driver_registry.h
+
+构建日期: 2026-06-27 17:20
+编译方式: gradlew assembleRelease（增量编译）
+编译结果: BUILD SUCCESSFUL（0 error）
+版本: v2.6 (楼层每帧检测 + 调试日志)
+
+--- 本次变更内容 ---
+v2.6 楼层每帧实时检测 (2026-06-27):
+  [修复] ★ UpdateCurrentFloor() 从评分条件内移到 TryAutoDetectMap 末尾，每帧无条件调用
+  [修复] 移除对评分 ≥60 的依赖，只要地图已识别(g_current_map_index≥0)就实时更新楼层
+  [调试] UpdateCurrentFloor 新增 printf 日志：打印 Z 坐标值、判定结果、当前楼层
+  [效果] 楼层不再"冻住"——即使评分未达标或玩家慢走上楼，每帧都会基于 Z 判定
+
+--- 此前变更 ---
+v2.5 回滚楼层阈值 (2026-06-27):
+  [回滚] GetFloorFromPlayerZ 恢复硬编码 Z > 190 判定 2 楼
+  [原因] 用户要求回滚 v2.4 的 floorZThreshold 改动
+
+--- 此前变更 ---
+v2.4 修复一楼误判为二楼 (2026-06-27):
+  [修复] ★ GetFloorFromPlayerZ 改为使用当前地图的 floorZThreshold（从 map_config.json 读取）
+
+--- 此前变更 ---
+v2.3 修复首次地图识别"地图1"误显示 (2026-06-27):
+  [修复] ★ g_current_map_index 默认从 0 改为 -1，避免启动时默认显示"地图1"
+  [修复] ★ 移除 config 对 g_current_map_index 的持久化恢复，每次启动强制重检测
+  [修复] ★ LOCKED 状态新增首次检测逻辑：g_current_map_index == -1 且评分≥60分时自动切换到正确地图
+  [改进] 状态显示支持 g_current_map_index == -1 时的"无地图"提示
+
+--- 此前变更 ---
+v2.2 新版评分系统 (2026-06-27):
+  [评分] 全面升级为 110 分制（及格 60 分）
+  [音乐盒] 满分30→40，容差≤5吸收波动，>25不计分
+  [凳子] 位置权重升级40→50（阈值<4.0），数量20→10（容忍±1）
+  [钢琴] 改为纯加分：没扫到默认10分，不参与扣分
+  [重检] 新增 LOCKED 定期重检（每60帧+15分×3秒）
+  [移除] 超量惩罚机制（融合场景惩罚已废弃）
+  [清理] 删除 14 个废弃全局变量
+  [优化] 延迟写 JSON（脏标记30秒刷写，减少SD卡磨损）
+
+--- 此前变更 ---
+v2.0 全面重构 (2026-06-27):
+  [架构] 新增 Structs.h/DataManager.h.cpp/CoordTransform 统一管道
+  [修复] ★ 路径数据重启丢失 | ★ 坐标映射偏移 | ★ 出口拖拽冲突 | ★ 地图识别误报
+  [新增] 数据管理标签页 | 调试信息标签页 | 地图/楼层标识
+  [UI] 路径列表"X"改"删除" | 选中高亮★
+  [构建] CMake 自动编译新增文件
+
+--- v1.8 热修复 ---
+  - 路径数据重启后消失修复
+  - 出口图标拖动与小地图拖动冲突修复
+  - JSON 配置备份保护
+  - 途经点紫色菱形可视标记
+  - 坐标调试显示
+  - 人脸替换为纯文字符号
+
+========================================
+[2026-06-28 01:18:21] v2.13-dev deployed
+[2026-06-28 01:23:47] v2.13-dev deployed
+[2026-06-28 01:30:39] v2.13-dev deployed
+[2026-06-28 01:38:37] v2.13-dev deployed
+[2026-06-28 01:43:16] v2.13-dev deployed
+[2026-06-28 01:49:28] v2.13-dev deployed
+[2026-06-28 01:57:34] v2.13-dev deployed
+[2026-06-28 02:04:54] v2.13-dev deployed
+[2026-06-28 02:05:52] v2.13-dev deployed
+[2026-06-28 10:23:15] v2.13-dev deployed
+[2026-06-28 10:33:47] v2.13-dev deployed
+[2026-06-28 10:34:34] v2.13-dev deployed
+[2026-06-28 10:39:38] v2.13-dev deployed
+[2026-06-28 10:43:37] v2.13-dev deployed
+[2026-06-28 11:00:10] v2.13-dev deployed
+[2026-06-28 11:10:47] v2.13-dev deployed
+[2026-06-28 11:14:31] v2.13-dev deployed
+[2026-06-28 12:41:19] v2.13-dev deployed
+[2026-06-28 13:02:55] v2.13-dev deployed
+
+--- 部署报告.txt ---
+ImGuiOverlay 部署完成报告
+时间：2026-07-02 22:40
+
+✅ 已修复的问题：
+1. Token 每次失效 → 客户端现在会保存 token 到 /data/local/bin/auth_token.dat
+2. 心跳验证 → 服务器端现在通过 token 查找卡密，不依赖 card_key
+3. 公告功能 → 客户端启动时先拉取公告和版本信息
+4. 强制更新 → 服务器返回 force_min_version，客户端会提示更新
+
+✅ 已推送的文件：
+- overlay_user (1.6MB) → /data/local/bin/overlay_user (chmod 777)
+- overlay_config.txt → /data/local/bin/overlay_config.txt
+- 使用说明书.txt → /sdcard/使用说明书.txt
+
+⚠️ 待确认：
+1. 服务器上的 server_v3.php 是否已更新为最新版本（token 验证修复）
+2. 客户端是否能正常保存和加载 token
+3. 公告和强制更新是否正常工作
+
+📋 下一步：
+1. 在服务器上访问 http://43.136.183.71/?page=admin
+2. 生成一个测试卡密
+3. 在手机上输入卡密，重启 overlay，看是否需要重新输入
+4. 在管理后台添加一条公告，重启 overlay，看是否显示公告

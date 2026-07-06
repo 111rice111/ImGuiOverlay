@@ -401,16 +401,10 @@ void My_ImGui_ImplAndroid_Shutdown() {
 void My_ImGui_ImplAndroid_NewFrame(bool resize) {
   ImGuiIO &io = ImGui::GetIO();
   if (resize) {
-    // Setup display size (every frame to accommodate for window resizing)
-    int32_t window_width = ANativeWindow_getWidth(g_Window);
-    int32_t window_height = ANativeWindow_getHeight(g_Window);
-    int display_width = window_width;
-    int display_height = window_height;
-    io.DisplaySize = ImVec2((float)window_width, (float)window_height);
-    if (window_width > 0 && window_height > 0)
-      io.DisplayFramebufferScale =
-          ImVec2((float)display_width / window_width,
-                 (float)display_height / window_height);
+    // ★ v2.45: 不再用 ANativeWindow_getWidth 覆盖 DisplaySize
+    // drawBegin() 每帧已从 displayInfo 设置正确的屏幕尺寸
+    // ANativeWindow 的 buffer 大小可能与屏幕分辨率不同，覆盖会导致坐标偏移
+    io.DisplayFramebufferScale = ImVec2(1.0f, 1.0f);
   }
   // Setup time step
   struct timespec current_timespec;

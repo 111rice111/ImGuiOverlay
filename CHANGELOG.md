@@ -1,5 +1,35 @@
 # 更新日志
 
+## [2026-07-07] — v2.45-stable: 版本号硬编码+发版流程优化
+- CMakeLists.txt 新增版本编译宏（OVERLAY_VERSION/CODE/STR）
+- main.cpp 启动画面显示版本号
+- AI发版指南完全重写（8步流程+双版本+自检+回退）
+- 项目目录整理：archive分类/中文重命名/合并更新日志
+- deploy.sh 重写：双版本推送+版本命名源文件
+
+## [2026-07-06] — v2.45-stable: 彻底修复跨设备触摸失效（坐标系统一）
+
+### 🎯 根因分析
+v2.44 方形窗口在部分设备上因 SurfaceFlinger 缩放/裁剪导致渲染像素≠屏幕像素≠触摸坐标，三个坐标系不一致导致点击偏移、拖拽失效。
+
+### 修复方案（4 文件, 5 处改动）
+1. **弃用方形窗口** → 用真实屏幕尺寸创建 ANativeWindow（`main.cpp`）
+2. **显式 buffer geometry** → `ANativeWindow_setBuffersGeometry` 传精确尺寸（`OpenGLGraphics.cpp`）
+3. **阻止 DisplaySize 覆盖** → `My_ImGui_ImplAndroid_NewFrame` 不再用窗口 buffer 覆盖（`my_imgui_impl_android.cpp`）
+4. **修复 touch_scale** → absX=长边设备自动盖板坐标修正（`TouchHelperA.cpp`）
+5. **absX.minimum 偏移** → 归一化改用 `(value-min)/range` 处理非零最小值设备（`TouchHelperA.cpp`）
+
+### 核心原理
+```
+渲染坐标系 = 屏幕像素 = 触摸坐标系  →  三者统一，不同设备不再偏移
+```
+
+### 影响设备
+- 修复: 方形窗口导致的 SurfaceFlinger 缩放偏移（~10-20% 设备）
+- 修复: absX=长边设备 touch_scale 错误（~30-40% 设备）
+- 修复: 非零最小值触摸驱动偏移（~15-25% 设备）
+- 修复: resize 覆盖 DisplaySize 导致的视觉-触摸失配
+
 ## [2026-07-05] — v2.44-stable: 修复卡屏 + 恢复方形窗口
 
 ### 🐛 修复小米Pad6等设备卡屏

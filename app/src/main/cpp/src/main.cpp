@@ -170,7 +170,7 @@ int main(int argc, char *argv[]) {
     std::cout << "\033[2J\033[H";
     std::cout << "\033[35m";
     std::cout << "================================================" << std::endl;
-    std::cout << "  大米饭先生" << std::endl;
+    std::cout << "  大米饭先生 - " << OVERLAY_VERSION << std::endl;
     std::cout << "  " << XORSTR("https://t.me/+67uRf9NT_04xMGM1") << std::endl;
     std::cout << "================================================" << std::endl;
     std::cout << "\033[0m" << std::endl;
@@ -201,7 +201,7 @@ int main(int argc, char *argv[]) {
         printf("╔══════════════════════════════════════════╗\n");
         printf("║          !! 强制更新通知 !!              ║\n");
         printf("╠══════════════════════════════════════════╣\n");
-        printf("║  当前版本已过期，必须更新到 %-15s║\n", update_info.version_name.c_str());
+        printf("║  当前版本 %s 已过期，必须更新到 %-15s║\n", OVERLAY_VERSION_STR, update_info.version_name.c_str());
         printf("║  最低要求版本: v%-24d║\n", update_info.force_min_version);
         printf("╠══════════════════════════════════════════╣\n");
         if (!update_info.changelog.empty()) {
@@ -294,23 +294,21 @@ int main(int argc, char *argv[]) {
 
     ::graphics = GraphicsManager::getGraphicsInterface(GraphicsManager::OPENGL);
     ::screen_config();
-    // v2.44: 恢复方形窗口（非方形窗口在某些设备导致 EGL 重建失败→卡屏）
-    // 方形窗口从 (0,0) 开始，glViewport 控制渲染区域到屏幕可见部分
-    ::native_window_screen_x =
-            (::displayInfo.height > ::displayInfo.width ? ::displayInfo.height
-                                                        : ::displayInfo.width);
-    ::native_window_screen_y = ::native_window_screen_x;
+    // v2.45: 用真实屏幕尺寸创建窗口
+    // 修复 v2.44 方形窗口在部分设备上因 SurfaceFlinger 缩放导致渲染/触摸坐标不一致
+    // 显式 ANativeWindow_setBuffersGeometry 解决 v2.41 EGL 重建失败问题（见 OpenGLGraphics）
+    ::native_window_screen_x = ::displayInfo.width;
+    ::native_window_screen_y = ::displayInfo.height;
     ::abs_ScreenX = ::native_window_screen_x;
-    ::abs_ScreenY =
-            (::displayInfo.height < ::displayInfo.width ? ::displayInfo.height
-                                                        : ::displayInfo.width);
+    ::abs_ScreenY = ::native_window_screen_y;
     ::window = android::ANativeWindowCreator::Create(
             "Surface", native_window_screen_x, native_window_screen_y, false);
     graphics->Init_Render(::window, native_window_screen_x,
                           native_window_screen_y);
     Touch::Init(
-            {static_cast<float>(::abs_ScreenX), static_cast<float>(::abs_ScreenY)},
+            {static_cast<float>(::displayInfo.width), static_cast<float>(::displayInfo.height)},
             true);
+    Touch::setOrientation(displayInfo.orientation);
     Touch::setOrientation(displayInfo.orientation);
     Timer draw_timer("DrawThread");
     draw_timer.BindCurrentThreadToCores(true, "DrawThread");

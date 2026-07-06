@@ -1,0 +1,14 @@
+v2.45-stable — 版本号硬编码+发版流程优化
+
+版本: v2.45-stable
+版本代码: 245
+日期: 2026-07-07
+开发版 MD5: e20fb148ffbb71f3ecb71549d2a7fc92
+用户版 MD5: e20fb148ffbb71f3ecb71549d2a7fc92
+
+=== 改动 ===
+- CMakeLists.txt 新增 OVERLAY_VERSION/OVERLAY_VERSION_CODE/OVERLAY_VERSION_STR 编译宏
+- main.cpp 启动画面显示版本号（大米饭先生 - v2.45-stable）
+- AI发版指南.md 完全重写：8步流程+双版本+自检+回退
+- 项目整理：archive分类/中文重命名/合并更新日志/新增项目结构说明
+- deploy.sh 重写：双版本推送+版本命名源文件

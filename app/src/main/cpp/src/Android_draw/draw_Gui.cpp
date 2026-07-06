@@ -1675,8 +1675,8 @@ void InvalidateMapTextures() {
 }
 
 void drawBegin() {
-    // v2.44: 同步 ImGui DisplaySize 为真实屏幕尺寸（每帧）
-    // 方形窗口 {max,max} 不重建，用 glViewport 控制渲染区域到屏幕可见部分
+    // v2.45: 同步 ImGui DisplaySize 为真实屏幕尺寸（每帧）
+    // 窗口已改为真实屏幕尺寸，DisplaySize 始终与之一致
     if (ImGui::GetCurrentContext()) {
         ImGuiIO& io = ImGui::GetIO();
         io.DisplaySize = ImVec2((float)displayInfo.width, (float)displayInfo.height);

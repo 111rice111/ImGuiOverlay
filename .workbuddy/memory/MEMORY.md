@@ -19,6 +19,14 @@
 - **禁令**: 禁止使用 `/data/local/tmp/`（SELinux tmpfs:s0 阻止执行，且反作弊高频命中）
 - **⚠️ 禁止推送 APK**: `app-release-unsigned.apk` 是 ZIP 包不能执行，必须推送 `cxx/.../obj/arm64-v8a/overlay`
 
+## ★ 项目文件命名约定 (2026-07-06 整理后)
+- **更新日志**: 新建日志放 `archive/更新日志归档/更新日志_v{版本号}_{日期}.txt`
+- **历史二进制**: 放 `archive/历史版本二进制/`
+- **历史源码**: 放 `archive/历史源码备份/`
+- **重要文档**: 根目录中文命名（AI发版指南.md, 使用说明书.txt, 项目结构说明.txt）
+- **配置文件**: 地图配置-手机版.json, 音乐盒凳子配置.json 在根目录
+- **git commit + tag + push**: 每次发版后必须打 git tag（如 `v2.45-stable`），方便用户说"回退到 v2.43"时直接 `git checkout v2.43-stable`
+
 ## ★ v2.13-stable — 路径导入功能 (2026-06-29 21:36)
 
 二进制: `E:\ImGuiOverlay\overlay-v2.13-stable` (MD5: 356479c671652fa56d290228d00ea2fd)
