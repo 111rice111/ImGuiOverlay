@@ -36,3 +36,7 @@ overlay_config.txt
 # OS files
 .DS_Store
 Thumbs.db
+
+# Compiled overlay binaries (archive)
+archive/历史版本二进制/overlay-v*
+!archive/历史版本二进制/*.md5
