@@ -640,11 +640,6 @@ void init_My_drawdata() {
     }
     g_font_ui = g_ui_font;
     fonts_initialized = true;
-
-    // v2.47优化: UI 纹理预加载, 避免首帧 Layout_tick_UI 内同步加载卡顿
-    // 原实现: LoadUITextures 在首帧 Layout_tick_UI (draw_LayoutUI.cpp:192) 内执行
-    // 现: 提前到 init_My_drawdata 末尾, 与字体加载同期完成, 首帧直接复用
-    LoadUITextures();
 }
 
 void screen_config() {
