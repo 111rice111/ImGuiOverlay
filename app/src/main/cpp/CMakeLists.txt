@@ -4,9 +4,9 @@ project(ImGuiOverlay)
 # ========================================
 # ★ 版本号硬编码 — 每次发版前必须更新这 4 行！
 # ========================================
-set(OVERLAY_VERSION "v2.46-stable")
-set(OVERLAY_VERSION_CODE 246)
-set(OVERLAY_VERSION_STR "v2.46")
+set(OVERLAY_VERSION "v2.47-stable")
+set(OVERLAY_VERSION_CODE 247)
+set(OVERLAY_VERSION_STR "v2.47")
 
 # 默认用 Release 模式，优化体积和速度
 if(NOT CMAKE_BUILD_TYPE)

@@ -37,6 +37,13 @@ overlay_config.txt
 .DS_Store
 Thumbs.db
 
+# JVM crash logs
+hs_err_pid*.log
+replay_pid*.log
+
+# Workbuddy memory
+.workbuddy/
+
 # Compiled overlay binaries (archive)
 archive/历史版本二进制/overlay-v*
 !archive/历史版本二进制/*.md5

@@ -1,3 +1,2 @@
-v2.46-stable
-246
-b5b0440bdf1674e416a58ac56b62e794
+v2.47-stable
+247
