@@ -1,0 +1,63 @@
+========================================
+  overlay v2.49-stable 更新日志
+  发布日期: 2026-07-09
+========================================
+
+【核心修复】安卓14+ 触摸穿透失效问题
+
+问题现象:
+  - 程序启动后, 除ImGui悬浮窗外, 触摸屏幕任何地方都无反应
+  - 无法返回桌面, 无法点击其他App, 游戏也收不到触摸
+  - 只有音量键能控制悬浮窗 (硬件按键不经过触摸input)
+  - 安卓14 和 安卓16 均复现, 安卓15 正常
+
+根因分析:
+  项目通过 SurfaceComposerClient::createSurface 直接在 SurfaceFlinger
+  层创建全屏 overlay Surface, 绕过 Java WindowManager.
+  安卓14+ 的 InputFlinger 开始把这种直接创建的 Surface 识别为触摸目标.
+  由于该 Surface 没有 InputQueue, 收到的触摸事件全部被丢弃, 导致
+  整个系统触摸失效.
+  ImGui UI 仍能响应, 是因为 evdev 旁路读取 (/dev/input/event*) 不
+  依赖 InputFlinger.
+
+修复方案:
+  在 ANativeWindowCreator.h 的 CreateSurface 中, 对所有安卓12+ 设备
+  调用 SurfaceComposerClient::Transaction::setTrustedOverlay(true).
+  setTrustedOverlay 告诉 InputFlinger 此 overlay 不消费 input, 触摸
+  事件穿透到下层窗口 (游戏/桌面/其他App).
+  安卓15 等本就不拦截的版本设置后无副作用 (事件本就穿透).
+
+  修改文件: app/src/main/cpp/include/native_surface/ANativeWindowCreator.h
+
+【其他变更】v2.48 遗留的触摸驱动增强 (保留)
+
+  - TouchHelperA.cpp:
+    * open() 添加 O_NONBLOCK 标志, 配合 poll() 超时机制
+    * TypeA 线程用 poll(500ms超时) 替代阻塞 read(), 避免永久卡死
+    * checkDeviceIsTouch 三重检测机制 (主检测 + 回退1 + 回退2)
+      兼容安卓16 evdev/InputFlinger 协议变化
+    * 排除键盘/笔/按键设备 (touchpanel_kpd/touchpanel_pen 误识别)
+    * SELinux EACCES 拒绝只打印一次, 避免刷屏
+
+  - main.cpp:
+    * setvbuf 禁用 stdout/stderr 缓冲, 确保日志实时输出
+    * Touch::Init 调用前添加诊断日志
+
+  - game_offsets.h:
+    * "数据已加载" 日志移到 api_fetch_game_offsets 函数内部
+    * static bool 控制只打印一次, 避免 LTO 死代码消除
+
+【版本号】
+  CMakeLists.txt: v2.48-stable -> v2.49-stable
+  net_client.h:   CURRENT_VERSION 248 -> 249
+  version-latest.txt: v2.49-stable / 249
+
+【编译产物】
+  overlay-v2.49-stable      1,967,656 字节 (1.88MB)
+  overlay-v2.49-stable-user 1,967,656 字节 (1.88MB)
+  归档位置: archive/历史版本二进制/
+
+【测试验证】
+  - 安卓14: UI可操作, 游戏可接收触摸, 可返回桌面 ✓
+  - 安卓16: UI可操作, 游戏可接收触摸, 可返回桌面 ✓
+  - 安卓15: 无回归, 行为与之前一致 ✓
