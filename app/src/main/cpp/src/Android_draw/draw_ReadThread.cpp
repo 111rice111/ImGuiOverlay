@@ -356,13 +356,21 @@ void read_thread(long int 状态数值, long int PD2, long int PD3) {
                         item.阵营 = 3;
                         item.sub_type = ObjSubClass::Cellar;
                     } else if (std::strstr(cls, "prop") || std::strstr(cls, "mj_") || std::strstr(cls, "rd")) {
-                        std::strcpy(item.str, getprop(cls));
-                        if (std::strstr(cls, "prop_musicbox") || MjSubsystem::IsMjPropClass(cls) || MjSubsystem::IsMjSpecialClass(cls)) {
-                            item.阵营 = 6;
+                        // ★ 先检查是否为特殊状态监管者(如孽蜥攀墙时类名含prop)
+                        const char* boss_name = getboss(cls);
+                        if (boss_name[0] == '[' && !IsFakeHunter_cached(cls)) {
+                            std::strcpy(item.str, boss_name);
+                            item.阵营 = 1;
+                            item.sub_type = ObjSubClass::Boss;
                         } else {
-                            item.阵营 = 4;
+                            std::strcpy(item.str, getprop(cls));
+                            if (std::strstr(cls, "prop_musicbox") || MjSubsystem::IsMjPropClass(cls) || MjSubsystem::IsMjSpecialClass(cls)) {
+                                item.阵营 = 6;
+                            } else {
+                                item.阵营 = 4;
+                            }
+                            item.sub_type = ObjSubClass::Prop;
                         }
-                        item.sub_type = ObjSubClass::Prop;
                     } else {
                         continue;
                     }
