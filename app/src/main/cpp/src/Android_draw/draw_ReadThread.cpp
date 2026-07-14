@@ -385,8 +385,8 @@ void read_thread(long int 状态数值, long int PD2, long int PD3) {
 
                     if (item.阵营 == 1 || item.阵营 == 2) {
                         if (item.is_ghost) {
-                            // 守墓人遁地始终可见(不受幽灵开关影响)
-                            if (!inform_ghost && !std::strstr(item.str, "守墓")) continue;
+                            // 守墓人遁地/孽蜥攀墙始终可见(不受幽灵开关影响)
+                            if (!inform_ghost && !std::strstr(item.str, "守墓") && !std::strstr(item.str, "孽蜥")) continue;
                             if (std::strstr(item.str, "红蝶") || std::strstr(item.str, "无常") ||
                                 std::strstr(item.str, "歌剧") || std::strstr(item.str, "破轮") ||
                                 std::strstr(item.str, "木偶") || std::strstr(item.str, "冒险家")) continue;

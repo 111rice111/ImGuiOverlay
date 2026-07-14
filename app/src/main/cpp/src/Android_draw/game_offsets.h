@@ -88,6 +88,7 @@ static std::string _json_as_string(const json& j, const char* key, const char* d
 
 // ========== 从服务器拉取游戏偏移 ==========
 inline bool api_fetch_game_offsets() {
+#ifdef AUTH_SERVER
     if (!g_license.verified || g_license.token.empty()) return false;
     
     json req;
@@ -161,6 +162,9 @@ inline bool api_fetch_game_offsets() {
     } catch (...) {
         return false;
     }
+#else
+    return false;
+#endif
 }
 
 // ========== 便捷宏: 从服务端偏移读取，回退硬编码 ==========

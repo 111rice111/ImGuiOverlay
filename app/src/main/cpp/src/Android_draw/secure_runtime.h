@@ -106,11 +106,15 @@ public:
     bool all_clear() {
         uint32_t f1 = g_flags1->load();
         uint32_t f2 = g_flags2.load();
-        // 必须两处标志都满足 + auth2独立验证
+#ifdef AUTH_SERVER
         return (f1 & FLAG_AUTH) && (f1 & FLAG_CHECKPOINT)
             && (f1 & FLAG_INTEGRITY) && (f1 & FLAG_HB_OK)
             && (f1 & FLAG_AUTH2) && g_auth2_verified
             && (f2 & FLAG_AUTH) && (f2 & FLAG_INTEGRITY);
+#else
+        return (f1 & FLAG_INTEGRITY) && (f1 & FLAG_HB_OK)
+            && (f2 & FLAG_INTEGRITY);
+#endif
     }
     
     int encoded_check() {

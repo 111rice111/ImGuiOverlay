@@ -33,7 +33,8 @@ char extractedString[64]{};
   #define DCOUT(x)     std::cout << x
 #endif
 
-// 卡密验证: 连接本地服务器 (旧手机 Termux @ 192.168.1.13:8080)
+#ifdef AUTH_SERVER
+// 卡密验证: 连接本地服务器
 static bool doAuth() {
     DPRINTF("\033[36m[*] 正在连接本地验证服务器...\033[0m\n");
     
@@ -135,6 +136,7 @@ static bool doAuth() {
     DPRINTF("\033[31m[-] 卡密验证失败\033[0m\n");
     return false;
 }
+#endif
 std::atomic<int> pid;
 Timer DrawFPS;
 float fps = 60;
@@ -237,7 +239,7 @@ int main(int argc, char *argv[]) {
     // ★ 第二步: 反调试检测 checkpoint 2 (在授权之前)
     cp_anti_debug();
 
-    // ★ 第三步: 卡密授权验证 (v3.x 加固: 多路径防单指令 patch)
+#ifdef AUTH_SERVER
     bool auth_ok = doAuth();
     if (auth_ok) {
         AntiBypassGuard::instance().set_auth_ok();
@@ -247,12 +249,10 @@ int main(int argc, char *argv[]) {
         printf("\033[31m[!] 授权失败，程序退出\033[0m\n");
         exit(1);
     }
-    // 二次冗余检查 — 不依赖上面那条 if 的唯一性
-    // 攻击者若只 patch 上面那个 !auth_ok 分支，这里仍会触发
     if (!auth_ok) { volatile int* p = nullptr; *p = 0; }
-    // 更隐蔽的 guard: 将 auth_ok 结果编码到后续逻辑中
-    // 如果 auth_ok==false，has_tty_check 跳过但 driver_init 位置会被跳过导致崩溃
-    // (这是架构层级的反 patch，非简单条件跳转)
+#else
+    bool auth_ok = true;
+#endif
 
     bool has_tty = isatty(STDIN_FILENO) && isatty(STDOUT_FILENO);
     if (has_tty) {
