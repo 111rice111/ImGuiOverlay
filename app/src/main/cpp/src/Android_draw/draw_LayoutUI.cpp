@@ -27,7 +27,8 @@ void Layout_tick_UI(bool *main_thread_flag) {
         }
     }
 
-    SoHook::Update(g_current_game_pid);
+    int game_pid = pid.load();
+    SoHook::Update(game_pid);
     Draw_Main_Optimized(ImGui::GetForegroundDrawList());
     AutoWoodCheck();
 
@@ -591,7 +592,7 @@ void Layout_tick_UI(bool *main_thread_flag) {
                 }
                 ImGui::Separator();
                 if (ImGui::CollapsingHeader("骨骼与进度", ImGuiTreeNodeFlags_DefaultOpen)) {
-                    SoHook::RenderPanel(g_current_game_pid);
+                    SoHook::RenderPanel(pid.load());
                 }
                 break;
             case 2:
