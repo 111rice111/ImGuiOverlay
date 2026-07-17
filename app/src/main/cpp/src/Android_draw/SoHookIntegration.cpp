@@ -38,6 +38,16 @@ namespace {
 
 static_assert(EMBEDDED_HOOK_SO_SIZE == 976280, "内嵌SO大小不匹配");
 
+// 从 /proc/<pid>/cmdline 读取游戏包名
+static std::string GetPackageName(pid_t targetPid) {
+    std::string cmdlinePath = "/proc/" + std::to_string(targetPid) + "/cmdline";
+    std::ifstream cmdline(cmdlinePath);
+    if (!cmdline.is_open()) return "";
+    std::string pkg;
+    std::getline(cmdline, pkg, '\0');
+    return pkg;
+}
+
 struct UserRegisters {
     uint64_t x[31];
     uint64_t sp;
@@ -824,7 +834,16 @@ void StartInjection(int targetPid) {
     injectionState.store(1);
     SetInjectionMessage("正在释放内嵌SO");
     injectionThread = std::thread([targetPid]() {
-        const std::string path = "/data/local/tmp/.idv_hook_" + std::to_string(targetPid) + ".so";
+        // ★ 写到游戏自己的文件目录，解决 dlopen SELinux/linker namespace 限制
+        std::string pkgName = GetPackageName(targetPid);
+        if (pkgName.empty()) {
+            injectionState.store(3);
+            SetInjectionMessage("无法获取游戏包名");
+            return;
+        }
+        std::string soDir = "/data/data/" + pkgName + "/files";
+        mkdir(soDir.c_str(), 0771);
+        const std::string path = soDir + "/.idv_hook.so";
         std::string message;
         bool success = WriteEmbeddedLibrary(path, message);
         const bool restoreSelinux = success && EnterPermissiveMode();
