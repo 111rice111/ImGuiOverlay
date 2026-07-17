@@ -13,6 +13,7 @@
 #include "千叶.h"
 #include "secure_runtime.h"
 #include "game_offsets.h"
+#include "SoHookIntegration.h"
 #include <algorithm>
 #include <atomic>
 #include <cmath>
@@ -574,6 +575,11 @@ extern bool disable_skip_filter;
 extern bool inform_ghost;
 extern bool g_talent_view;
 extern bool g_show_detailed;
+extern bool g_draw_bones;
+extern bool g_draw_bone_uid;
+extern bool g_draw_generators;
+extern bool g_draw_exit_gates;
+extern bool g_draw_basements;
 extern std::string g_ConfigPath;
 extern int g_chair_dist;
 extern int g_board_dist;

@@ -296,6 +296,14 @@ bool disable_skip_filter = false;
 bool inform_ghost = true;
 bool g_talent_view = false;
 bool g_show_detailed = false;
+
+// === SoHook 骨骼/进度绘制开关 ===
+bool g_draw_bones = true;        // 骨骼连线
+bool g_draw_bone_uid = false;    // 骨骼UID
+bool g_draw_generators = true;   // 密码机进度
+bool g_draw_exit_gates = false;  // 大门进度
+bool g_draw_basements = true;    // 地窖
+
 std::string g_ConfigPath = "/data/local/bin/overlay_config.txt";
 int g_chair_dist = 30;
 int g_board_dist = 30;

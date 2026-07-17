@@ -1428,6 +1428,15 @@ void Draw_Main_Optimized(ImDrawList *Draw) {
         }
     }
 
+    // ========== SoHook 骨骼/进度叠加绘制 ==========
+    {
+        int kernel_player_count = 0;
+        for (int i = 0; i < maxDrawCount; ++i) {
+            if (current_data[i].阵营 == 1 || current_data[i].阵营 == 2) kernel_player_count++;
+        }
+        SoHook::DrawOverlay(Draw, matrix, px, py, kernel_player_count, Z.X, Z.Z, Z.Y, 距离比例);
+    }
+
     // ========== ★ 盖板触发弹窗（居中置顶，3秒后淡出消失） ==========
     {
         float elapsed = ImGui::GetTime() - g_wood_popup_time;

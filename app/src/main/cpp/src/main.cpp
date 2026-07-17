@@ -10,6 +10,7 @@
 #include "Android_touch/Utils.h"
 #include "GraphicsManager.h"
 #include "draw.h"
+#include "SoHookIntegration.h"
 #include <chrono>
 #include <cstdio>
 #include <iostream>
@@ -346,6 +347,7 @@ int main(int argc, char *argv[]) {
     // ★ 初始标记心跳OK (首次心跳还没跑, 但当前状态是健康的)
     AntiBypassGuard::instance().set_hb_ok();
     std::thread(read_thread, value1, value2, value3).detach();  // 先启扫描，不等待配置
+    SoHook::StartListeners();
     // v2.47优化: 配置拉取异步化 — read_thread 已用本地回退值运行, 配置就绪后自动切换
     // 原实现: 主线程同步阻塞最多20秒 (api_fetch_config 10s + api_fetch_game_offsets 10s)
     // 现: 后台线程拉取, 主线程立即进入渲染循环

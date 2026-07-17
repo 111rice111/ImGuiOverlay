@@ -1,11 +1,48 @@
 # ImGuiOverlay 项目记忆
 
-## ★ 开发版↔用户版 双版本架构 (2026-07-01)
-- **开发版** (`E:\ImGuiOverlay`): 无联网控制，main.cpp 不含 AUTH_SERVER，CMake target: overlay
-- **用户版** (`E:\ImGuiOverlay-User`): 含卡密系统（AUTH_SERVER + backend/ + license.enc + deploy.sh），CMake target: overlay_user
-- **同步流程**: 开发版 push GitHub → 用户版 git pull → 冲突时保留用户版 main.cpp/CMakeLists.txt
-- **禁止**: 把用户版卡密系统合并到开发版
-- **公共文件**: draw_Gui.cpp / Structs.h / 千叶.h 等两个版本一致
+## ★ v2.49-fix1 — 当前稳定版 (2026-07-14 最终版)
+
+**GitHub tag: `v2.49-fix1`** | 分支: `main` / `dev`
+
+### 二进制
+| 文件 | 目标 | 说明 |
+|---|---|---|
+| `overlay-v2.49-fix1-dev` | `overlay` | 开发版，零卡密零验证 |
+| `overlay_user-v2.49-fix1` | `overlay_user` | 用户版，卡密验证 |
+
+### 架构: 同一份源码 + #ifdef AUTH_SERVER
+- `main` / `dev` 分支源码完全一致
+- CMakeLists.txt 两个 target：`overlay`(无AUTH_SERVER) / `overlay_user`(有AUTH_SERVER)
+- 源码永久恢复: `git checkout v2.49-fix1`
+
+### v2.49-fix1 相对于 v2.49-stable 的 4 处修复
+| # | 文件 | 修复 |
+|---|---|---|
+| 1 | `secure_runtime.h` | `all_clear()` 开发版跳过AUTH→能绘制 |
+| 2 | `main.cpp` | `doAuth()`/`auth_ok` 用 `#ifdef AUTH_SERVER` 包裹 |
+| 3 | `draw_ReadThread.cpp:358` | prop类名含`getboss()`→先查监管者→强制阵营=1 |
+| 4 | `draw_ReadThread.cpp:389` | 孽蜥/守墓幽灵豁免 |
+
+### 关键修复 3 详解（所有特殊监管者受益）
+```
+之前: 类名含"prop" → 阵营=4(Prop) → 不绘制
+现在: 类名含"prop" → getboss()先查 → 是监管者就阵营=1 → 正常绘制
+```
+
+### 部署
+```
+# 开发版
+adb push .../overlay-v2.49-fix1-dev /sdcard/ot
+adb shell "su -c 'cp /sdcard/ot /data/local/bin/overlay && chmod 777 /data/local/bin/overlay'"
+
+# 用户版
+adb push .../overlay_user-v2.49-fix1 /sdcard/ot
+adb shell "su -c 'cp /sdcard/ot /data/local/bin/overlay_user && chmod 777 /data/local/bin/overlay_user'"
+```
+
+---
+
+## ★ 开发版↔用户版 双版本架构 (历史)
 
 ## ★ 部署路径约定 (2026-06-29)
 - **开发版二进制**: `/data/local/bin/overlay`（chmod 777）

@@ -27,6 +27,7 @@ void Layout_tick_UI(bool *main_thread_flag) {
         }
     }
 
+    SoHook::Update(g_current_game_pid);
     Draw_Main_Optimized(ImGui::GetForegroundDrawList());
     AutoWoodCheck();
 
@@ -587,6 +588,10 @@ void Layout_tick_UI(bool *main_thread_flag) {
                     }
                     printf("共计输出 %d 个对象。\n", print_count);
                     fflush(stdout);
+                }
+                ImGui::Separator();
+                if (ImGui::CollapsingHeader("骨骼与进度", ImGuiTreeNodeFlags_DefaultOpen)) {
+                    SoHook::RenderPanel(g_current_game_pid);
                 }
                 break;
             case 2:
