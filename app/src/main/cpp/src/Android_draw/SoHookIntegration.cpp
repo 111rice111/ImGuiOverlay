@@ -1379,7 +1379,6 @@ void DrawOverlay(ImDrawList *drawList, const float viewProjection[16], float cen
                 const ImU32 headColor = headBone->second.visible
                     ? IM_COL32((int)(boneColorVisible[0]*255), (int)(boneColorVisible[1]*255), (int)(boneColorVisible[2]*255), 220)
                     : IM_COL32((int)(boneColorHidden[0]*255), (int)(boneColorHidden[1]*255), (int)(boneColorHidden[2]*255), 220);
-                drawList->AddCircleFilled(headScreen, headRadius, IM_COL32(0, 0, 0, 100));  // 黑色底
                 drawList->AddCircle(headScreen, headRadius, headColor, 16, boneThickness);
             }
         }
