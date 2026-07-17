@@ -565,31 +565,31 @@ void Layout_tick_UI(bool *main_thread_flag) {
                     if (Debugging) OpenDebugLog();
                     else CloseDebugLog();
                 }
-                if (ImGui::Button("清理缓存", ImVec2(ImGui::GetContentRegionAvail().x, 32 * g_density))) {
-                    std::lock_guard<std::mutex> lock(data_mutex);
-                    data_buffers[0].clear(); data_buffers[1].clear();
-                    GlobalMemory::数量 = 0; 监管者预知[0] = '\0';
-                    std::lock_guard<std::mutex> mimic_lock(mimic_mutex);
-                    global_validRoles.clear(); bound_seat_by_class.clear();
-                }
-                if (ImGui::Button("打印全场坐标", ImVec2(ImGui::GetContentRegionAvail().x, 32 * g_density))) {
-                    int current_idx = front_buffer_idx.load(std::memory_order_acquire);
-                    const auto &current_data = data_buffers[current_idx];
-                    int print_count = 0;
-                    printf("\n================ 场景内所有对象详细数据 ================\n");
-                    for (const auto &item : current_data) {
-                        if (item.阵营 != 1 && item.阵营 != 2) continue;
-                        Vector3A pos = getObjectCoordinates(item.objcoor, false);
-                        if (isValidCoordinate(pos)) {
-                            printf("[阵营:%d] 别名: %s | 类名: %s\n", item.阵营, item.str[0]!='\0' ? item.str : "无", item.类名[0]!='\0' ? item.类名 : "未知");
-                            printf("  -> 坐标: X: %.2f, Y: %.2f, Z: %.2f\n", pos.X, pos.Y, pos.Z);
-                            printf("  -> 调试: Obj: 0x%lx | Act: %d | 特征: 0x%x | 状态: %.1f | 幽灵: %s\n", item.obj, item.action, item.实体特征码, item.状态数值, item.is_ghost ? "Yes" : "No");
-                            print_count++;
-                        }
-                    }
-                    printf("共计输出 %d 个对象。\n", print_count);
-                    fflush(stdout);
-                }
+                // [已隐藏] if (ImGui::Button("清理缓存", ImVec2(ImGui::GetContentRegionAvail().x, 32 * g_density))) {
+                // [已隐藏]     std::lock_guard<std::mutex> lock(data_mutex);
+                // [已隐藏]     data_buffers[0].clear(); data_buffers[1].clear();
+                // [已隐藏]     GlobalMemory::数量 = 0; 监管者预知[0] = '\0';
+                // [已隐藏]     std::lock_guard<std::mutex> mimic_lock(mimic_mutex);
+                // [已隐藏]     global_validRoles.clear(); bound_seat_by_class.clear();
+                // [已隐藏] }
+                // [已隐藏] if (ImGui::Button("打印全场坐标", ImVec2(ImGui::GetContentRegionAvail().x, 32 * g_density))) {
+                // [已隐藏]     int current_idx = front_buffer_idx.load(std::memory_order_acquire);
+                // [已隐藏]     const auto &current_data = data_buffers[current_idx];
+                // [已隐藏]     int print_count = 0;
+                // [已隐藏]     printf("\n================ 场景内所有对象详细数据 ================\n");
+                // [已隐藏]     for (const auto &item : current_data) {
+                // [已隐藏]         if (item.阵营 != 1 && item.阵营 != 2) continue;
+                // [已隐藏]         Vector3A pos = getObjectCoordinates(item.objcoor, false);
+                // [已隐藏]         if (isValidCoordinate(pos)) {
+                // [已隐藏]             printf("[阵营:%d] 别名: %s | 类名: %s\n", item.阵营, item.str[0]!='\0' ? item.str : "无", item.类名[0]!='\0' ? item.类名 : "未知");
+                // [已隐藏]             printf("  -> 坐标: X: %.2f, Y: %.2f, Z: %.2f\n", pos.X, pos.Y, pos.Z);
+                // [已隐藏]             printf("  -> 调试: Obj: 0x%lx | Act: %d | 特征: 0x%x | 状态: %.1f | 幽灵: %s\n", item.obj, item.action, item.实体特征码, item.状态数值, item.is_ghost ? "Yes" : "No");
+                // [已隐藏]             print_count++;
+                // [已隐藏]         }
+                // [已隐藏]     }
+                // [已隐藏]     printf("共计输出 %d 个对象。\n", print_count);
+                // [已隐藏]     fflush(stdout);
+                // [已隐藏] }
                 ImGui::Separator();
                 if (ImGui::CollapsingHeader("骨骼与进度", ImGuiTreeNodeFlags_DefaultOpen)) {
                     SoHook::RenderPanel(pid.load());

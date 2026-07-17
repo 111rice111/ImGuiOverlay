@@ -169,6 +169,9 @@ bool drawChairs = true;
 bool drawWindows = false;
 bool drawBoneUid = false;
 bool ignoreSelfBones = true;
+float boneThickness = 2.2f;
+float boneColorVisible[3] = {0.157f, 1.0f, 0.353f};   // 可见骨骼颜色 (绿)
+float boneColorHidden[3]  = {1.0f, 0.275f, 0.275f};   // 不可见骨骼颜色 (红)
 
 uint64_t NowMilliseconds() {
     return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -1078,6 +1081,10 @@ void RenderPanel(int targetPid) {
     ImGui::Checkbox("显示骨骼UID", &drawBoneUid);
     ImGui::SameLine();
     ImGui::Checkbox("忽略自身骨骼", &ignoreSelfBones);
+    ImGui::SliderFloat("骨骼粗细", &boneThickness, 0.5f, 6.0f, "%.1f");
+    ImGui::ColorEdit3("可见骨骼色", boneColorVisible, ImGuiColorEditFlags_NoInputs);
+    ImGui::SameLine();
+    ImGui::ColorEdit3("不可见骨骼色", boneColorHidden, ImGuiColorEditFlags_NoInputs);
     ImGui::Checkbox("内核失效时SO人物框", &drawFallbackBoxes);
     ImGui::Checkbox("绘制密码机进度", &drawGenerators);
     ImGui::SameLine();
@@ -1269,7 +1276,8 @@ void DrawOverlay(ImDrawList *drawList, const float viewProjection[16], float cen
                 ImVec2 screen;
                 if (!ProjectPoint(object.position, viewProjection, centerX, centerY, screen)) continue;
                 char label[96];
-                if (showProgress) std::snprintf(label, sizeof(label), "[%s%d] %.1f%%", name, object.index, object.progress);
+                if (showProgress && name[0] != '\0') std::snprintf(label, sizeof(label), "[%s%d] %.1f%%", name, object.index, object.progress);
+                else if (showProgress) std::snprintf(label, sizeof(label), "%.1f%%", object.progress);
                 else std::snprintf(label, sizeof(label), "[%s%d]", name, object.index);
                 const ImU32 color = showProgress && object.progress >= 99.9f ? IM_COL32(40, 255, 90, 240) : baseColor;
                 const ImVec2 textSize = ImGui::CalcTextSize(label);
@@ -1277,7 +1285,7 @@ void DrawOverlay(ImDrawList *drawList, const float viewProjection[16], float cen
                 drawList->AddText(ImVec2(screen.x - textSize.x * 0.5f, screen.y - textSize.y - 8.0f), color, label);
             }
         };
-        if (drawGenerators) drawProgressObjects(currentGenerators, "密码机", IM_COL32(255, 210, 30, 240), true, 40.0f, true, true);
+        if (drawGenerators) drawProgressObjects(currentGenerators, "", IM_COL32(220, 50, 130, 240), true, 40.0f, true, true);  // 紫红
         if (drawExitGates) drawProgressObjects(currentGates, "大门", IM_COL32(210, 90, 255, 240), true, 0.0f, false, false);
         if (drawBasements) drawProgressObjects(currentBasements, "地窖", IM_COL32(50, 220, 255, 240), false, 0.0f, false, false);
     }
@@ -1349,8 +1357,21 @@ void DrawOverlay(ImDrawList *drawList, const float viewProjection[16], float cen
             if (!ProjectPoint(first->second, viewProjection, centerX, centerY, firstScreen) ||
                 !ProjectPoint(second->second, viewProjection, centerX, centerY, secondScreen)) continue;
             const ImU32 color = first->second.visible && second->second.visible
-                ? IM_COL32(40, 255, 90, 230) : IM_COL32(255, 70, 70, 230);
-            drawList->AddLine(firstScreen, secondScreen, color, 2.2f);
+                ? IM_COL32((int)(boneColorVisible[0]*255), (int)(boneColorVisible[1]*255), (int)(boneColorVisible[2]*255), 230)
+                : IM_COL32((int)(boneColorHidden[0]*255), (int)(boneColorHidden[1]*255), (int)(boneColorHidden[2]*255), 230);
+            drawList->AddLine(firstScreen, secondScreen, color, boneThickness);
+        }
+        // 圆形头部
+        const auto headBone = unit.points.find("biped head");
+        if (headBone != unit.points.end()) {
+            ImVec2 headScreen;
+            if (ProjectPoint(headBone->second, viewProjection, centerX, centerY, headScreen)) {
+                float headRadius = 5.0f + boneThickness * 1.5f;
+                const ImU32 headColor = headBone->second.visible
+                    ? IM_COL32((int)(boneColorVisible[0]*255), (int)(boneColorVisible[1]*255), (int)(boneColorVisible[2]*255), 230)
+                    : IM_COL32((int)(boneColorHidden[0]*255), (int)(boneColorHidden[1]*255), (int)(boneColorHidden[2]*255), 230);
+                drawList->AddCircle(headScreen, headRadius, headColor, 12, boneThickness);
+            }
         }
         if (drawBoneUid) {
             const auto head = unit.points.find("biped head");
