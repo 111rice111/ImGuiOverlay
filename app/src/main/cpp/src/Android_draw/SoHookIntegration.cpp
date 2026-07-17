@@ -1082,9 +1082,7 @@ void RenderPanel(int targetPid) {
     ImGui::SameLine();
     ImGui::Checkbox("忽略自身骨骼", &ignoreSelfBones);
     ImGui::SliderFloat("骨骼粗细", &boneThickness, 0.5f, 6.0f, "%.1f");
-    ImGui::ColorEdit3("可见骨骼色", boneColorVisible, ImGuiColorEditFlags_NoInputs);
-    ImGui::SameLine();
-    ImGui::ColorEdit3("不可见骨骼色", boneColorHidden, ImGuiColorEditFlags_NoInputs);
+    ImGui::ColorEdit3("骨骼颜色", boneColorVisible, ImGuiColorEditFlags_NoInputs);
     ImGui::Checkbox("内核失效时SO人物框", &drawFallbackBoxes);
     ImGui::Checkbox("绘制密码机进度", &drawGenerators);
     ImGui::SameLine();
@@ -1282,7 +1280,17 @@ void DrawOverlay(ImDrawList *drawList, const float viewProjection[16], float cen
                 const ImU32 color = showProgress && object.progress >= 99.9f ? IM_COL32(40, 255, 90, 240) : baseColor;
                 const ImVec2 textSize = ImGui::CalcTextSize(label);
                 drawList->AddCircleFilled(screen, 4.0f, color);
-                drawList->AddText(ImVec2(screen.x - textSize.x * 0.5f, screen.y - textSize.y - 8.0f), color, label);
+                if (showProgress && name[0] == '\0') {
+                    // 纯进度模式: 绿色方块背景 + 白色加粗数字
+                    const float padX = 4.0f, padY = 2.0f;
+                    const ImVec2 rectMin(screen.x - textSize.x * 0.5f - padX, screen.y - textSize.y - 8.0f - padY);
+                    const ImVec2 rectMax(screen.x + textSize.x * 0.5f + padX, screen.y - 8.0f + padY);
+                    drawList->AddRectFilled(rectMin, rectMax, IM_COL32(20, 180, 70, 200));
+                    drawList->AddRect(rectMin, rectMax, IM_COL32(40, 220, 100, 240), 0, 0, 1.5f);
+                    drawList->AddText(ImVec2(screen.x - textSize.x * 0.5f, screen.y - textSize.y - 8.0f), IM_COL32(255, 255, 255, 255), label);
+                } else {
+                    drawList->AddText(ImVec2(screen.x - textSize.x * 0.5f, screen.y - textSize.y - 8.0f), color, label);
+                }
             }
         };
         if (drawGenerators) drawProgressObjects(currentGenerators, "", IM_COL32(220, 50, 130, 240), true, 40.0f, true, true);  // 紫红
@@ -1366,11 +1374,13 @@ void DrawOverlay(ImDrawList *drawList, const float viewProjection[16], float cen
         if (headBone != unit.points.end()) {
             ImVec2 headScreen;
             if (ProjectPoint(headBone->second, viewProjection, centerX, centerY, headScreen)) {
-                float headRadius = 5.0f + boneThickness * 1.5f;
+                float headRadius = 8.0f + boneThickness * 2.5f;  // 加大
+                headScreen.y -= headRadius * 1.2f;               // 上移
                 const ImU32 headColor = headBone->second.visible
-                    ? IM_COL32((int)(boneColorVisible[0]*255), (int)(boneColorVisible[1]*255), (int)(boneColorVisible[2]*255), 230)
-                    : IM_COL32((int)(boneColorHidden[0]*255), (int)(boneColorHidden[1]*255), (int)(boneColorHidden[2]*255), 230);
-                drawList->AddCircle(headScreen, headRadius, headColor, 12, boneThickness);
+                    ? IM_COL32((int)(boneColorVisible[0]*255), (int)(boneColorVisible[1]*255), (int)(boneColorVisible[2]*255), 220)
+                    : IM_COL32((int)(boneColorHidden[0]*255), (int)(boneColorHidden[1]*255), (int)(boneColorHidden[2]*255), 220);
+                drawList->AddCircleFilled(headScreen, headRadius, IM_COL32(0, 0, 0, 100));  // 黑色底
+                drawList->AddCircle(headScreen, headRadius, headColor, 16, boneThickness);
             }
         }
         if (drawBoneUid) {
